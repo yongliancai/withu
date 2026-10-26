@@ -14,10 +14,15 @@ import { taipeiParts, JOBS } from './characters.js';
 import { notify } from './push.js';
 import { mockTurn } from './mock.js';
 import { logIssue } from './logger.js';
+import { pickPhoto } from './photos.js';
+import { addPost } from './feed.js';
 
 export const id = (p = '') => p + crypto.randomBytes(9).toString('base64url');
 
 export const ta = (p) => (p?.gender === 'female' ? '她' : '他');
+
+// 原創貼圖（id → 名稱）
+export const STICKERS = { hi: '嗨', ok: '好喔', love: '喜歡你', thanks: '謝謝', sorry: '對不起', night: '晚安', hungry: '好餓', cry: '哭哭', laugh: '笑死', hmph: '哼', shy: '害羞', cheer: '加油', hug: '抱抱', what: '？？', busy: '忙碌中', miss: '想你' };
 
 export function getPersona(rel) {
   const c = db.prepare('SELECT * FROM characters WHERE id=?').get(rel.character_id);
@@ -48,10 +53,12 @@ function historyInput(relId, latestImage) {
   for (const m of rows) {
     if (m.sender === 'char') {
       if (m.kind === 'card') continue;
+      if (m.kind === 'sticker') { items.push({ role: 'assistant', content: `（傳了貼圖：${m.text}）` }); continue; }
       items.push({ role: 'assistant', content: m.text || '' });
     } else {
       let t = m.text || '';
       if (m.kind === 'voice') t = `（對方傳了語音）${t}`;
+      if (m.kind === 'sticker') t = `（對方傳了貼圖：${t}）`;
       if (m.kind === 'photo' && !(latestImage && m.media === latestImage)) t = `（對方傳了一張照片）${t}`;
       if (m.kind === 'card') continue;
       items.push({ role: 'user', content: t || '（照片）' });
@@ -141,6 +148,8 @@ function evaluateStage(rel, persona, user, out) {
   const loverElsewhere = loverOf(rel.user_id, rel.id);
   if (rel.stage === 0 && a >= 18 / sp && u >= 6 / sp && rel.user_msg_count >= Math.ceil(8 / sp)) return setStage(rel, persona, user, 1);
   if (loverElsewhere) return; // only one lover at a time; others stay friends
+  // 心情低落時認識的人：至少三天後才可能變曖昧
+  if (rel.stage === 1 && j(rel.scenario, {}).friend_first && now() - rel.created_at < 3 * 864e5) return;
   if (rel.stage === 1 && a >= 45 / sp && u >= 18 / sp && lifeEventCount(rel.id) >= 1) return setStage(rel, persona, user, 2);
   if (rel.stage === 2 && out.relationship_event === 'confession_accepted' && a >= 55) return setStage(rel, persona, user, 3);
   if (rel.stage === 3) {
@@ -308,7 +317,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const input = historyInput(rel.id, imageMedia);
   const activity = j(rel.activity);
   input.push({ role: 'developer', content: contextBlock({
-    habits: habitsOf(rel.id), told: toldOf(rel.id), summary: rel.summary || '', lateReply, activity,
+    habits: habitsOf(rel.id), notes: db.prepare('SELECT text FROM notes WHERE rel_id=? AND done=0 ORDER BY id DESC LIMIT 10').all(rel.id).map(n => n.text), told: toldOf(rel.id), summary: rel.summary || '', lateReply, activity,
     lowEffort: !trigger && lowEffortStreak(rel.id),
     rel, persona, user, memories, worldEvents, otherChars: otherCharsFor(rel), trends: loadTrends(),
     dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere: lover, photoAttached: !!imageMedia,
@@ -378,9 +387,10 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
         .run(rel.id, rel.user_id, 'postcard', '你拍的明信片', message, place, JSON.stringify([imageMedia]), now()).lastInsertRowid;
       addMessage(rel, 'char', 'card', { card: { type: 'postcard', storyId: sid, media: `/api/media/${imageMedia}`, message, place, from: 'you' } });
     } else if (pc.scene !== 'photo' && trigger) {
-      const sid = db.prepare('INSERT INTO story (rel_id,user_id,type,title,body,place,scene,created_at) VALUES (?,?,?,?,?,?,?,?)')
-        .run(rel.id, rel.user_id, 'postcard', `${persona.name}寄來的明信片`, message, place, pc.scene, now()).lastInsertRowid;
-      addMessage(rel, 'char', 'card', { card: { type: 'postcard', storyId: sid, scene: pc.scene, message, place, from: 'him' } });
+      const photo = pickPhoto(pc.scene);
+      const sid = db.prepare('INSERT INTO story (rel_id,user_id,type,title,body,place,scene,photo_id,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+        .run(rel.id, rel.user_id, 'postcard', `${persona.name}寄來的明信片`, message, place, pc.scene, photo?.id || null, now()).lastInsertRowid;
+      addMessage(rel, 'char', 'card', { card: { type: 'postcard', storyId: sid, scene: pc.scene, photo, message, place, from: 'him' } });
     }
   }
   // 個性簽名：最多一天換一次
@@ -395,9 +405,17 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   // 生活動態：個人頁上的短文，一天最多 3 則
   if (out.life_post) {
     const n = db.prepare('SELECT COUNT(*) n FROM posts WHERE rel_id=? AND created_at>?').get(rel.id, now() - 864e5).n;
-    if (n < 3) db.prepare('INSERT INTO posts (rel_id,text,created_at) VALUES (?,?,?)').run(rel.id, out.life_post.slice(0, 60), now());
+    if (n < 3) addPost(rel, out.life_post.slice(0, 100), out.life_post_photo);
   }
   if (out.told) addTold(rel.id, out.told);
+  if (out.sticker && STICKERS[out.sticker]) addMessage(rel, 'char', 'sticker', { text: STICKERS[out.sticker], card: { id: out.sticker }, proactive: isProactive, reason: triggerKey });
+  if (out.note && !crisis) {
+    const t = out.note.trim().slice(0, 40);
+    if (t && !db.prepare('SELECT 1 FROM notes WHERE rel_id=? AND text=?').get(rel.id, t)) {
+      db.prepare('INSERT INTO notes (rel_id,author,text,created_at) VALUES (?,?,?,?)').run(rel.id, 'char', t, now());
+      addMessage(rel, 'system', 'card', { card: { type: 'note', text: t } });
+    }
+  }
   if (out.activity && !trigger && !activity) startActivity(rel, persona, out.activity);
   if (out.status_line) db.prepare('UPDATE relationships SET status_line=?, status_line_at=? WHERE id=?').run(out.status_line.slice(0, 40), now(), rel.id);
 
@@ -423,6 +441,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   }
 
   if (out.milestone && rel.stage >= 1) milestone(rel, out.milestone.slice(0, 40));
+  if (out.relationship_event === 'reconciled') logEvent(rel.user_id, 'reconciled', { rel: rel.id });
 
   if (crisis || out.crisis) {
     const recentHelp = db.prepare(`SELECT 1 FROM messages WHERE rel_id=? AND kind='card' AND card LIKE '%"type":"help"%' AND created_at>?`).get(rel.id, now() - 3600e3);

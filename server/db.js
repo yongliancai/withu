@@ -152,6 +152,14 @@ CREATE TABLE IF NOT EXISTS posts (
   text TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  rel_id TEXT NOT NULL REFERENCES relationships(id) ON DELETE CASCADE,
+  author TEXT NOT NULL,            -- user | char
+  text TEXT NOT NULL,
+  done INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS push_subs (
   endpoint TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -171,6 +179,8 @@ for (const [table, col, def] of [
   ['relationships', 'activity', 'TEXT'],              // 一起做的事（JSON：type, title, started_at, ends_at）
   ['relationships', 'summary', 'TEXT'],               // 較早對話的摘要
   ['relationships', 'summary_count', 'INTEGER NOT NULL DEFAULT 0'],
+  ['story', 'photo_id', 'INTEGER'],
+  ['relationships', 'theme', 'TEXT'],                 // 聊天室主題                  // 他寄的明信片用的寫實照片
   ['relationships', 'char_read_id', 'INTEGER NOT NULL DEFAULT 0'], // 他讀到哪一則（已讀）
 ]) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);

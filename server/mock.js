@@ -7,7 +7,7 @@ export function mockTurn({ rel, persona, user, userText = '', imageMedia, trigge
     relationship_event: 'none', milestone: null, memories_add: [], memories_correct: [], memories_forget: [],
     user_busy_until_minutes: null, followups: [], meal: null, outing: 'none', place_name: null, status_line: null, crisis: false, signature: null, life_post: null, postcard: null,
     suggestions: [{ label: '😂 吐槽他', text: '你也太誇張了吧哈哈' }, { label: '❓ 問後來呢', text: '然後呢？後來怎麼了' }, { label: '🙋 說說我自己', text: '我今天也遇到一件事' }],
-    told: null, activity: null,
+    told: null, activity: null, life_post_photo: null, sticker: null, note: null,
   };
   const name = user.call_name;
   if (crisis) return { ...base, crisis: true, messages: [{ text: `${name}，我在這裡。` }, { text: '你願意跟我說說現在發生了什麼嗎？不急，慢慢說。' }] };
@@ -21,7 +21,7 @@ export function mockTurn({ rel, persona, user, userText = '', imageMedia, trigge
     if (/專心/.test(trigger) && /時間到了/.test(trigger)) return { ...base, messages: [{ text: '時間到～做得怎麼樣？' }, { text: '先起來動一動、喝口水' }] };
     if (/專心/.test(trigger)) return { ...base, messages: [{ text: '好，加油！' }, { text: '我也去做我的事，25 分鐘後見' }] };
     if (/睡/.test(trigger)) return { ...base, messages: [{ text: '好，今天說一個小故事給你聽' }, { text: '從前有一隻很怕黑的貓頭鷹……' }, { text: '晚安，好好睡' }] };
-    if (/小事/.test(trigger)) return { ...base, life_post: '今天的天空好像特別藍。', messages: [{ text: '跟你說，今天' + (persona.threads?.[0] || '發生了一件小事') + '。' }] };
+    if (/小事/.test(trigger)) return { ...base, life_post: '今天的天空好像特別藍。', life_post_photo: 'sky', messages: [{ text: '跟你說，今天' + (persona.threads?.[0] || '發生了一件小事') + '。' }] };
     if (/下班/.test(trigger)) return { ...base, status_line: '剛下班，在回家的路上', messages: [{ text: '終於下班了！' }, { text: '你今天還好嗎？' }] };
     if (/吃/.test(trigger)) return { ...base, messages: [{ text: `${name}，吃了嗎？` }] };
     return { ...base, messages: [{ text: pick(['在幹嘛呀？', '剛剛看到一隻好胖的貓，想到你。', '今天過得怎麼樣？']) }] };
@@ -43,6 +43,8 @@ export function mockTurn({ rel, persona, user, userText = '', imageMedia, trigge
   if (/回家了|到家了/.test(userText)) return { ...base, outing: rel.outing_active ? 'end' : 'none', messages: [{ text: '辛苦啦，今天好開心。' }] };
   if (/別一直|不要一直|溫柔一點/.test(userText)) return { ...base, memories_add: [{ kind: 'style', content: '對方希望：' + userText.slice(0, 30), weight: 5 }], messages: [{ text: '好，我知道了。' }] };
   if (/討厭|不吃/.test(userText)) return { ...base, memories_add: [{ kind: 'dislike', content: userText.slice(0, 40), weight: 3 }], messages: [{ text: '好，我記住了。' }] };
+  if (/貼圖/.test(userText)) return { ...base, sticker: 'hug', messages: [{ text: '收到你的貼圖了' }] };
+  if (/下次|約好|一起去/.test(userText)) return { ...base, note: '下次一起去吃豆花', messages: [{ text: '好啊，說好了喔' }] };
   if (/一起看/.test(userText)) return { ...base, activity: { type: 'watch', title: '日劇', minutes: 90 }, messages: [{ text: '好啊，我也開起來了' }] };
   if (lateReply) return { ...base, messages: [{ text: lateReply.why.includes('睡') ? '早安，剛起床才看到' : '剛剛在忙，現在才看到' }, { text: '你剛剛說的' + (userText.slice(0, 8) || '那個') + '，後來呢？' }] };
   if (/喜歡你/.test(userText) && rel.stage === 2) return { ...base, affection_delta: 5, relationship_event: 'confession_accepted', messages: [{ text: '……其實我也是。' }] };

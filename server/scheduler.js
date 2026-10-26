@@ -5,6 +5,7 @@ import { config } from './config.js';
 import { PROACTIVITY, taipeiParts, toMin, charStatus } from './characters.js';
 import { runTurn, getPersona, finishOuting, endActivity } from './engine.js';
 import { logIssue } from './logger.js';
+import { generatePost, postMoment } from './feed.js';
 
 const STAGE_MULT = [0.3, 0.6, 0.9, 1.2, 1.2];
 const LEVEL_MULT = { low: 0.5, normal: 1, high: 1.5 };
@@ -72,6 +73,14 @@ async function tickRel(rel, user, t, userSentToday) {
     db.prepare('UPDATE relationships SET pending_reply_at=NULL WHERE id=?').run(rel.id);
     await runTurn({ user, relId: rel.id, userText: texts.join('\n'), lateReply: { minutes, why: morning ? '在睡覺（現在剛起床）' : why }, notifyUser: true, triggerKey: 'late_reply' });
     return;
+  }
+  // 他自己發動態（不傳訊息、不推播）：一天最多兩則，間隔至少三小時
+  const moment = rel.stage >= 0 && postMoment(persona, rel, t);
+  if (moment) {
+    const last = db.prepare('SELECT MAX(created_at) at, SUM(created_at>?) today FROM posts WHERE rel_id=?').get(now() - t.minutes * 60000, rel.id);
+    if ((last.today || 0) < 2 && (!last.at || now() - last.at > 3 * 3600e3) && Math.random() < (config.schedulerMs >= 60000 ? 0.04 : 0.3)) {
+      await generatePost(rel, persona, moment).catch(e => logIssue({ level: 'warn', source: 'scheduler', message: `發動態失敗：${e.message}`, error: e, relId: rel.id }));
+    }
   }
   // 一起做的事：時間到就結束（陪專心會來問進度）
   const act = j(rel.activity);

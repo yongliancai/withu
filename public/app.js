@@ -1,5 +1,5 @@
 // 伴旅 WithU — PWA front end (no build step).
-import { portraitSVG, sceneSVG, LOOK_OPTIONS, setPortraitStyle } from './art.js';
+import { portraitSVG, sceneSVG, LOOK_OPTIONS, setPortraitStyle, stickerSVG, STICKER_LIST } from './art.js';
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -60,7 +60,8 @@ function seasonMark(d = new Date()) {
 function avatar(frame, size = 48, { lover = false, season = true } = {}) {
   const discreet = S.me?.settings?.discreetNames;
   const f = discreet ? { hue: frame?.hue, name: '' } : frame;
-  return `<span class="avatar${lover ? ' lover' : ''}" style="--s:${size}px">${portraitSVG(f, size)}
+  const usePhoto = !discreet && S.me?.settings?.portraitStyle === 'photo' && frame?.avatarPhoto;
+  return `<span class="avatar${lover ? ' lover' : ''}${usePhoto ? ' photo' : ''}" style="--s:${size}px">${usePhoto ? `<img src="${esc(frame.avatarPhoto.thumb)}" alt="" loading="lazy">` : portraitSVG(f, size)}
     ${season ? `<span class="season">${seasonMark()}</span>` : ''}</span>`;
 }
 // 情境插圖卡片：用在「在哪裡遇見」和「來場偶遇」
@@ -92,6 +93,7 @@ const routes = [
   [/^#\/chat\/([\w-]+)$/, renderRoom],
   [/^#\/profile\/([\w-]+)$/, renderProfile],
   [/^#\/chat$/, renderChatList],
+  [/^#\/feed$/, renderFeed],
   [/^#\/explore$/, renderExplore],
   [/^#\/story$/, renderStory],
   [/^#\/me$/, renderMe],
@@ -108,9 +110,10 @@ async function route() {
     const m = hash.match(re);
     if (m) {
       const tab = hash.split('/')[1];
-      const showTabs = ['chat', 'explore', 'story', 'me'].includes(tab) && !/^#\/chat\//.test(hash);
+      const showTabs = ['chat', 'feed', 'explore', 'story', 'me'].includes(tab) && !/^#\/chat\//.test(hash);
       tabs.hidden = !showTabs;
       if (showTabs && tab !== 'chat') refreshBadge();
+      if (showTabs && tab !== 'feed') refreshFeedDot();
       $$('a', tabs).forEach(a => a.setAttribute('aria-current', a.dataset.tab === tab ? 'page' : 'false'));
       window.scrollTo(0, 0);
       return fn(...m.slice(1));
@@ -196,7 +199,15 @@ function renderRecover() {
 // ======================================================================
 // Meeting: 我想認識他（先選人） / 來場偶遇吧（先選情境）
 // ======================================================================
-const M = { templateId: null, custom: null, frame: null, scenarioId: null, scenarioText: '', reunionRelId: null };
+const M = { templateId: null, custom: null, frame: null, scenarioId: null, scenarioText: '', reunionRelId: null, mood: null };
+
+// 分類篩選列
+function catChips(list, cur) {
+  const cats = (S.meta.categories || []).filter(c => list.some(t => (t.frame.cats || []).includes(c.id)));
+  if (!cats.length) return '';
+  return `<div class="cat-row" role="tablist">${[{ id: '', label: '全部' }, ...cats].map(c => `<button class="cat${cur === c.id ? ' on' : ''}" data-cat="${c.id}" role="tab" aria-selected="${cur === c.id}">${esc(c.label)}</button>`).join('')}</div>`;
+}
+const inCat = (t, cat) => !cat || (t.frame.cats || []).includes(cat);
 
 function personCard(t, pressed = false) {
   const f = t.frame;
@@ -212,27 +223,36 @@ async function renderMeet(step) {
   tabs.hidden = true;
   const back = `<a class="icon-btn back" href="${S.rels.length ? '#/chat' : '#/meet'}" aria-label="返回">${icon('back')}</a>`;
   if (!step) {
-    Object.assign(M, { templateId: null, custom: null, frame: null, scenarioId: null, scenarioText: '', reunionRelId: null });
+    Object.assign(M, { templateId: null, custom: null, frame: null, scenarioId: null, scenarioText: '', reunionRelId: null, mood: null });
     app.innerHTML = `<div class="page" style="padding-bottom:32px">${back}
       <h1>你想怎麼遇見${TA()}？</h1>
       <button class="choice" data-go="person"><b>我想認識${TA()}</b><span>先選一個人，再決定你們在哪裡遇見</span></button>
-      <button class="choice" data-go="scene"><b>來場偶遇吧</b><span>先選一個情境，看看誰可能出現在那裡</span></button></div>`;
+      <button class="choice" data-go="scene"><b>來場偶遇吧</b><span>先選一個情境，看看誰可能出現在那裡</span></button>
+      <button class="choice" data-go="mood"><b>依心情認識</b><span>說說你現在的心情，遇見適合此刻的人</span></button></div>`;
     $$('[data-go]').forEach(b => b.onclick = () => { location.hash = `#/meet/${b.dataset.go}`; });
     return;
   }
   if (step === 'person') {
     const list = await api('/api/templates');
-    app.innerHTML = `<div class="page" style="padding-bottom:32px"><a class="icon-btn back" href="#/meet" aria-label="返回">${icon('back')}</a>
-      <h1>想認識誰？</h1>${list.length ? `<div class="people">${list.map(t => personCard(t)).join('')}</div>` : '<p class="muted">現有的角色你都認識了，自己捏一個吧。</p>'}
-      <h2>都不是你想要的？</h2><button class="choice" id="custom"><b>自己捏一個</b><span>點選${TA()}的框架，個性會在聊天中慢慢長出來</span></button></div>`;
-    $$('.person').forEach(b => b.onclick = () => {
-      const t = list.find(x => x.id === b.dataset.id);
-      M.templateId = t.id; M.frame = t.frame; M.custom = null;
-      location.hash = '#/meet/where';
-    });
-    $('#custom').onclick = () => { location.hash = '#/meet/custom'; };
+    let cat = S.meetCat || '';
+    const draw = () => {
+      const shown = list.filter(t => inCat(t, cat));
+      app.innerHTML = `<div class="page" style="padding-bottom:32px"><a class="icon-btn back" href="#/meet" aria-label="返回">${icon('back')}</a>
+        <h1>想認識誰？</h1>${catChips(list, cat)}
+        ${shown.length ? `<div class="people">${shown.map(t => personCard(t)).join('')}</div>` : '<p class="muted">現有的角色你都認識了，自己捏一個吧。</p>'}
+        <h2>都不是你想要的？</h2><button class="choice" id="custom"><b>自己捏一個</b><span>點選${TA()}的框架，個性會在聊天中慢慢長出來</span></button></div>`;
+      $$('[data-cat]').forEach(b => b.onclick = () => { cat = S.meetCat = b.dataset.cat; draw(); });
+      $$('.person').forEach(b => b.onclick = () => {
+        const t = list.find(x => x.id === b.dataset.id);
+        M.templateId = t.id; M.frame = t.frame; M.custom = null;
+        location.hash = '#/meet/where';
+      });
+      $('#custom').onclick = () => { location.hash = '#/meet/custom'; };
+    };
+    draw();
     return;
   }
+  if (step === 'mood') return renderMood();
   if (step === 'custom') return renderCustom();
   if (step === 'where') return renderWhere();
   if (step === 'scene') return renderScenePick();
@@ -331,17 +351,48 @@ function renderWhere() {
 function renderScenePick() {
   app.innerHTML = `<div class="page" style="padding-bottom:32px"><a class="icon-btn back" href="#/meet" aria-label="返回">${icon('back')}</a>
     <h1>今天會在哪裡偶遇？</h1>
+    <button class="choice" id="snap"><b>📷 拍一張你現在在的地方</b><span>看看會在這裡遇見誰；照片只用來判斷情境，不會保存</span></button>
+    <input type="file" id="snapIn" accept="image/*" capture="environment" hidden>
     ${sceneCards(S.meta.scenarios)}
     <h2>或自己寫</h2>
     <textarea class="input" id="free" rows="3" maxlength="300" placeholder="例如：週末在大稻埕的老咖啡店，下午有點悶">${esc(M.scenarioText || '')}</textarea>
     <button class="btn block" id="go" style="margin-top:14px">看看誰在那裡</button></div>`;
   let picked = null;
   $$('[data-s]').forEach(b => b.onclick = () => { $$('[data-s]').forEach(x => x.setAttribute('aria-pressed', 'false')); b.setAttribute('aria-pressed', 'true'); picked = b.dataset.s; });
+  $('#snap').onclick = () => $('#snapIn').click();
+  $('#snapIn').onchange = async (e) => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    $('#snap').innerHTML = '<b>正在看你拍的地方…</b><span>稍等一下</span>';
+    try {
+      const fd = new FormData(); fd.append('photo', await shrinkImage(f, 768), 'scene.jpg');
+      const r = await api('/api/encounter/photo', { method: 'POST', form: fd });
+      M.scenarioId = r.scenario; M.scenarioText = '';
+      toast(r.label ? `看起來像是：${r.label}` : '找到了');
+      location.hash = '#/meet/who';
+    } catch (err) { toast(err.message); $('#snap').innerHTML = '<b>📷 拍一張你現在在的地方</b><span>再試一次，或直接選下面的情境</span>'; }
+  };
   $('#go').onclick = () => {
     M.scenarioText = $('#free').value.trim(); M.scenarioId = picked;
     if (!M.scenarioText && !M.scenarioId) return toast('選一個情境，或自己寫一個');
     location.hash = '#/meet/who';
   };
+}
+
+// 依心情認識
+async function renderMood() {
+  app.innerHTML = `<div class="page" style="padding-bottom:32px"><a class="icon-btn back" href="#/meet" aria-label="返回">${icon('back')}</a>
+    <h1>你現在的心情是？</h1><p class="muted">只用在這一次的相遇，不會被記錄下來。</p>
+    <div class="mood-grid">${S.meta.moods.map(m => `<button class="choice" data-mood="${m.id}"><b>${esc(m.label)}</b><span>遇見${esc(m.want)}</span></button>`).join('')}</div>
+    <div id="moodPicks"></div></div>`;
+  $$('[data-mood]').forEach(b => b.onclick = async () => {
+    $$('[data-mood]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    const r = await api(`/api/mood-picks?mood=${b.dataset.mood}`);
+    M.mood = r.mood.id; M.scenarioId = r.mood.scenario; M.scenarioText = '';
+    $('#moodPicks').innerHTML = `<h2>此刻適合遇見的人</h2>${r.mood.friend ? `<p class="small muted">先從朋友開始，${TA()}會陪你把心情說清楚。</p>` : ''}
+      ${r.picks.length ? `<div class="people">${r.picks.map(t => personCard(t)).join('')}</div>` : '<p class="muted">現有的角色你都認識了。</p>'}`;
+    $$('#moodPicks .person').forEach(p => p.onclick = () => { const t = r.picks.find(x => x.id === p.dataset.id); M.templateId = t.id; M.frame = t.frame; doMeet(); });
+    $('#moodPicks').scrollIntoView({ behavior: 'smooth' });
+  });
 }
 
 async function renderWho() {
@@ -361,7 +412,7 @@ async function renderWho() {
 async function doMeet() {
   app.innerHTML = `<div class="going"><div>${avatar(M.frame, 72, { season: false })}<p class="hand" style="margin-top:18px">正在前往你們相遇的地方……</p></div></div>`;
   try {
-    const r = await api('/api/meet', { method: 'POST', body: { templateId: M.templateId, custom: M.custom, scenarioId: M.scenarioId, scenarioText: M.scenarioText, reunionRelId: M.reunionRelId } });
+    const r = await api('/api/meet', { method: 'POST', body: { templateId: M.templateId, custom: M.custom, scenarioId: M.scenarioId, scenarioText: M.scenarioText, reunionRelId: M.reunionRelId, mood: M.mood } });
     location.hash = `#/chat/${r.relId}`;
   } catch (e) {
     const back = M.templateId && !M.reunionRelId && location.hash !== '#/meet/who' ? '#/meet/where' : (M.scenarioText ? '#/meet/scene' : null);
@@ -403,7 +454,9 @@ async function renderChatList() {
       <h1>聊天</h1>${installBanner()}
       ${lover ? `<a class="lover-card" href="#/chat/${lover.id}">${avatar(lover.frame, 72, { lover: true })}
         <span class="grow" style="min-width:0"><span class="name">${esc(displayName(lover.frame))}</span>
-        <span class="pres small">${presenceDot(lover.presence)}${esc(presenceText(lover.presence))}</span><span class="muted small last1">${esc(lover.last?.text || '')}</span></span>
+        ${lover.statusLine && Date.now() - lover.statusLineAt < 12 * 3600e3
+          ? `<span class="status-line">${esc(lover.statusLine)}</span><time class="status-time">${ago(lover.statusLineAt)}・${ta(lover.frame)}告訴你的</time>`
+          : `<span class="pres small">${presenceDot(lover.presence)}${esc(presenceText(lover.presence))}</span><span class="muted small last1">${esc(lover.last?.text || '')}</span>`}</span>
         ${lover.unread ? `<span class="badge">${lover.unread}</span>` : ''}</a>` : ''}
       ${others.length ? `<div class="list-label">${lover ? '朋友' : '最近'}</div>` : ''}
       ${others.map(r => `<a class="conv${r.mode === 'practice' && r.stage === 2 && r.unread ? ' glow' : ''}" href="#/chat/${r.id}"><span class="av-wrap">${avatar(r.frame, 50)}${r.presence?.code === 'online' ? '<span class="pdot online on-av" aria-label="上線中"></span>' : ''}</span>
@@ -479,6 +532,8 @@ function icon(name) {
     mic: '<rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/>',
     x: '<path d="M6 6l12 12M18 6L6 18"/>',
     spark: '<path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z"/><path d="M18.5 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/>',
+    smile: '<circle cx="12" cy="12" r="8.5"/><path d="M8.5 14q3.5 3.5 7 0"/><circle cx="9.3" cy="10" r=".6"/><circle cx="14.7" cy="10" r=".6"/>',
+    menu: '<path d="M5 7h14M5 12h14M5 17h14"/>',
     more: '<circle cx="12" cy="5.5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="18.5" r="1.2"/>',
   }[name];
   return `<svg viewBox="0 0 24 24" aria-hidden="true">${p}</svg>`;
@@ -499,6 +554,10 @@ function messageHtml(m, rel, prev) {
     return out + `${art}<div class="scene" data-id="${m.id}">${esc(m.text)}</div>`;
   }
   if (m.kind === 'card') return out + cardHtml(m, rel);
+  if (m.kind === 'sticker') {
+    const readMark = side === 'me' && typeof m.id === 'number' && m.id <= (S.room?.charReadId || 0) ? '<span class="read">已讀</span>' : '';
+    return out + `<div class="msg ${side} stk" data-id="${m.id}">${side === 'me' ? `<span class="time">${readMark}${hhmm(m.at)}</span>` : ''}<div class="stk-img">${stickerSVG(m.card?.id, 112)}</div>${side === 'him' ? `<span class="time">${hhmm(m.at)}</span>` : ''}</div>`;
+  }
   if (m.kind === 'photo') {
     return out + `<div class="msg me" data-id="${m.id}"><span class="time">${hhmm(m.at)}</span><div class="photo-bubble"><img src="${m.media}" alt="你分享的照片" loading="lazy">${m.text ? `<div class="cap">${esc(m.text)}</div>` : ''}</div></div>`;
   }
@@ -522,6 +581,7 @@ function cardHtml(m, rel) {
     case 'outing': return `<div class="note" data-id="${id}">${esc(c.text)}・出遊模式</div>`;
     case 'walk': return `<div class="note" data-id="${id}">${esc(c.text)}</div>`;
     case 'nudge': return `<div class="note" data-id="${id}">${esc(c.text)}</div>`;
+    case 'note': return `<div class="note" data-id="${id}">📝 記進記事本：${esc(c.text)}</div>`;
     case 'activity': return `<div class="note" data-id="${id}">${c.state === 'start' ? '▶︎ ' : ''}${esc(c.text)}</div>`;
     case 'postcard': return `<div class="msg him" data-id="${id}">${postcardHtml({ ...c, name: rel.frame.name })}</div>`;
     case 'travelogue': return `<div class="note" data-id="${id}">${ta(rel.frame)}整理好了今天的遊記「${esc(c.title)}」，收在<a href="#/story">我們的故事</a></div>`;
@@ -549,9 +609,15 @@ function cardHtml(m, rel) {
   }
 }
 
-// 明信片：你拍的風景照，或他寄來的風景插畫
+// 照片來源標示（Pexels 規定要標示攝影師）
+function creditHtml(p) {
+  if (!p || !p.credit) return '';
+  return p.source === 'pexels' ? `<a class="credit" href="${esc(p.creditUrl || 'https://www.pexels.com')}" target="_blank" rel="noopener">📷 ${esc(p.credit)}・Pexels</a>` : `<span class="credit">📷 ${esc(p.credit)}</span>`;
+}
+// 明信片：你拍的風景照，或他寄來的風景（寫實照片，沒有照片時用插畫）
 function postcardHtml(c, { large = false } = {}) {
-  const pic = c.media ? `<img src="${c.media}" alt="${esc(c.place || '明信片照片')}" loading="lazy">` : sceneSVG(c.scene || 'city', { label: c.place || '風景' });
+  const pic = c.media ? `<img src="${c.media}" alt="${esc(c.place || '明信片照片')}" loading="lazy">`
+    : c.photo ? `<img src="${esc(c.photo.url)}" alt="${esc(c.place || '風景')}" loading="lazy">${creditHtml(c.photo)}` : sceneSVG(c.scene || 'city', { label: c.place || '風景' });
   return `<div class="postcard${large ? ' large' : ''}"><div class="pc-pic">${pic}<span class="pc-stamp">${c.from === 'walk' || c.from === 'you' ? '你拍的' : 'WithU'}</span></div>
     <div class="pc-body"><p class="pc-msg">${esc(c.message)}</p>
     <p class="pc-meta">${c.place ? `${esc(c.place)}・` : ''}${c.at ? dateStr(c.at) + '・' : ''}${esc(c.name || '')}</p></div></div>`;
@@ -564,12 +630,12 @@ async function renderRoom(relId) {
   S.room = { rel, messages: [], sending: false, recorder: null, charReadId: rel.charReadId || 0, presence: rel.presence };
   const sub = () => rel.status !== 'active' ? '這段關係已經結束了' : `${presenceDot(S.room.presence)}${esc(presenceText(S.room.presence))}`;
   const ACT = { watch: '🎬 一起看', focus: '⏳ 陪你專心', bedtime: '🌙 睡前聊聊' };
-  app.innerHTML = `<div class="room">
+  app.innerHTML = `<div class="room" data-theme="${esc(rel.theme || 'default')}">
     <header class="room-head">
       <a class="icon-btn" href="#/chat" aria-label="返回聊天列表">${icon('back')}</a>
       <button class="who" id="who">${avatar(rel.frame, 38, { lover: rel.pinned })}<span style="min-width:0">
         <span class="nm">${esc(displayName(rel.frame))}${rel.outing ? '<span class="tag">出遊中</span>' : ''}</span><div class="sub" id="sub">${sub()}</div></span></button>
-      <button class="icon-btn" id="more" aria-label="關於${ta(rel.frame)}">${icon('more')}</button>
+      <button class="icon-btn" id="more" aria-label="聊天室選單">${icon('menu')}</button>
     </header>
     ${rel.activity ? `<div class="walk-banner"><span>${ACT[rel.activity.type] || '一起'}${rel.activity.title ? `：${esc(rel.activity.title)}` : ''}・<span id="actMin"></span></span><button class="linkbtn small" id="actEnd">結束</button></div>` : ''}
     <div class="stream" id="stream"></div>
@@ -578,9 +644,11 @@ async function renderRoom(relId) {
       <button class="icon-btn" id="photoBtn" aria-label="傳照片">${icon('photo')}</button>
       <input type="file" id="photoIn" accept="image/*" hidden>
       <textarea id="txt" rows="1" placeholder="跟${ta(rel.frame)}說…" aria-label="訊息"></textarea>
+      <button class="icon-btn" id="stkBtn" aria-label="貼圖">${icon('smile')}</button>
       <button class="icon-btn" id="micBtn" aria-label="錄語音">${icon('mic')}</button>
       <button class="icon-btn send" id="sendBtn" aria-label="送出" hidden>${icon('send')}</button>
     </div>
+    <div class="stk-panel" id="stkPanel" hidden>${STICKER_LIST.map(([sid, l]) => `<button data-stk="${sid}" aria-label="${l}">${stickerSVG(sid, 64)}</button>`).join('')}</div>
     <div class="composer" id="recComposer" hidden>
       <button class="icon-btn" id="recCancel" aria-label="取消錄音">${icon('x')}</button>
       <div class="rec-bar"><i></i><span id="recT">0:00</span><span class="small">錄音中</span></div>
@@ -588,7 +656,7 @@ async function renderRoom(relId) {
     </div>` : `<div class="composer"><p class="small muted" style="margin:6px auto">${ta(rel.frame)}留下的信收在「我們的故事」裡。</p></div>`}
   </div>`;
   $('#who').onclick = () => { location.hash = `#/profile/${rel.id}`; };
-  $('#more').onclick = () => openCharSheet(rel);
+  $('#more').onclick = () => openRoomMenu(rel);
   const stream = $('#stream');
 
   const msgs = await api(`/api/rels/${relId}/messages`);
@@ -609,7 +677,7 @@ async function renderRoom(relId) {
   function drawSuggest() {
     $('#suggest')?.remove();
     if (S.me?.settings?.showSuggestions === false) return;
-    const last = S.room.messages.filter(m => typeof m.id === 'number' && m.kind !== 'card' || (m.card && ['meal', 'pin_request', 'postcard'].includes(m.card.type))).at(-1);
+    const last = S.room.messages.filter(m => typeof m.id === 'number' && m.kind !== 'card' && m.kind !== 'sticker' || (m.card && ['meal', 'pin_request', 'postcard'].includes(m.card.type))).at(-1);
     if (!last || last.sender !== 'char' || !last.suggest?.length) return;
     const box = document.createElement('div');
     box.id = 'suggest'; box.className = 'suggest';
@@ -632,6 +700,13 @@ async function renderRoom(relId) {
   };
   micBtn.onclick = () => startRecording();
   $('#topicBtn').onclick = () => openTopicBag();
+  $('#stkBtn').onclick = () => { const p = $('#stkPanel'); p.hidden = !p.hidden; if (!p.hidden) stream.scrollTop = stream.scrollHeight; };
+  $$('[data-stk]').forEach(b => b.onclick = () => { $('#stkPanel').hidden = true; sendSticker(b.dataset.stk); });
+  async function sendSticker(sid) {
+    if (S.room.sending) return toast(`等${ta(rel.frame)}回完這一則`);
+    appendLocal({ sender: 'user', kind: 'sticker', card: { id: sid }, text: '' });
+    await exchange(() => api(`/api/rels/${relId}/messages`, { method: 'POST', body: { sticker: sid } }), 4);
+  }
   $('#actEnd') && ($('#actEnd').onclick = async () => {
     if (S.room.sending) return toast(`等${ta(rel.frame)}回完這一則`);
     S.room.sending = true;
@@ -861,7 +936,7 @@ async function renderProfile(relId) {
         ${p.weekend ? `<div class="row"><span class="muted small" style="width:64px">休假</span><span class="grow">${esc(p.weekend)}</span></div>` : ''}
       </div>
       <h2>${P}的動態</h2>
-      ${p.posts.length ? `<div class="posts">${p.posts.map(x => `<article class="post">${avatar(f, 36, { season: false })}<div class="grow"><div class="post-text hand">${esc(x.text)}</div><time>${ago(x.at)}</time></div></article>`).join('')}</div>`
+      ${p.posts.length ? `<div class="posts">${p.posts.map(x => `<article class="post">${avatar(f, 36, { season: false })}<div class="grow"><div class="post-text hand">${esc(x.text)}</div>${x.photo ? `<div class="fp-photo sm"><img src="${esc(x.photo.url)}" alt="" loading="lazy">${creditHtml(x.photo)}</div>` : ''}<time>${ago(x.at)}</time></div></article>`).join('')}</div>`
         : `<p class="muted small">${P}分享生活的時候，會留在這裡。</p>`}
     </div></div>`;
   $('#pfSet').onclick = async () => openCharSheet(await api(`/api/rels/${relId}`));
@@ -919,8 +994,74 @@ async function shrinkImage(file, max = 1280) {
 }
 
 // ---------- character sheet ----------
+// ---------- 聊天室選單（像 LINE）----------
+const THEMES = [['default', '預設'], ['night', '夜晚'], ['cafe', '咖啡廳'], ['sea', '海邊'], ['sakura', '櫻花'], ['forest', '森林']];
+function openRoomMenu(rel) {
+  const items = [['album', '📷', '相簿'], ['notes', '📝', '記事本'], ['story', '📖', '回憶錄'], ['search', '🔍', '搜尋'], ['theme', '🎨', '主題'], ['profile', '👤', '個人頁'], ['settings', '⚙️', '設定'], ['report', '💬', '回報問題']];
+  openSheet(`<div class="rm-head">${avatar(rel.frame, 44)}<b>${esc(displayName(rel.frame))}</b></div>
+    <div class="rm-grid">${items.map(([k, i, l]) => `<button data-rm="${k}"><span>${i}</span>${l}</button>`).join('')}</div>`, (sh, close) => {
+    $$('[data-rm]', sh).forEach(b => b.onclick = () => {
+      close();
+      ({ album: () => openAlbum(rel), notes: () => openNotes(rel), story: () => { S.storyRel = rel.id; location.hash = '#/story'; },
+        search: () => openSearch(rel), theme: () => openThemes(rel), profile: () => { location.hash = `#/profile/${rel.id}`; },
+        settings: () => openCharSheet(rel), report: () => openReportSheet(rel) })[b.dataset.rm]();
+    });
+  });
+}
+
+async function openAlbum(rel) {
+  const items = await api(`/api/rels/${rel.id}/album`);
+  openSheet(`<h3>相簿</h3>${items.length ? `<div class="album">${items.map(p => {
+    const src = p.media[0] || p.photo?.url;
+    return src ? `<button data-a="${p.id}"><img src="${esc(src)}" alt="${esc(p.place || '')}" loading="lazy"></button>` : '';
+  }).join('')}</div>` : `<p class="muted">你們分享的照片和明信片會收在這裡。</p>`}`, (sh) => {
+    $$('[data-a]', sh).forEach(b => b.onclick = () => {
+      const p = items.find(x => x.id === Number(b.dataset.a));
+      openSheet(postcardHtml({ media: p.media[0], photo: p.photo, scene: p.scene, message: p.body || '', place: p.place, at: p.at, name: p.type === 'postcard' && !p.media[0] ? rel.frame.name : '', from: p.media[0] ? 'you' : 'him' }, { large: true }));
+    });
+  });
+}
+
+async function openNotes(rel) {
+  const draw = async (sh) => {
+    const notes = await api(`/api/rels/${rel.id}/notes`);
+    $('#nlist', sh).innerHTML = notes.length ? notes.map(n => `<div class="nrow${n.done ? ' done' : ''}"><input type="checkbox" data-nd="${n.id}" ${n.done ? 'checked' : ''} aria-label="完成">
+      <span class="grow">${esc(n.text)}<span class="small muted">・${n.author === 'user' ? '你' : esc(displayName(rel.frame))}寫的</span></span><button class="linkbtn small" data-nx="${n.id}">刪除</button></div>`).join('')
+      : `<p class="muted small">約好要一起做的事、想一起去的地方，${ta(rel.frame)}也會記在這裡。</p>`;
+    $$('[data-nd]', sh).forEach(c => c.onchange = async () => { await api(`/api/rels/${rel.id}/notes/${c.dataset.nd}`, { method: 'PATCH', body: { done: c.checked } }); draw(sh); });
+    $$('[data-nx]', sh).forEach(b => b.onclick = async () => { await api(`/api/rels/${rel.id}/notes/${b.dataset.nx}`, { method: 'PATCH', body: { delete: true } }); draw(sh); });
+  };
+  openSheet(`<h3>記事本</h3><p class="small muted">你們的約定與清單</p><div id="nlist"></div>
+    <div class="row-form"><input class="input" id="nnew" maxlength="40" placeholder="例如：下次一起去吃豆花"><button class="btn sm" id="nadd">新增</button></div>`, (sh) => {
+    draw(sh);
+    $('#nadd', sh).onclick = async () => { const t = $('#nnew', sh).value.trim(); if (!t) return; await api(`/api/rels/${rel.id}/notes`, { method: 'POST', body: { text: t } }); $('#nnew', sh).value = ''; draw(sh); };
+  });
+}
+
+function openSearch(rel) {
+  openSheet(`<h3>搜尋聊天紀錄</h3><input class="input" id="sq" placeholder="輸入關鍵字" autocomplete="off"><div id="sres" style="margin-top:12px"></div>`, (sh) => {
+    let t;
+    $('#sq', sh).focus();
+    $('#sq', sh).oninput = () => { clearTimeout(t); t = setTimeout(async () => {
+      const q = $('#sq', sh).value.trim();
+      const rows = q ? await api(`/api/rels/${rel.id}/search?q=${encodeURIComponent(q)}`) : [];
+      const hl = (x) => esc(x).replaceAll(esc(q), `<mark>${esc(q)}</mark>`);
+      $('#sres', sh).innerHTML = q ? (rows.length ? rows.map(r => `<div class="sres"><div class="small muted">${dateStr(r.at)} ${hhmm(r.at)}・${r.sender === 'user' ? '你' : esc(displayName(rel.frame))}</div><div>${hl(r.text || '')}</div></div>`).join('') : '<p class="muted small">找不到</p>') : '';
+    }, 250); };
+  });
+}
+
+function openThemes(rel) {
+  openSheet(`<h3>聊天室主題</h3><div class="theme-grid">${THEMES.map(([k, l]) => `<button data-th="${k}" aria-pressed="${(rel.theme || 'default') === k}"><span class="th-sw" data-theme="${k}"><i></i><i></i></span>${l}</button>`).join('')}</div>`, (sh, close) => {
+    $$('[data-th]', sh).forEach(b => b.onclick = async () => {
+      await api(`/api/rels/${rel.id}/theme`, { method: 'POST', body: { theme: b.dataset.th } });
+      rel.theme = b.dataset.th; $('.room')?.setAttribute('data-theme', rel.theme); close();
+    });
+  });
+}
+
 function openCharSheet(rel) {
-  const f = rel.frame;
+  const f = rel.frame, P = ta(f);
   const days = (f.schedule?.days || []).map(d => '日一二三四五六'[d]).join('、');
   openSheet(`
     <div style="display:flex;gap:14px;align-items:center;margin-bottom:12px">${avatar(f, 64, { lover: rel.pinned })}
@@ -1027,19 +1168,77 @@ async function openShareSheet(rel) {
 // ======================================================================
 // 探索：角色廣場
 // ======================================================================
+// ======================================================================
+// 動態牆：他們自己發的生活動態
+// ======================================================================
+function feedCard(p) {
+  const f = p.frame;
+  return `<article class="fpost" data-post="${p.id}">
+    <header><a href="#/profile/${p.relId}" class="fp-who">${avatar(f, 40, { season: false })}<span><b>${esc(displayName(f))}</b><time>${ago(p.at)}</time></span></a></header>
+    <p class="fp-text">${esc(p.text)}</p>
+    ${p.photo ? `<div class="fp-photo"><img src="${esc(p.photo.url)}" alt="" loading="lazy">${creditHtml(p.photo)}</div>` : ''}
+    <div class="fp-actions"><button class="fp-like${p.liked ? ' on' : ''}" data-like="${p.id}" aria-pressed="${p.liked}" aria-label="按讚">${p.liked ? '♥' : '♡'}</button>
+      <button class="fp-cbtn" data-cmt="${p.id}">留言${p.comments.length ? `・${p.comments.length}` : ''}</button></div>
+    ${p.comments.length ? `<div class="fp-comments">${p.comments.map(c => `<div class="fp-c"><b>${c.sender === 'user' ? '你' : esc(displayName(f))}</b> ${esc(c.text)}</div>`).join('')}</div>` : ''}
+  </article>`;
+}
+
+async function renderFeed() {
+  const draw = async () => {
+    const posts = await api('/api/feed');
+    try { localStorage.setItem('feedSeen', String(posts[0]?.id || 0)); } catch {}
+    $('a[data-tab="feed"] .tab-dot', tabs)?.remove();
+    app.innerHTML = `<div class="page"><h1>動態</h1>
+      ${posts.length ? posts.map(feedCard).join('') : `<div class="empty"><div class="empty-art">${sceneSVG('city', { label: '城市' })}</div><p class="muted">你認識的人發的生活動態會出現在這裡。${TA()}們會在午休、下班後、休假時分享自己的日常。</p></div>`}</div>`;
+    $$('[data-like]').forEach(b => b.onclick = async () => {
+      const r = await api(`/api/feed/${b.dataset.like}/like`, { method: 'POST' });
+      b.classList.toggle('on', r.liked); b.textContent = r.liked ? '♥' : '♡'; b.setAttribute('aria-pressed', r.liked);
+    });
+    $$('[data-cmt]').forEach(b => b.onclick = () => {
+      const p = posts.find(x => x.id === Number(b.dataset.cmt));
+      openSheet(`<h3>留言給${esc(displayName(p.frame))}</h3><p class="small muted">${esc(p.text)}</p>
+        <textarea class="input" id="cmt" rows="2" maxlength="200" placeholder="說點什麼…"></textarea>
+        <button class="btn block" id="cmtGo" style="margin-top:10px">送出</button>`, (sh, close) => {
+        $('#cmt', sh).focus();
+        $('#cmtGo', sh).onclick = async () => {
+          const text = $('#cmt', sh).value.trim(); if (!text) return;
+          $('#cmtGo', sh).disabled = true;
+          try { await api(`/api/feed/${p.id}/comment`, { method: 'POST', body: { text } }); close(); toast(`${ta(p.frame)}看到會回你`); draw(); } catch (e) { toast(e.message); $('#cmtGo', sh).disabled = false; }
+        };
+      });
+    });
+  };
+  await draw();
+  S.timers.push(setInterval(() => { if (document.visibilityState === 'visible' && !$('#sheet-root').innerHTML) draw().catch(() => {}); }, 30000));
+}
+
+// 動態分頁上的小紅點：有沒看過的新動態
+async function refreshFeedDot() {
+  try {
+    const posts = await api('/api/feed');
+    const seen = Number(localStorage.getItem('feedSeen') || 0);
+    const a = $('a[data-tab="feed"]', tabs);
+    if (a && posts[0] && posts[0].id > seen && !$('.tab-dot', a)) a.insertAdjacentHTML('beforeend', '<span class="tab-dot" aria-label="有新動態"></span>');
+  } catch {}
+}
+
 async function renderExplore() {
   const list = await api('/api/templates');
-  const official = list.filter(t => t.kind === 'official');
-  const shared = list.filter(t => t.kind === 'shared');
+  let cat = S.exploreCat || '';
+  const draw = () => {
+  const official = list.filter(t => t.kind === 'official' && inCat(t, cat));
+  const shared = list.filter(t => t.kind === 'shared' && inCat(t, cat));
   const tile = (t) => `<button class="tile" data-id="${esc(t.id)}">${avatar(t.frame, 52, { season: false })}
     <span class="nm">${esc(t.frame.name)}</span><span class="info">${esc(t.frame.jobLabel)}・${esc(t.frame.archetypeLabel || '')}</span>
     <span class="intro">${esc(t.frame.intro || '')}</span><span class="by">${t.kind === 'official' ? '官方角色' : `${esc(t.creator)} 塑造`}</span></button>`;
-  app.innerHTML = `<div class="page"><h1>探索</h1>
-    <h2 style="margin-top:0">住在這座城市裡的人</h2>
+  const catInfo = (S.meta.categories || []).find(c => c.id === cat);
+  app.innerHTML = `<div class="page"><h1>探索</h1>${catChips(list, cat)}
+    <h2 style="margin-top:0">${catInfo ? esc(catInfo.desc) : '住在這座城市裡的人'}</h2>
     ${official.length ? `<div class="grid">${official.map(tile).join('')}</div>` : `<div class="empty" style="padding:8px 0 16px"><div class="empty-art">${sceneSVG('city', { label: '城市' })}</div><p class="muted">這座城市裡的人，你都認識了。</p></div>`}
     <h2>大家塑造的人</h2>
-    ${shared.length ? `<div class="grid">${shared.map(tile).join('')}</div>` : `<p class="muted">還沒有人分享。你和${TA()}聊得夠熟之後，可以讓其他人也認識${TA()}。</p>`}
+    ${shared.length ? `<div class="grid">${shared.map(tile).join('')}</div>` : `<p class="muted">${cat ? '這個分類還沒有人分享。' : `還沒有人分享。你和${TA()}聊得夠熟之後，可以讓其他人也認識${TA()}。`}</p>`}
   </div>`;
+  $$('[data-cat]').forEach(b => b.onclick = () => { cat = S.exploreCat = b.dataset.cat; draw(); });
   $$('.tile').forEach(b => b.onclick = () => {
     const t = list.find(x => x.id === b.dataset.id);
     const f = t.frame;
@@ -1060,6 +1259,8 @@ async function renderExplore() {
       });
     });
   });
+  };
+  draw();
 }
 
 // ======================================================================
@@ -1071,6 +1272,7 @@ async function renderStory() {
     app.innerHTML = `<div class="page"><h1>我們的故事</h1><div class="empty"><div class="empty-art">${sceneSVG('album', { label: '相片' })}</div><p class="hand">故事還沒開始</p><p class="muted">分享照片、一起出門、${TA()}第一次叫你的小名，都會收在這裡。</p></div></div>`;
     return;
   }
+  if (S.storyRel) { S.storySel = S.storyRel; S.storyRel = null; }
   const sel = S.storySel && data.find(d => d.rel.id === S.storySel) ? S.storySel : (data.find(d => d.rel.pinned) || data.find(d => d.rel.status === 'active') || data[0]).rel.id;
   S.storySel = sel;
   const cur = data.find(d => d.rel.id === sel);
@@ -1086,13 +1288,16 @@ async function renderStory() {
     <div class="story-tabs">${data.map(d => `<button data-rel="${d.rel.id}" aria-pressed="${d.rel.id === sel}">${avatar(d.rel.frame, 48, { season: false, lover: d.rel.pinned })}<span>${esc(displayName(d.rel.frame))}${d.rel.status === 'ended' ? '・已結束' : ''}</span></button>`).join('')}</div>
     <p class="small muted">${dateStr(cur.rel.createdAt)} 相遇${cur.rel.status === 'ended' ? `・${dateStr(cur.rel.endedAt)} 分開` : ''}</p>
     ${letter ? `<h2>${ta(cur.rel.frame)}留給你的信</h2><div class="letter">${esc(letter.body)}</div>` : ''}
-    <h2>里程碑</h2>
-    ${milestones.length ? `<div class="timeline">${milestones.slice().reverse().map(m => `<div class="tl-item"><div class="t">${esc(m.title)}</div><time>${dateStr(m.at)}</time></div>`).join('')}</div>` : '<p class="muted small">還沒有。慢慢來。</p>'}
+    <h2>回憶錄</h2>
+    ${cur.memoir.map(ch => `<div class="mm-ch"><div class="mm-head"><b>${esc(ch.title)}</b><span class="small muted">${ch.unlocked}／${ch.total}</span></div>
+      <div class="mm-grid">${ch.cards.map(c => c.unlocked
+        ? `<div class="mm-card"><div class="mm-t">${esc(c.title)}</div><time>${dateStr(c.at)}</time></div>`
+        : `<div class="mm-card locked" aria-label="還沒解鎖的回憶"><div class="mm-q">？？</div></div>`).join('')}</div></div>`).join('')}
     <h2>回憶地圖</h2>
     ${Object.keys(places).length ? `<div class="places">${Object.entries(places).map(([name, ps]) => `<div class="place"><span class="pin"><b>${ps.length}</b></span><span class="grow"><div class="nm">${esc(name)}</div><div class="small muted">${dateStr(ps.at(-1).at)} 第一次一起看</div></span></div>`).join('')}</div>` : '<p class="muted small">傳景色給他，告訴他是哪裡，就會記在這裡。</p>'}
     <h2>明信片</h2>
-    ${postcards.length ? `<div class="pc-grid">${postcards.map(p => `<button class="pc-thumb" data-pc="${p.id}">${postcardHtml({ media: p.media[0], scene: p.scene, message: p.body, place: p.place, at: p.at, name: p.scene ? cur.rel.frame.name : '', from: p.scene ? 'him' : 'walk' })}</button>`).join('')}</div>`
-      : `<p class="muted small">和${ta(cur.rel.frame)}一起散步時拍的照片會變成明信片；${ta(cur.rel.frame)}休假時也會寄明信片給你。</p>`}
+    ${postcards.length ? `<div class="pc-grid">${postcards.map(p => `<button class="pc-thumb" data-pc="${p.id}">${postcardHtml({ media: p.media[0], photo: p.photo, scene: p.scene, message: p.body, place: p.place, at: p.at, name: p.scene ? cur.rel.frame.name : '', from: p.scene ? 'him' : 'you' })}</button>`).join('')}</div>`
+      : `<p class="muted small">你傳很美的風景照時，${ta(cur.rel.frame)}偶爾會做成明信片；${ta(cur.rel.frame)}休假時也會寄明信片給你。</p>`}
     <h2>相簿</h2>
     ${photos.length ? `<div class="album">${photos.map(p => `<button data-photo="${p.id}"><img src="${p.media[0]}" alt="${esc(p.place || '你分享的照片')}" loading="lazy"></button>`).join('')}</div>` : '<p class="muted small">你分享給他的照片會在這裡。</p>'}
     <h2>遊記</h2>
@@ -1104,9 +1309,9 @@ async function renderStory() {
   $$('[data-rel]').forEach(b => b.onclick = () => { S.storySel = b.dataset.rel; renderStory(); });
   $$('[data-pc]').forEach(b => b.onclick = () => {
     const p = postcards.find(x => String(x.id) === b.dataset.pc);
-    const c = { media: p.media[0], scene: p.scene, message: p.body, place: p.place, at: p.at, name: p.scene ? cur.rel.frame.name : '', from: p.scene ? 'him' : 'walk' };
+    const c = { media: p.media[0], photo: p.photo, scene: p.scene, message: p.body, place: p.place, at: p.at, name: p.scene ? cur.rel.frame.name : '', from: p.scene ? 'him' : 'you' };
     openSheet(`${postcardHtml(c, { large: true })}<button class="btn ghost block" id="pcShare" style="margin-top:14px">做成分享圖卡</button>`, (sheet) => {
-      $('#pcShare', sheet).onclick = () => makeShareCard({ hue: cur.rel.frame.hue, kicker: p.scene ? `${cur.rel.frame.name}寄來的明信片` : `和${cur.rel.frame.name}散步`, title: p.place || '明信片', body: p.body, date: dateStr(p.at), photo: p.media[0] });
+      $('#pcShare', sheet).onclick = () => makeShareCard({ hue: cur.rel.frame.hue, kicker: p.scene ? `${cur.rel.frame.name}寄來的明信片` : `寄給${cur.rel.frame.name}的風景`, title: p.place || '明信片', body: p.body, date: dateStr(p.at), photo: p.media[0] || p.photo?.url });
     });
   });
   $$('[data-photo]').forEach(b => b.onclick = () => {
@@ -1193,7 +1398,7 @@ async function renderMe() {
         <button class="btn sm ${pushOn ? 'ghost' : ''}" id="push" ${!S.me.pushKey ? 'disabled' : ''}>${pushOn ? '已開啟' : '開啟'}</button></div>
       <div class="row"><label for="sugg" class="grow">顯示回覆方向<div class="small muted">不知道怎麼回的時候，點一下幫你寫好一句</div></label><input type="checkbox" id="sugg" ${st.showSuggestions !== false ? 'checked' : ''}></div>
       <div class="row"><label for="rdelay" class="grow">忙的時候晚點回<div class="small muted">上班、睡覺時會晚一點才回你，比較像真人</div></label><input type="checkbox" id="rdelay" ${st.realisticDelay !== false ? 'checked' : ''}></div>
-      <div class="row"><span class="grow">頭像畫風</span><div class="seg">${[['auto', '依角色'], ['real', '寫實'], ['anime', '二次元']].map(([v, l]) => `<button data-ps="${v}" aria-pressed="${(st.portraitStyle || 'auto') === v}">${l}</button>`).join('')}</div></div>
+      <div class="row"><span class="grow">頭像畫風</span><div class="seg">${[['auto', '依角色'], ['real', '寫實'], ['anime', '二次元'], ['photo', '生活照']].map(([v, l]) => `<button data-ps="${v}" aria-pressed="${(st.portraitStyle || 'auto') === v}">${l}</button>`).join('')}</div></div>
       <div class="row"><span class="grow">通知預覽</span><div class="seg"><button data-np="full" aria-pressed="${st.notifyPreview !== 'discreet'}">顯示內容</button><button data-np="discreet" aria-pressed="${st.notifyPreview === 'discreet'}">只顯示有新訊息</button></div></div>
       <div class="row"><label for="discreet" class="grow">低調模式<div class="small muted">名字和頭像改成被看到也不尷尬的樣子</div></label><input type="checkbox" id="discreet" ${st.discreetNames ? 'checked' : ''}></div>
     </div>
@@ -1318,7 +1523,7 @@ function reportClientError(message, stack) {
   if (sentErrors.has(key) || sentErrors.size > 20 || /unauth|Failed to fetch|Load failed|NetworkError/.test(key)) return;
   sentErrors.add(key);
   fetch('/api/client-log', { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'same-origin',
-    body: JSON.stringify({ message: key, stack: String(stack || '').slice(0, 2000), url: location.hash, v: 'v8' }) }).catch(() => {});
+    body: JSON.stringify({ message: key, stack: String(stack || '').slice(0, 2000), url: location.hash, v: 'v9' }) }).catch(() => {});
 }
 window.addEventListener('error', (e) => reportClientError(e.message, e.error?.stack));
 window.addEventListener('unhandledrejection', (e) => reportClientError(e.reason?.message || String(e.reason), e.reason?.stack));

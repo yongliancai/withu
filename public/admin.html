@@ -41,6 +41,7 @@
   .notice { background: var(--surface); border-left: 3px solid var(--rose); padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; }
   #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:var(--ink); color:var(--paper); padding:8px 16px; border-radius:999px; opacity:0; transition:.2s; pointer-events:none; }
   #toast.on { opacity:1; }
+.ph-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}.ph-grid figure{margin:0;background:#fff;border-radius:10px;overflow:hidden}.ph-grid img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block}.ph-grid figcaption{font-size:12px;padding:6px 8px;display:flex;justify-content:space-between;align-items:center;gap:6px}
 </style>
 </head>
 <body><main>
@@ -78,7 +79,7 @@ function formatDetail(d) {
   return s;
 }
 
-const TABS = [['stats', '數據'], ['officials', '官方角色'], ['invites', '邀請碼'], ['testers', '測試者'], ['square', '角色廣場'], ['trends', '流行新品'], ['feedback', '意見回饋'], ['crisis', '危機事件'], ['styles', '說話風格'], ['logs', '系統紀錄']];
+const TABS = [['stats', '數據'], ['officials', '官方角色'], ['invites', '邀請碼'], ['testers', '測試者'], ['square', '角色廣場'], ['trends', '流行新品'], ['feedback', '意見回饋'], ['crisis', '危機事件'], ['styles', '說話風格'], ['photos', '照片庫'], ['logs', '系統紀錄']];
 function drawTabs() {
   document.getElementById('login').hidden = true;
   const n = document.getElementById('tabs'); n.hidden = false;
@@ -292,6 +293,36 @@ const VIEWS = {
       render();
     });
     out.querySelectorAll('[data-reset]').forEach(b => b.onclick = async () => { if (confirm('恢復成預設內容？')) { await api('/styles/' + b.dataset.reset, 'POST', { reset: true }); render(); } });
+  },
+
+  // ------------------------------------------------ 照片庫
+  async photos() {
+    const d = await api('/photos');
+    const sel = VIEWS._photoTag || '';
+    const rows = d.rows.filter(r => !sel || r.tag === sel);
+    out.innerHTML = `<p class="muted">明信片、動態牆、生活照頭像用的寫實照片。${d.pexels ? '已連上 Pexels，每個類別會自動補到 6 張以上（每週檢查一次）。' : '尚未設定 <code>PEXELS_API_KEY</code>：到 pexels.com/api 免費申請後貼進 .env 並重啟，就會自動補照片；也可以在這裡自己上傳。'}沒有照片的類別會改用插畫。</p>
+      <div class="row-form">
+        ${d.pexels ? '<button id="fill">從 Pexels 補照片</button>' : ''}
+        <select id="ptag"><option value="">所有類別</option>${Object.entries(d.tags).map(([k, l]) => `<option value="${k}" ${sel === k ? 'selected' : ''}>${esc(l)}（${d.counts[k] || 0}）</option>`).join('')}</select>
+      </div>
+      <div class="card" style="margin:12px 0"><b>上傳照片</b>
+        <div class="row-form" style="margin-top:8px"><select id="utag">${Object.entries(d.tags).map(([k, l]) => `<option value="${k}" ${sel === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
+        <input id="ucredit" placeholder="攝影者（選填）"><input type="file" id="ufile" accept="image/*" multiple><button id="up">上傳</button></div>
+        <p class="small muted">只上傳你有權使用的照片（自己拍的、或免費授權的）。</p></div>
+      <div class="ph-grid">${rows.map(r => `<figure><img src="${esc(r.thumb)}" loading="lazy" alt=""><figcaption>${esc(d.tags[r.tag] || r.tag)}${r.credit ? `・${esc(r.credit)}` : ''}<button class="sm ghost" data-hide="${r.id}">移除</button></figcaption></figure>`).join('') || '<p class="muted">還沒有照片</p>'}</div>`;
+    document.getElementById('ptag').onchange = (e) => { VIEWS._photoTag = e.target.value; render(); };
+    const fill = document.getElementById('fill');
+    if (fill) fill.onclick = async () => { fill.disabled = true; fill.textContent = '補照片中…'; const r = await api('/photos/fill', 'POST', {}); toast(r.ok ? `新增 ${r.added} 張` : '正在補照片中'); render(); };
+    document.getElementById('up').onclick = async () => {
+      const files = document.getElementById('ufile').files; if (!files.length) return toast('選照片');
+      for (const f of files) {
+        const fd = new FormData(); fd.append('photo', f); fd.append('tag', document.getElementById('utag').value); fd.append('credit', document.getElementById('ucredit').value);
+        const r = await fetch('/api/admin/photos', { method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN }, body: fd });
+        if (!r.ok) { toast('上傳失敗'); return; }
+      }
+      toast('已上傳'); render();
+    };
+    out.querySelectorAll('[data-hide]').forEach(b => b.onclick = async () => { await api(`/photos/${b.dataset.hide}/hide`, 'POST', {}); render(); });
   },
 
   // ------------------------------------------------ 系統紀錄

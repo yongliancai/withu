@@ -259,3 +259,54 @@ export function sceneSVG(id, { label = '' } = {}) {
   return `<svg viewBox="0 0 360 180" preserveAspectRatio="xMidYMid slice" role="img" aria-label="${label.replace(/"/g, '')}">${draw()}</svg>`;
 }
 export const hasScene = (id) => !!SCENES[id];
+
+// ---------------------------------------------------------------- stickers
+// 原創貼圖「小糰」：一顆軟軟的麻糬，16 種表情。
+export const STICKER_LIST = [
+  ['hi', '嗨'], ['ok', '好喔'], ['love', '喜歡你'], ['thanks', '謝謝'], ['sorry', '對不起'], ['night', '晚安'], ['hungry', '好餓'], ['cry', '哭哭'],
+  ['laugh', '笑死'], ['hmph', '哼'], ['shy', '害羞'], ['cheer', '加油'], ['hug', '抱抱'], ['what', '？？'], ['busy', '忙碌中'], ['miss', '想你'],
+];
+export function stickerSVG(id, size = 120) {
+  const label = (STICKER_LIST.find(s => s[0] === id) || [id, id])[1];
+  const ink = '#3B3561', body = '#FFF6EC', blush = '#F4A6B4';
+  const eyes = {
+    hi: 'M44 56 a4 4 0 1 0 0.1 0 M76 56 a4 4 0 1 0 0.1 0', ok: 'M40 57 q4 -5 8 0 M72 57 q4 -5 8 0', love: '', thanks: 'M40 57 q4 -5 8 0 M72 57 q4 -5 8 0',
+    sorry: 'M39 54 l9 4 M81 54 l-9 4', night: 'M39 58 q5 4 10 0 M71 58 q5 4 10 0', hungry: 'M44 56 a4 4 0 1 0 0.1 0 M76 56 a4 4 0 1 0 0.1 0',
+    cry: 'M39 55 l9 3 M81 55 l-9 3', laugh: 'M39 58 l5 -5 l5 5 M71 58 l5 -5 l5 5', hmph: 'M38 54 l11 3 M82 54 l-11 3', shy: 'M40 57 q4 -5 8 0 M72 57 q4 -5 8 0',
+    cheer: 'M44 56 a4 4 0 1 0 0.1 0 M76 56 a4 4 0 1 0 0.1 0', hug: 'M40 57 q4 -5 8 0 M72 57 q4 -5 8 0', what: 'M44 56 a4 4 0 1 0 0.1 0 M76 56 a5 5 0 1 0 0.1 0',
+    busy: 'M38 56 h10 M72 56 h10', miss: 'M40 58 q4 4 8 0 M72 58 q4 4 8 0',
+  }[id] || '';
+  const mouth = {
+    hi: 'M56 68 q4 5 8 0', ok: 'M55 67 q5 6 10 0', love: 'M56 68 q4 5 8 0', thanks: 'M55 67 q5 6 10 0', sorry: 'M55 71 q5 -4 10 0', night: 'M58 68 h4',
+    hungry: 'M55 66 q5 10 10 0 z', cry: 'M55 71 q5 -5 10 0', laugh: 'M53 65 q7 12 14 0 z', hmph: 'M56 70 h8', shy: 'M57 68 q3 3 6 0', cheer: 'M54 65 q6 10 12 0 z',
+    hug: 'M56 68 q4 5 8 0', what: 'M58 69 a2 2 0 1 0 0.1 0', busy: 'M55 69 q5 -3 10 0', miss: 'M57 68 q3 3 6 0',
+  }[id] || '';
+  const extra = {
+    love: `<path d="M38 56 c0-5 8-5 8 0 c0-5 8-5 8 0 c0 5-8 9-8 9 s-8-4-8-9z M66 56 c0-5 8-5 8 0 c0-5 8-5 8 0 c0 5-8 9-8 9 s-8-4-8-9z" fill="#E0525F"/>`,
+    hi: `<path d="M96 40 q10 -6 12 4" stroke="${ink}" stroke-width="3" fill="none" stroke-linecap="round"/><ellipse cx="100" cy="52" rx="7" ry="9" fill="${body}" stroke="${ink}" stroke-width="3"/>`,
+    night: `<path d="M92 22 a10 10 0 1 0 10 14 a8 8 0 1 1 -10 -14z" fill="#F6D28B"/><text x="20" y="34" font-size="14" fill="${ink}">z z</text>`,
+    hungry: `<path d="M84 74 q3 8 0 12" stroke="#7FB8E6" stroke-width="3" fill="none" stroke-linecap="round"/>`,
+    cry: `<path d="M42 62 q-3 10 0 16 M78 62 q3 10 0 16" stroke="#7FB8E6" stroke-width="4" fill="none" stroke-linecap="round"/>`,
+    laugh: `<path d="M30 46 l-8 -6 M90 46 l8 -6" stroke="${ink}" stroke-width="3" stroke-linecap="round"/>`,
+    hmph: `<path d="M88 30 l6 6 m0 -6 l-6 6" stroke="#E0525F" stroke-width="3" stroke-linecap="round"/>`,
+    shy: `<ellipse cx="40" cy="66" rx="9" ry="5" fill="${blush}"/><ellipse cx="80" cy="66" rx="9" ry="5" fill="${blush}"/>`,
+    cheer: `<path d="M98 34 l4 -14 l4 14 z" fill="#F6D28B" stroke="${ink}" stroke-width="2"/><path d="M18 50 l8 -4" stroke="${ink}" stroke-width="3" stroke-linecap="round"/>`,
+    hug: `<path d="M24 72 q-6 -14 8 -16 M96 72 q6 -14 -8 -16" stroke="${ink}" stroke-width="3" fill="${body}" stroke-linecap="round"/>`,
+    what: `<text x="88" y="38" font-size="22" font-weight="700" fill="${ink}">?</text>`,
+    busy: `<rect x="84" y="62" width="22" height="16" rx="3" fill="#9AB3D6" stroke="${ink}" stroke-width="2"/><path d="M26 36 l6 4 M24 46 l7 1" stroke="${ink}" stroke-width="2" stroke-linecap="round"/>`,
+    miss: `<path d="M92 26 c0-4 6-4 6 0 c0-4 6-4 6 0 c0 4-6 7-6 7 s-6-3-6-7z" fill="#E0525F"/>`,
+    thanks: `<path d="M50 86 q10 6 20 0" stroke="${ink}" stroke-width="3" fill="none" stroke-linecap="round"/>`,
+    sorry: `<path d="M30 30 q6 4 4 10" stroke="#7FB8E6" stroke-width="3" fill="none" stroke-linecap="round"/>`,
+    ok: `<circle cx="98" cy="70" r="7" fill="none" stroke="${ink}" stroke-width="3"/>`,
+  }[id] || '';
+  return `<svg viewBox="0 0 120 120" width="${size}" height="${size}" role="img" aria-label="貼圖：${label}">
+    <ellipse cx="60" cy="98" rx="34" ry="5" fill="rgba(59,53,97,.12)"/>
+    <path d="M36 30 q-4 -12 8 -10 M84 30 q4 -12 -8 -10" stroke="${ink}" stroke-width="3" fill="${body}" stroke-linecap="round"/>
+    <path d="M20 66 q0 -40 40 -40 q40 0 40 40 q0 30 -40 30 q-40 0 -40 -30z" fill="${body}" stroke="${ink}" stroke-width="3.5"/>
+    ${id !== 'shy' ? `<ellipse cx="38" cy="66" rx="6" ry="3.5" fill="${blush}" opacity=".7"/><ellipse cx="82" cy="66" rx="6" ry="3.5" fill="${blush}" opacity=".7"/>` : ''}
+    ${eyes ? `<path d="${eyes}" stroke="${ink}" stroke-width="3.2" fill="${/a4|a5/.test(eyes) ? ink : 'none'}" stroke-linecap="round"/>` : ''}
+    ${mouth ? `<path d="${mouth}" stroke="${ink}" stroke-width="3" fill="${/z$/.test(mouth) ? '#E07A86' : 'none'}" stroke-linecap="round" stroke-linejoin="round"/>` : ''}
+    ${extra}
+    <text x="60" y="116" text-anchor="middle" font-size="15" font-weight="700" fill="${ink}" font-family="'jf-openhuninn','Noto Sans TC',sans-serif">${label}</text>
+  </svg>`;
+}

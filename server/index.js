@@ -7,10 +7,10 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { db, now, j, logEvent } from './db.js';
-import { stt } from './llm.js';
-import { JOBS, ARCHETYPES, PROACTIVITY, VOICES, SCENARIOS, AVATAR_HUES, charStatus } from './characters.js';
+import { stt, jsonCall } from './llm.js';
+import { JOBS, ARCHETYPES, PROACTIVITY, VOICES, SCENARIOS, AVATAR_HUES, charStatus, MOODS, CATEGORIES } from './characters.js';
 import { STAGES } from './prompt.js';
-import { id, runTurn, addMessage, getPersona, endRelationship, addStory, ta, startActivity, endActivity } from './engine.js';
+import { id, runTurn, addMessage, getPersona, endRelationship, addStory, ta, startActivity, endActivity, STICKERS } from './engine.js';
 import { presenceOf, replyDelayMs } from './presence.js';
 import { crisisSignal } from './safety.js';
 import { topicsFor, GAMES, ACTIVITIES, LEAD_REASON } from './topics.js';
@@ -20,6 +20,9 @@ import { pushEnabled } from './push.js';
 import { adminStats } from './admin.js';
 import { logIssue, purgeOldLogs } from './logger.js';
 import { mountAdmin, cohortForCode } from './adminRoutes.js';
+import { memoirFor } from './memoir.js';
+import { feedFor, likePost, commentPost } from './feed.js';
+import { LIB_DIR, pickPhoto, photoById, fillFromPexels, saveUpload, PHOTO_TAGS, photoCount } from './photos.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -153,11 +156,12 @@ app.delete('/api/me', auth, (req, res) => {
 });
 
 // ---------- meta, square, meeting ----------
-app.get('/api/meta', (req, res) => res.json({ jobs: JOBS, archetypes: ARCHETYPES, proactivity: PROACTIVITY, voices: VOICES, scenarios: SCENARIOS, hues: AVATAR_HUES, stages: STAGES }));
+app.get('/api/meta', (req, res) => res.json({ jobs: JOBS, archetypes: ARCHETYPES, proactivity: PROACTIVITY, voices: VOICES, scenarios: SCENARIOS, hues: AVATAR_HUES, stages: STAGES, moods: MOODS, categories: CATEGORIES }));
 
 const publicFrame = (f) => ({ name: f.name, gender: f.gender, age: f.age, nationality: f.nationality, jobLabel: f.jobLabel, job: f.job,
   archetype: f.archetype, archetypeLabel: ARCHETYPES[f.archetype]?.label, look: f.look, proactivity: f.proactivity, appearance: f.appearance,
-  traits: f.traits, catchphrases: f.catchphrases, intro: f.intro, hue: f.hue, schedule: f.schedule, workplace: f.workplace, signature: f.signature });
+  traits: f.traits, catchphrases: f.catchphrases, intro: f.intro, hue: f.hue, schedule: f.schedule, workplace: f.workplace, signature: f.signature, cats: f.cats || (f.style === 'anime' || f.look?.style === 'anime' ? ['anime'] : []), photo: f.photo || null,
+  avatarPhoto: f.photo ? pickPhoto(f.photo, f.name) : null });
 
 // Who she/he wants to meet (set at sign-up, changeable in 我).
 const wanted = (user, frame) => user.seeks === 'any' || frame.gender === user.seeks;
@@ -174,6 +178,35 @@ app.post('/api/templates/:id/report', auth, (req, res) => {
   db.prepare('UPDATE templates SET reports=reports+1, status=CASE WHEN reports+1>=3 THEN \'hidden\' ELSE status END WHERE id=?').run(req.params.id);
   logEvent(req.user.id, 'report', { template: req.params.id, reason: String(req.body?.reason || '').slice(0, 200) });
   res.json({ ok: true });
+});
+
+// 拍照偶遇：看照片判斷是哪種地方（照片不保存）
+app.post('/api/encounter/photo', auth, upload.single('photo'), wrap(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: '沒有收到照片' });
+  const ids = SCENARIOS.map(s => s.id);
+  const r = await jsonCall({
+    userId: req.user.id, kind: 'scene_photo', tier: 'cheap',
+    instructions: `看這張照片是哪一種地方，從這些情境挑最接近的一個：${SCENARIOS.map(s => `${s.id}（${s.label}）`).join('、')}。place 用 10 字內描述你看到的地方（例如「有落地窗的咖啡廳」）。照片裡如果有人，不要描述人。只輸出 JSON。`,
+    input: [{ role: 'user', content: [{ type: 'input_text', text: '這是哪裡？' }, { type: 'input_image', image_url: `data:${req.file.mimetype || 'image/jpeg'};base64,${req.file.buffer.toString('base64')}` }] }],
+    schema: { type: 'object', additionalProperties: false, properties: { scenario: { type: 'string', enum: ids }, place: { type: 'string' } }, required: ['scenario', 'place'] },
+    schemaName: 'scene_photo',
+    mock: { scenario: ids[Math.floor(Math.random() * ids.length)], place: '看起來很舒服的地方' },
+  });
+  logEvent(req.user.id, 'encounter_photo', { scenario: r.scenario });
+  res.json({ scenario: r.scenario, label: r.place });
+}));
+
+// 依心情認識：推薦適合此刻的人
+app.get('/api/mood-picks', auth, (req, res) => {
+  const mood = MOODS.find(m => m.id === req.query.mood);
+  if (!mood) return res.status(400).json({ error: '沒有這個心情' });
+  const all = db.prepare(`SELECT * FROM templates WHERE status='published'
+    AND id NOT IN (SELECT template_id FROM characters WHERE user_id=? AND template_id IS NOT NULL)`).all(req.user.id)
+    .map(t => ({ ...t, f: j(t.data) })).filter(t => wanted(req.user, t.f));
+  let pool = all.filter(t => ARCHETYPES[t.f.archetype]?.moods?.includes(mood.id));
+  if (pool.length < 2) pool = pool.concat(all.filter(t => !pool.includes(t)).slice(0, 3 - pool.length));
+  const picks = pool.sort(() => Math.random() - 0.5).slice(0, 3).map(t => ({ id: t.id, kind: t.kind, creator: t.creator_name, frame: publicFrame(t.f) }));
+  res.json({ mood, picks });
 });
 
 // 來場偶遇：given a scenario, suggest 2–3 people who might be there (and sometimes an old flame).
@@ -216,11 +249,11 @@ function relSummary(rel) {
   const unread = db.prepare(`SELECT COUNT(*) n FROM messages WHERE rel_id=? AND sender='char' AND id>?`).get(rel.id, rel.last_read_id).n;
   return {
     id: rel.id, status: rel.status, stage: rel.stage, stageLabel: STAGES[rel.stage], mode: rel.mode, pinned: !!rel.pinned, starred: !!rel.starred,
-    outing: !!rel.outing_active, activity: j(rel.activity), pendingReplyAt: rel.pending_reply_at || null, charReadId: rel.char_read_id || 0,
+    outing: !!rel.outing_active, activity: j(rel.activity), theme: rel.theme || 'default', pendingReplyAt: rel.pending_reply_at || null, charReadId: rel.char_read_id || 0,
     presence: (() => { const pr = presenceOf(rel, p); return { code: pr.code, label: pr.label, lastSeen: pr.lastSeen || null }; })(), statusLine: rel.status_line, statusLineAt: rel.status_line_at, blocked: !!rel.blocked,
     startType: rel.start_type, origin: p._char.origin, canShare: p._char.origin === 'custom' && rel.user_msg_count >= 10,
     frame: publicFrame({ ...p, look: p.look || templateLook(p._char.template_id) }), voice: p.voice, now: charStatus(p).code,
-    last: last ? { text: last.kind === 'voice' ? '［語音訊息］' : last.kind === 'photo' ? '［照片］' : last.text, at: last.created_at, sender: last.sender } : null,
+    last: last ? { text: last.kind === 'voice' ? '［語音訊息］' : last.kind === 'photo' ? '［照片］' : last.kind === 'sticker' ? '［貼圖］' : last.text, at: last.created_at, sender: last.sender } : null,
     unread, endedAt: rel.ended_at, createdAt: rel.created_at,
     scenarioId: (() => { const sc = j(rel.scenario, {}); return sc.id || SCENARIOS.find(x => x.label === sc.label)?.id || null; })(),
   };
@@ -276,6 +309,11 @@ app.post('/api/rels/:id/messages', auth, upload.fields([{ name: 'photo', maxCoun
       text = await stt({ userId: req.user.id, buffer: voice.buffer, filename: `voice.${ext}`, durationSec: Number(req.body?.duration) || 0 });
       addMessage(rel, 'user', 'voice', { text, media });
       logEvent(req.user.id, 'voice_send', { rel: rel.id });
+    } else if (req.body?.sticker) {
+      const sid = String(req.body.sticker);
+      if (!STICKERS[sid]) return res.status(400).json({ error: '沒有這張貼圖' });
+      text = STICKERS[sid];
+      addMessage(rel, 'user', 'sticker', { text, card: { id: sid } });
     } else {
       if (!text) return res.status(400).json({ error: '空白訊息' });
       addMessage(rel, 'user', 'text', { text });
@@ -305,6 +343,48 @@ async function replyOrDefer(user, rel, { userText = '', imageMedia = null, trigg
   await runTurn({ user, relId: rel.id, userText, imageMedia, trigger, triggerKey });
   return {};
 }
+
+// 記事本：你們一起的約定與清單
+app.get('/api/rels/:id/notes', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  res.json(db.prepare('SELECT id, author, text, done, created_at at FROM notes WHERE rel_id=? ORDER BY done, id DESC').all(rel.id));
+});
+app.post('/api/rels/:id/notes', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const text = String(req.body?.text || '').trim().slice(0, 40);
+  if (!text) return res.status(400).json({ error: '寫點什麼' });
+  db.prepare('INSERT INTO notes (rel_id,author,text,created_at) VALUES (?,?,?,?)').run(rel.id, 'user', text, now());
+  res.json({ ok: true });
+});
+app.patch('/api/rels/:id/notes/:nid', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  if (req.body?.delete) db.prepare('DELETE FROM notes WHERE id=? AND rel_id=?').run(req.params.nid, rel.id);
+  else db.prepare('UPDATE notes SET done=? WHERE id=? AND rel_id=?').run(req.body?.done ? 1 : 0, req.params.nid, rel.id);
+  res.json({ ok: true });
+});
+// 搜尋聊天紀錄
+app.get('/api/rels/:id/search', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const q = String(req.query.q || '').trim().slice(0, 40);
+  if (!q) return res.json([]);
+  res.json(db.prepare(`SELECT id, sender, text, created_at at FROM messages WHERE rel_id=? AND kind IN ('text','voice') AND text LIKE ? ORDER BY id DESC LIMIT 50`)
+    .all(rel.id, `%${q.replace(/[%_]/g, '')}%`));
+});
+// 相簿：這段關係裡的照片和明信片
+app.get('/api/rels/:id/album', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  res.json(db.prepare(`SELECT * FROM story WHERE rel_id=? AND type IN ('photo','postcard') ORDER BY id DESC`).all(rel.id)
+    .map(s => ({ id: s.id, type: s.type, body: s.body, place: s.place, at: s.created_at, photo: s.photo_id ? photoById(s.photo_id) : null, media: (j(s.media) || []).map(f => `/api/media/${f}`), scene: s.scene })));
+});
+// 聊天室主題
+const THEMES = ['default', 'night', 'cafe', 'sea', 'sakura', 'forest'];
+app.post('/api/rels/:id/theme', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const t = THEMES.includes(req.body?.theme) ? req.body.theme : 'default';
+  db.prepare('UPDATE relationships SET theme=? WHERE id=?').run(t, rel.id);
+  logEvent(req.user.id, 'theme', { theme: t });
+  res.json({ ok: true });
+});
 
 // 話題錦囊
 app.get('/api/rels/:id/topics', auth, (req, res) => {
@@ -381,8 +461,8 @@ app.post('/api/rels/:id/walk', auth, (req, res) => res.status(410).json({ error:
 app.get('/api/rels/:id/profile', auth, (req, res) => {
   const rel = ownRel(req, res); if (!rel) return;
   const p = getPersona(rel);
-  const posts = db.prepare('SELECT id, text, created_at FROM posts WHERE rel_id=? ORDER BY id DESC LIMIT 30').all(rel.id)
-    .map(x => ({ id: x.id, text: x.text, at: x.created_at }));
+  const posts = db.prepare('SELECT id, text, photo_id, created_at FROM posts WHERE rel_id=? ORDER BY id DESC LIMIT 30').all(rel.id)
+    .map(x => ({ id: x.id, text: x.text, at: x.created_at, photo: x.photo_id ? photoById(x.photo_id) : null }));
   res.json({ ...relSummary(rel), signature: p.signature || '', signatureAt: p.signature_at || null,
     cover: JOBS[p.job]?.scene || 'city', weekend: p.weekend, values: p.values, posts });
 });
@@ -402,7 +482,7 @@ app.patch('/api/rels/:id', auth, (req, res) => {
     db.prepare('UPDATE relationships SET mode=? WHERE id=?').run(b.mode === 'real' ? 'real' : 'practice', rel.id);
     logEvent(req.user.id, 'mode', { rel: rel.id, mode: b.mode });
   }
-  if ('pinned' in b) db.prepare('UPDATE relationships SET pinned=? WHERE id=?').run(b.pinned && rel.stage >= 3 ? 1 : 0, rel.id);
+  if ('pinned' in b) { db.prepare('UPDATE relationships SET pinned=? WHERE id=?').run(b.pinned && rel.stage >= 3 ? 1 : 0, rel.id); if (b.pinned && rel.stage >= 3) logEvent(req.user.id, 'pinned', { rel: rel.id }); }
   res.json({ ok: true });
 });
 
@@ -410,6 +490,7 @@ app.post('/api/rels/:id/pin', auth, wrap(async (req, res) => {
   const rel = ownRel(req, res); if (!rel) return;
   const accept = !!req.body?.accept;
   db.prepare('UPDATE relationships SET pinned=? WHERE id=?').run(accept && rel.stage >= 3 ? 1 : 0, rel.id);
+  if (accept && rel.stage >= 3) logEvent(req.user.id, 'pinned', { rel: rel.id });
   const msgId = Number(req.body?.msgId);
   if (msgId) db.prepare(`UPDATE messages SET card=json_set(card,'$.answered',?) WHERE id=? AND rel_id=?`).run(accept ? 'yes' : 'no', msgId, rel.id);
   addMessage(rel, 'user', 'text', { text: accept ? '好啊' : '先不要啦' });
@@ -490,13 +571,28 @@ app.post('/api/meal/:msgId/decline', auth, (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- 動態牆 ----------
+app.get('/api/feed', auth, (req, res) => {
+  res.json(feedFor(req.user.id).map(({ persona, ...p }) => ({ ...p, frame: publicFrame(persona) })));
+});
+app.post('/api/feed/:id/like', auth, (req, res) => {
+  const r = likePost(req.user.id, Number(req.params.id));
+  if (!r) return res.status(404).json({ error: '找不到' });
+  res.json(r);
+});
+app.post('/api/feed/:id/comment', auth, wrap(async (req, res) => {
+  const r = await commentPost(req.user, Number(req.params.id), req.body?.text);
+  if (!r) return res.status(400).json({ error: '留言不能空白' });
+  res.json(r);
+}));
+
 // ---------- story ----------
 app.get('/api/story', auth, (req, res) => {
   const rels = db.prepare(`SELECT * FROM relationships WHERE user_id=? ORDER BY created_at`).all(req.user.id);
   res.json(rels.map(rel => {
     const items = db.prepare('SELECT * FROM story WHERE rel_id=? ORDER BY created_at DESC').all(rel.id)
-      .map(s => ({ id: s.id, type: s.type, title: s.title, body: s.body, place: s.place, scene: s.scene, media: (j(s.media) || []).map(f => `/api/media/${f}`), at: s.created_at }));
-    return { rel: relSummary(rel), items };
+      .map(s => ({ id: s.id, type: s.type, title: s.title, body: s.body, place: s.place, scene: s.scene, photo: s.photo_id ? photoById(s.photo_id) : null, media: (j(s.media) || []).map(f => `/api/media/${f}`), at: s.created_at }));
+    return { rel: relSummary(rel), items, memoir: memoirFor(rel, getPersona(rel)) };
   }));
 });
 
@@ -545,6 +641,31 @@ app.post('/api/admin/tick', (req, res) => {
 });
 
 mountAdmin(app);
+// 照片庫（後台）
+const adminOk = (req) => config.adminToken && (req.headers.authorization || '') === `Bearer ${config.adminToken}`;
+app.get('/api/admin/photos', (req, res) => {
+  if (!adminOk(req)) return res.status(401).json({ error: 'unauthorized' });
+  const rows = db.prepare('SELECT * FROM photos WHERE hidden=0 ORDER BY tag, id DESC').all();
+  res.json({ pexels: !!config.pexelsKey, tags: Object.fromEntries(Object.entries(PHOTO_TAGS).map(([k, v]) => [k, v[0]])), counts: photoCount(),
+    rows: rows.map(r => ({ id: r.id, tag: r.tag, thumb: r.thumb || r.url, credit: r.credit, source: r.source })) });
+});
+app.post('/api/admin/photos/fill', wrap(async (req, res) => {
+  if (!adminOk(req)) return res.status(401).json({ error: 'unauthorized' });
+  res.json(await fillFromPexels({ force: !!req.body?.force }));
+}));
+app.post('/api/admin/photos', upload.single('photo'), (req, res) => {
+  if (!adminOk(req)) return res.status(401).json({ error: 'unauthorized' });
+  const tag = String(req.body?.tag || '');
+  if (!PHOTO_TAGS[tag] || !req.file) return res.status(400).json({ error: '請選類別和照片' });
+  res.json({ id: saveUpload(tag, req.file.buffer, req.file.mimetype, String(req.body?.credit || '').slice(0, 40)) });
+});
+app.post('/api/admin/photos/:id/hide', (req, res) => {
+  if (!adminOk(req)) return res.status(401).json({ error: 'unauthorized' });
+  db.prepare('UPDATE photos SET hidden=1 WHERE id=?').run(req.params.id);
+  res.json({ ok: true });
+});
+fillFromPexels().catch(() => {});
+setInterval(() => fillFromPexels().catch(() => {}), 7 * 864e5);
 purgeOldLogs();
 setInterval(purgeOldLogs, 864e5);
 process.on('unhandledRejection', (e) => logIssue({ source: 'server', message: `未處理的錯誤：${e?.message || e}`, error: e instanceof Error ? e : undefined }));
@@ -552,6 +673,7 @@ process.on('uncaughtException', (e) => logIssue({ source: 'server', message: `�
 
 // ---------- static PWA ----------
 const pub = path.join(__dirname, '..', 'public');
+app.use('/lib', express.static(LIB_DIR, { maxAge: '30d' }));
 app.use(express.static(pub, {
   setHeaders(res, p) {
     if (p.endsWith('sw.js') || p.endsWith('.html') || p.endsWith('.webmanifest')) res.setHeader('Cache-Control', 'no-cache');

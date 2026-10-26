@@ -6,44 +6,26 @@ App 名稱「伴旅 WithU」出現在 `public/index.html`、`public/manifest.web
 
 ---
 
-## 部署到 Hostinger VPS
+## 部署（Hostinger VPS＋CloudPanel）
 
-需要：一台 Ubuntu VPS、一個網域（PWA 推播、麥克風、相機都必須 HTTPS）。
+目前的部署：CloudPanel 的 Node.js 網站 `liancai.fun`（站台使用者 `liancai`，App Port 5001），程式在 `/home/liancai/htdocs/liancai.fun`，用 pm2 執行（名稱 `companion`），程式碼放在 GitHub `yongliancai/withu`。
 
-**1. 網域指向 VPS**
-在網域 DNS 新增 A 記錄，例如 `app.你的網域.com` → VPS 的 IP。
-
-**2. 安裝 Docker（VPS 上只做一次）**
+**更新到最新版**（用 root 登入後）
 ```bash
-curl -fsSL https://get.docker.com | sudo sh
-sudo usermod -aG docker $USER   # 之後重新登入
+su - liancai
+cd ~/htdocs/liancai.fun && ./deploy.sh
 ```
+`deploy.sh` 會抓 GitHub 最新版、套件有變才重裝、再重啟 App。`data/`（資料庫、照片、語音）和 `.env` 不在版本管理裡，更新不會動到。備份只要備份 `data/`。
 
-**3. 上傳專案並設定**
-```bash
-# 把整個資料夾傳到 VPS，例如 scp -r companion user@VPS_IP:~/
-cd ~/companion
-cp .env.example .env
-nano .env            # 填 DOMAIN、PUBLIC_URL、OPENAI_API_KEY、INVITE_CODES、ADMIN_TOKEN
-mkdir -p data && sudo chown 1000:1000 data
-```
+**`.env` 改了之後**：`pm2 restart companion`。
 
-**4. 產生推播金鑰，貼回 `.env`**
-```bash
-docker compose build
-docker compose run --rm app node scripts/gen-vapid.js
-```
+**第一次接上 GitHub**（已做過就跳過）：在主機產生部署金鑰並加到 repo 的 Deploy keys，然後在網站資料夾執行 `git init`、`git remote add origin git@github.com:yongliancai/withu.git`、`git fetch origin`、`git checkout -f -B main origin/main`、`git branch -u origin/main`、`npm install --omit=dev`、`pm2 restart companion`。
 
-**5. 啟動**
-```bash
-docker compose up -d
-docker compose logs -f app     # 看到 companion listening on :3000 就好了
-```
-Caddy 會自動申請 HTTPS 憑證。打開 `https://你的網域` 就能用。
+**推播金鑰**：`npm run vapid`，把印出的兩把金鑰貼進 `.env` 再重啟。
 
-**更新程式**：傳上新檔案後 `docker compose up -d --build`。資料都在 `data/`（SQLite、照片、語音），備份這個資料夾即可。
+**寫實照片**：到 https://www.pexels.com/api/ 免費申請金鑰，貼進 `.env` 的 `PEXELS_API_KEY` 再重啟；App 會自動把每個照片類別補到 6 張以上，之後每週檢查一次。也可以在後台「照片庫」自己上傳。
 
-Hostinger 若有開防火牆，記得放行 80、443。
+另有 Dockerfile／docker-compose 可用在其他主機，本專案目前沒有使用。
 
 ---
 
@@ -160,12 +142,39 @@ cp trends.example.json data/trends.json && nano data/trends.json
 
 每週到後台「數據」看本週摘要與「大家最常要求的相處習慣」，調整的是官方角色與整體規則，不改個別使用者的角色。
 
+### 角色池
+
+- 26 位官方角色，分成「日常溫暖、夢幻系、青春回憶、職場、異國、二次元」六類，探索和「我想認識他」都可以用分類篩選。
+- 原型參考：乙女遊戲調查中最受歡迎的「成熟體貼、溫柔、外冷內熱、傲嬌」，國內女性向手遊常見的總裁、年下、竹馬、設計師、醫生、撩人系；男性向常見的青梅竹馬、學妹、大姊姊、辣妹、天然呆、女主管，以及「最想娶的職業」調查前段的護理師、藥師、幼教老師。
+- 青梅竹馬、鄰家哥哥這類角色一開始就是朋友，並帶有共同過去的設定記憶。
+
+### 相遇入口
+
+- **我想認識他**（先選人）、**來場偶遇吧**（先選情境；可以拍一張現在的地方，AI 判斷是哪種情境，照片不保存）、**依心情認識**（低落、好累、焦慮、無聊、開心想分享，推薦適合此刻的人）。
+- 心情低落時遇到的人，前三天只會是朋友：先陪伴、幫你把感受說清楚，不曖昧。
+
+### 動態牆
+
+底部第二個分頁。你認識的人會在午休、下班後、休假午後自己發動態（文字＋寫實照片，一天最多兩則），可以按讚、留言，他會依自己的狀態晚一點回你的留言。發動態不會推播。
+
+### 聊天室（像 LINE）
+
+- 右上角選單：相簿、記事本、回憶錄、搜尋、主題、個人頁、設定、回報問題。
+- **記事本**：你們的約定與清單。聊天中說好「下次一起去吃豆花」，他會自己記上去；你也可以自己新增、打勾、刪除。（他的記憶仍然不公開，記事本只放約定。）
+- **貼圖**：原創的「小糰」貼圖 16 張，你可以傳，他偶爾也會回貼圖。
+- **主題**：預設、夜晚、咖啡廳、海邊、櫻花、森林，每個聊天室分開設定。
+
+### 回憶錄
+
+「我們的故事」裡的回憶錄分成相遇、靠近、心動、在一起四章。一起經歷過的事才會亮起來；還沒發生的只顯示半透明的「？？」，不會劇透。模型自己記下的特別時刻收在「只屬於你們的」。
+
 ### 還沒做（依報告書排序）
 
 - **Uber API 直接下單＋Face ID**：下單轉接層已留好（`server/ordering.js`，`ORDER_MODE`），拿到 Uber 回覆再接。
 - **親密層**：依報告書第一版不含。
 - **語音情緒線索**：目前只轉文字。
 - **LINE 延伸、動態島、合照生成**：後期。
+- **未來構想**（10/27 記錄）：多外送平台訂餐、購物網站連動、步數與散步、帶朋友角色一起出門、AI 實體公仔。
 
 ---
 

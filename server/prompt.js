@@ -1,5 +1,6 @@
 import { JOBS, ARCHETYPES, PROACTIVITY, charStatus, describeNow } from './characters.js';
 import { styleBlock } from './styles.js';
+import { PHOTO_TAGS } from './photos.js';
 
 export const STAGES = ['認識', '朋友', '曖昧', '交往', '長期伴侶'];
 const ACT_LABEL = { watch: '一起看劇', focus: '陪對方專心做事（不要打擾）', bedtime: '睡前聊聊' };
@@ -37,7 +38,7 @@ export const BASE_RULES = `
 - 一則回覆最多一個問題，而且不是每則都要問；不要像在面試或做問卷。
 - 隨著關係變近，分享的內容可以從日常小事慢慢加深到想法、煩惱、在意的事。
 - 偶爾提起你們之前聊過或一起經歷的事（「上次你說的那家豆花我去吃了」）。
-- 當你在訊息裡分享了自己生活的一個片段，順便在 life_post 寫一則 30 字內、像社群動態的第一人稱短文；沒有就填 null。
+- 當你在訊息裡分享了自己生活的一個片段，順便在 life_post 寫一則 30 字內、像社群動態的第一人稱短文，會發在你的動態牆上；life_post_photo 從照片類別挑一個最符合的（沒有適合的就 null）。沒有要發就兩個都填 null。
 - signature 是你的個性簽名（像 LINE 的狀態訊息，15 字內）。只有在你的心情或生活有明顯變化時才更新，平常填 null。
 
 ## 不要重複
@@ -51,6 +52,10 @@ export const BASE_RULES = `
 - 對方傳了一張很美的風景照、而且是在分享心情時，你可以把它做成明信片：postcard 填 { scene: "photo", place: 對方說出的地點（沒說就空字串）, message: 寫在明信片背面給對方的話（20–40 字，手寫感、有溫度）}。一天最多一次，不要每張照片都做。
 - 只有主動訊息的理由要你「寄明信片」時，postcard 才填你自己看到的風景：scene 從 river、mountain、beach、nightmarket、park、city、cafe、bookstore、rain 挑一個，place 寫台灣真實存在的地點（例如大稻埕碼頭、象山步道、淡水沙崙），message 寫給對方的話。
 - 其他時候 postcard 一律為 null。
+
+## 貼圖與記事本
+- 你可以像真人用 LINE 一樣偶爾傳貼圖（不是每次；大約十次一次，在氣氛對的時候）：sticker 從 hi、ok、love、thanks、sorry、night、hungry、cry、laugh、hmph、shy、cheer、hug、what、busy、miss 挑一個，沒有就 null。對方傳貼圖時，你會看到「（對方傳了貼圖：…）」，自然回應。
+- 你們有一本共同的記事本。當你們約好之後要一起做的事、想一起去的地方，或對方請你記下來的清單（「下次一起去吃豆花」「生日想要的東西」），用 note 寫一行（20 字內）；沒有就 null。不要把對方的私事寫進記事本。
 
 ## 相處習慣
 - 對方明確要求你改變說話或相處的方式時（「你可以溫柔一點」「別一直問我吃了沒」「不要叫我寶貝」），用 memories_add 記下，kind 設為 style，內容寫成「對方希望……」。
@@ -113,10 +118,12 @@ function meetLine(rel) {
   let sc = {};
   try { sc = JSON.parse(rel.scenario || '{}'); } catch {}
   const days = Math.floor((Date.now() - rel.created_at) / 864e5);
-  return `你們的相遇：${sc.label || '（未記錄）'}${rel.start_type === 'friend' ? '（本來就認識）' : ''}，${days === 0 ? '就是今天' : `${days} 天前`}`;
+  const sad = sc.friend_first && days < 3 && rel.stage <= 1
+    ? '\n對方遇見你的那天心情很低落。這幾天你是朋友：先陪伴、幫對方把感受說清楚（替情緒命名），不急著給建議，也不曖昧。' : '';
+  return `你們的相遇：${sc.label || '（未記錄）'}${rel.start_type === 'friend' ? '（本來就認識）' : ''}，${days === 0 ? '就是今天' : `${days} 天前`}${sad}`;
 }
 
-export function contextBlock({ habits = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
+export function contextBlock({ habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
   const st = charStatus(persona);
   const stageText = `${STAGES[rel.stage]}——${STAGE_GUIDE[rel.stage]}`;
   const modeText = rel.mode === 'real'
@@ -142,6 +149,7 @@ export function contextBlock({ habits = [], told = [], summary = '', lowEffort =
     persona.tuning?.more?.length ? `## 對方比較喜歡你這樣（多一點）\n${persona.tuning.more.map(x => '- ' + x).join('\n')}` : '',
     persona.tuning?.less?.length ? `## 對方反應比較冷淡的（少一點）\n${persona.tuning.less.map(x => '- ' + x).join('\n')}` : '',
     `## 你記得的事\n${mem}`,
+    notes.length ? `## 你們記事本裡的約定與清單\n${notes.map(n => '- ' + n).join('\n')}` : '',
     summary ? `## 你們之前聊過的事（較早的對話摘要）\n${summary}` : '',
     told.length ? `## 你已經跟對方講過的事（不要重講，只能延續或說新進展）\n${told.map(t => '- ' + t).join('\n')}` : '',
     worldEvents.length ? `## 世界中公開發生的事\n${worldEvents.map(e => '- ' + e.text).join('\n')}` : '',
@@ -195,6 +203,9 @@ export const TURN_SCHEMA = {
       scene: { type: 'string', enum: ['photo', 'river', 'mountain', 'beach', 'nightmarket', 'park', 'city', 'cafe', 'bookstore', 'rain'] },
       place: { type: 'string' }, message: { type: 'string' } }, required: ['scene', 'place', 'message'] }] },
     life_post: nullable('string'),
+    sticker: { type: ['string', 'null'], enum: ['hi', 'ok', 'love', 'thanks', 'sorry', 'night', 'hungry', 'cry', 'laugh', 'hmph', 'shy', 'cheer', 'hug', 'what', 'busy', 'miss', null] },
+    note: nullable('string'),
+    life_post_photo: { type: ['string', 'null'], enum: [...Object.keys(PHOTO_TAGS), null] },
   },
-  required: ['messages', 'voice', 'affection_delta', 'understanding_delta', 'hint', 'relationship_event', 'milestone', 'memories_add', 'memories_correct', 'memories_forget', 'user_busy_until_minutes', 'followups', 'meal', 'outing', 'place_name', 'status_line', 'crisis', 'signature', 'life_post', 'postcard', 'suggestions', 'told', 'activity'],
+  required: ['messages', 'voice', 'affection_delta', 'understanding_delta', 'hint', 'relationship_event', 'milestone', 'memories_add', 'memories_correct', 'memories_forget', 'user_busy_until_minutes', 'followups', 'meal', 'outing', 'place_name', 'status_line', 'crisis', 'signature', 'life_post', 'postcard', 'suggestions', 'told', 'activity', 'life_post_photo', 'sticker', 'note'],
 };

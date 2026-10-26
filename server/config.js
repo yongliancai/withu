@@ -37,6 +37,7 @@ export const config = {
     sttPerMin: num(env.PRICE_STT_PER_MIN, 0.003),
     usdToTwd: num(env.USD_TWD, 32),
   },
+  pexelsKey: env.PEXELS_API_KEY || '',      // 免費照片庫（寫實照片）
   vapidPublic: env.VAPID_PUBLIC_KEY || '',
   vapidPrivate: env.VAPID_PRIVATE_KEY || '',
   vapidSubject: env.VAPID_SUBJECT || 'mailto:admin@example.com',

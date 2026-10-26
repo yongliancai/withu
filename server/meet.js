@@ -3,7 +3,7 @@ import { db, now, j, logEvent } from './db.js';
 import { config } from './config.js';
 import { jsonCall, moderate } from './llm.js';
 import { logIssue } from './logger.js';
-import { JOBS, ARCHETYPES, SCENARIOS, OFFICIAL, frameFromOfficial, AVATAR_HUES } from './characters.js';
+import { JOBS, ARCHETYPES, SCENARIOS, OFFICIAL, MOODS, frameFromOfficial, AVATAR_HUES } from './characters.js';
 import { personaBlock } from './prompt.js';
 import { addMemory } from './memory.js';
 import { id, addMessage, runTurn, ta } from './engine.js';
@@ -98,7 +98,7 @@ export async function structureScenario(userId, text, frame) {
 }
 
 /** Create character + relationship + opening scene, then let him speak first. */
-export async function meet(user, { templateId, custom, scenarioId, scenarioText, reunionRelId }) {
+export async function meet(user, { templateId, custom, scenarioId, scenarioText, reunionRelId, mood: moodId }) {
   const active = db.prepare(`SELECT COUNT(*) n FROM relationships WHERE user_id=? AND status='active'`).get(user.id).n;
   if (active >= config.maxActive) return { error: `目前最多同時和 ${config.maxActive} 位角色往來。` };
 
@@ -138,7 +138,15 @@ export async function meet(user, { templateId, custom, scenarioId, scenarioText,
   } else {
     label = (SCENARIOS.find(s => s.id === scenarioId) || SCENARIOS[0]).label;
     scene.place = label;
+    // 青梅竹馬、鄰家哥哥這類官方角色：本來就認識
+    if (frame.start === 'friend') {
+      scene.start_type = 'friend';
+      scene.setting_memories = [frame.intro.replace(/[，。].*$/, '')].filter(Boolean);
+    }
   }
+  // 依心情認識：低落時先當朋友
+  const mood = MOODS.find(m => m.id === moodId);
+  if (mood) { scene.mood = mood.label; scene.moodId = mood.id; if (mood.friend) scene.friend_first = true; }
 
   const charId = id('c_');
   db.prepare('INSERT INTO characters (id,user_id,template_id,origin,persona,created_at) VALUES (?,?,?,?,?,?)')
@@ -166,7 +174,7 @@ export async function meet(user, { templateId, custom, scenarioId, scenarioText,
   if (scene.implied_lover) addMessage(rel, 'system', 'card', { card: { type: 'hint', text: '戀人關係要靠你們一起慢慢走到，先從朋友開始吧。' } });
 
   logEvent(user.id, 'meet', { rel: relId, origin, scenario: scenarioId || 'free', start: rel.start_type });
-  await runTurn({ user, relId, trigger: `這是你們的第一次相遇（${label}）。${startFriend ? '你們本來就認識，語氣自然但還只是朋友。' : '你們是陌生人，有禮貌、不叫小名、不說曖昧的話。'}由你先開口，一兩句就好；最後留一個對方很好回答的小問題（例如是不是常來、要不要幫忙、喜不喜歡某個東西），不要只丟一句讓人不知道怎麼接的話。suggestions 給三個符合這個場景的回覆。`, triggerKey: 'FIRST' });
+  await runTurn({ user, relId, trigger: `這是你們的第一次相遇（${label}）。${startFriend ? '你們本來就認識，語氣自然但還只是朋友。' : '你們是陌生人，有禮貌、不叫小名、不說曖昧的話。'}${scene.moodId ? `對方今天的心情是「${scene.mood}」，你看得出來；先輕輕關心，不追問。` : ''}由你先開口，一兩句就好；最後留一個對方很好回答的小問題（例如是不是常來、要不要幫忙、喜不喜歡某個東西），不要只丟一句讓人不知道怎麼接的話。suggestions 給三個符合這個場景的回覆。`, triggerKey: 'FIRST' });
   // 第一次報備或小問題：當天稍晚
   db.prepare('INSERT INTO followups (rel_id,due_at,topic) VALUES (?,?,?)').run(relId, now() + (3 + Math.random() * 3) * 3600e3,
     '你們今天剛認識。傳一個小小的報備或小問題，讓對方感覺你真的存在（例如你正要下班、或想到剛剛的事）');
