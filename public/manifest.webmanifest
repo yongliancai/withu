@@ -1,0 +1,16 @@
+{
+  "name": "伴旅 WithU",
+  "short_name": "伴旅",
+  "description": "住在你生活裡的 AI 伴侶（測試版）",
+  "lang": "zh-Hant-TW",
+  "start_url": "/#/chat",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F2F1F6",
+  "theme_color": "#F2F1F6",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

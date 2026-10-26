@@ -1,0 +1,566 @@
+import express from 'express';
+import cookieParser from 'cookie-parser';
+import multer from 'multer';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { config } from './config.js';
+import { db, now, j, logEvent } from './db.js';
+import { stt } from './llm.js';
+import { JOBS, ARCHETYPES, PROACTIVITY, VOICES, SCENARIOS, AVATAR_HUES, charStatus } from './characters.js';
+import { STAGES } from './prompt.js';
+import { id, runTurn, addMessage, getPersona, endRelationship, addStory, ta, startActivity, endActivity } from './engine.js';
+import { presenceOf, replyDelayMs } from './presence.js';
+import { crisisSignal } from './safety.js';
+import { topicsFor, GAMES, ACTIVITIES, LEAD_REASON } from './topics.js';
+import { seedOfficial, meet, sharePreview, publishShare, cleanupOrphans } from './meet.js';
+import { startScheduler, tick } from './scheduler.js';
+import { pushEnabled } from './push.js';
+import { adminStats } from './admin.js';
+import { logIssue, purgeOldLogs } from './logger.js';
+import { mountAdmin, cohortForCode } from './adminRoutes.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+app.set('trust proxy', 1);
+app.use(express.json({ limit: '1mb' }));
+app.use(cookieParser());
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+seedOfficial();
+cleanupOrphans();
+setInterval(cleanupOrphans, 10 * 60000);
+
+// ---------- auth ----------
+const COOKIE = { httpOnly: true, sameSite: 'lax', secure: config.publicUrl.startsWith('https'), maxAge: 400 * 864e5 };
+function startSession(res, userId) {
+  const token = crypto.randomBytes(24).toString('base64url');
+  db.prepare('INSERT INTO sessions (token,user_id,created_at) VALUES (?,?,?)').run(token, userId, now());
+  res.cookie('sid', token, COOKIE);
+}
+function auth(req, res, next) {
+  const s = req.cookies.sid && db.prepare('SELECT user_id FROM sessions WHERE token=?').get(req.cookies.sid);
+  const user = s && db.prepare('SELECT * FROM users WHERE id=?').get(s.user_id);
+  if (!user) return res.status(401).json({ error: '請先加入' });
+  if (user.disabled) return res.status(401).json({ error: '這個帳號已停用，有問題請聯絡測試負責人' });
+  req.user = user;
+  db.prepare('UPDATE users SET last_active_at=? WHERE id=?').run(now(), user.id);
+  next();
+}
+const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch(e => {
+  logIssue({ source: 'server', message: `${req.method} ${req.route?.path || req.path}：${e.message}`, error: e,
+    detail: { path: req.originalUrl.replace(/[?].*/, '') }, userId: req.user?.id, relId: req.params?.id });
+  if (e?.status === 429 || e?.code === 'credit_balance_exhausted') {
+    return res.status(503).json({ error: e?.code === 'credit_balance_exhausted' || e?.type === 'insufficient_quota'
+      ? '對方現在沒辦法回覆（AI 服務額度不足），請稍後再試。' : '對方現在有點忙，等一下再試一次。' });
+  }
+  res.status(500).json({ error: '出了點問題，稍後再試一次。' });
+});
+
+const recoveryCode = () => Array.from(crypto.randomBytes(8)).map(b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('').replace(/(.{4})/, '$1-');
+
+app.post('/api/auth/join', (req, res) => {
+  const { invite, nickname, callName, adult, aiAck, gender, seeks } = req.body || {};
+  const code0 = String(invite || '').trim();
+  const cohort = cohortForCode(code0);
+  if (!cohort) return res.status(400).json({ error: '邀請碼不正確' });
+  const g = ['female', 'male', 'other'].includes(gender) ? gender : null;
+  const sk = ['male', 'female', 'any'].includes(seeks) ? seeks : (cohort === 'm' ? 'female' : 'male');
+  if (!adult) return res.status(400).json({ error: '這個 App 只開放 18 歲以上使用' });
+  if (!aiAck) return res.status(400).json({ error: '請確認你了解對方是 AI 角色' });
+  const nick = String(nickname || '').trim().slice(0, 16);
+  if (!nick) return res.status(400).json({ error: '請填暱稱' });
+  const uid = id('u_');
+  const code = recoveryCode();
+  db.prepare('INSERT INTO users (id,nickname,call_name,recovery_code,invite_code,cohort,gender,seeks,settings,created_at,last_active_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+    .run(uid, nick, String(callName || nick).trim().slice(0, 16), code, code0, cohort, g, sk, JSON.stringify({ dailyCap: 6, proactiveLevel: 'normal', dndStart: '23:30', dndEnd: '07:30', notifyPreview: 'full' }), now(), now());
+  startSession(res, uid);
+  logEvent(uid, 'join', { cohort });
+  res.json({ ok: true, recoveryCode: code, cohort });
+});
+
+app.get('/api/auth/cohort', (req, res) => {
+  const c = String(req.query.code || '').trim();
+  res.json({ cohort: cohortForCode(c) });
+});
+
+app.post('/api/auth/recover', (req, res) => {
+  const code = String(req.body?.code || '').trim().toUpperCase();
+  const u = db.prepare('SELECT id, disabled FROM users WHERE recovery_code=?').get(code);
+  if (!u) return res.status(400).json({ error: '找不到這組登入碼' });
+  if (u.disabled) return res.status(400).json({ error: '這個帳號已停用，有問題請聯絡測試負責人' });
+  startSession(res, u.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/auth/logout', auth, (req, res) => {
+  db.prepare('DELETE FROM sessions WHERE token=?').run(req.cookies.sid);
+  res.clearCookie('sid');
+  res.json({ ok: true });
+});
+
+// ---------- me ----------
+app.get('/api/me', auth, (req, res) => {
+  const u = req.user;
+  res.json({ id: u.id, nickname: u.nickname, callName: u.call_name, recoveryCode: u.recovery_code, settings: j(u.settings, {}),
+    cohort: u.cohort, gender: u.gender, seeks: u.seeks,
+    pushKey: pushEnabled() ? config.vapidPublic : null, mock: config.mock, orderMode: config.orderMode });
+});
+
+app.patch('/api/me', auth, (req, res) => {
+  const b = req.body || {};
+  const settings = { ...j(req.user.settings, {}), ...(b.settings || {}) };
+  const allowed = ['dailyCap', 'proactiveLevel', 'dndStart', 'dndEnd', 'notifyPreview', 'lunchAt', 'dinnerAt', 'discreetNames', 'portraitStyle', 'showSuggestions', 'realisticDelay', 'notifyAsked'];
+  for (const k of Object.keys(settings)) if (!allowed.includes(k)) delete settings[k];
+  const seeks = ['male', 'female', 'any'].includes(b.seeks) ? b.seeks : req.user.seeks;
+  const gender = ['female', 'male', 'other'].includes(b.gender) ? b.gender : req.user.gender;
+  db.prepare('UPDATE users SET nickname=?, call_name=?, settings=?, seeks=?, gender=? WHERE id=?').run(
+    String(b.nickname ?? req.user.nickname).slice(0, 16), String(b.callName ?? req.user.call_name).slice(0, 16), JSON.stringify(settings), seeks, gender, req.user.id);
+  res.json({ ok: true });
+});
+
+app.get('/api/me/export', auth, (req, res) => {
+  const uid = req.user.id;
+  const dump = {
+    exported_at: new Date().toISOString(),
+    user: { nickname: req.user.nickname, call_name: req.user.call_name, created_at: req.user.created_at, settings: j(req.user.settings) },
+    characters: db.prepare('SELECT id, origin, persona, created_at FROM characters WHERE user_id=?').all(uid).map(c => ({ ...c, persona: j(c.persona) })),
+    relationships: db.prepare('SELECT id, character_id, status, stage, mode, start_type, created_at, ended_at FROM relationships WHERE user_id=?').all(uid),
+    messages: db.prepare('SELECT rel_id, sender, kind, text, media, created_at FROM messages WHERE user_id=? ORDER BY id').all(uid),
+    memories: db.prepare('SELECT rel_id, kind, content, source, created_at FROM memories WHERE user_id=?').all(uid),
+    story: db.prepare('SELECT rel_id, type, title, body, place, media, created_at FROM story WHERE user_id=?').all(uid),
+  };
+  res.setHeader('Content-Disposition', 'attachment; filename="my-data.json"');
+  res.json(dump);
+});
+
+app.delete('/api/me', auth, (req, res) => {
+  const uid = req.user.id;
+  const files = [
+    ...db.prepare('SELECT media FROM messages WHERE user_id=? AND media IS NOT NULL').all(uid).map(r => r.media),
+  ];
+  for (const f of files) for (const dir of ['uploads', 'audio']) fs.rmSync(path.join(config.dataDir, dir, path.basename(f)), { force: true });
+  db.prepare('DELETE FROM templates WHERE creator_user_id=?').run(uid);
+  db.prepare('DELETE FROM events WHERE user_id=?').run(uid);
+  db.prepare('DELETE FROM usage WHERE user_id=?').run(uid);
+  db.prepare('DELETE FROM messages WHERE user_id=?').run(uid);
+  db.prepare('DELETE FROM memories WHERE user_id=?').run(uid);
+  db.prepare('DELETE FROM story WHERE user_id=?').run(uid);
+  db.prepare('DELETE FROM users WHERE id=?').run(uid); // cascades
+  res.clearCookie('sid');
+  res.json({ ok: true });
+});
+
+// ---------- meta, square, meeting ----------
+app.get('/api/meta', (req, res) => res.json({ jobs: JOBS, archetypes: ARCHETYPES, proactivity: PROACTIVITY, voices: VOICES, scenarios: SCENARIOS, hues: AVATAR_HUES, stages: STAGES }));
+
+const publicFrame = (f) => ({ name: f.name, gender: f.gender, age: f.age, nationality: f.nationality, jobLabel: f.jobLabel, job: f.job,
+  archetype: f.archetype, archetypeLabel: ARCHETYPES[f.archetype]?.label, look: f.look, proactivity: f.proactivity, appearance: f.appearance,
+  traits: f.traits, catchphrases: f.catchphrases, intro: f.intro, hue: f.hue, schedule: f.schedule, workplace: f.workplace, signature: f.signature });
+
+// Who she/he wants to meet (set at sign-up, changeable in 我).
+const wanted = (user, frame) => user.seeks === 'any' || frame.gender === user.seeks;
+
+app.get('/api/templates', auth, (req, res) => {
+  const rows = db.prepare(`SELECT * FROM templates WHERE status='published'
+    AND id NOT IN (SELECT template_id FROM characters WHERE user_id=? AND template_id IS NOT NULL)
+    ORDER BY kind='official' DESC, uses DESC, created_at DESC LIMIT 200`).all(req.user.id)
+    .filter(t => wanted(req.user, j(t.data)));
+  res.json(rows.map(t => ({ id: t.id, kind: t.kind, creator: t.creator_name, frame: publicFrame(j(t.data)) })));
+});
+
+app.post('/api/templates/:id/report', auth, (req, res) => {
+  db.prepare('UPDATE templates SET reports=reports+1, status=CASE WHEN reports+1>=3 THEN \'hidden\' ELSE status END WHERE id=?').run(req.params.id);
+  logEvent(req.user.id, 'report', { template: req.params.id, reason: String(req.body?.reason || '').slice(0, 200) });
+  res.json({ ok: true });
+});
+
+// 來場偶遇：given a scenario, suggest 2–3 people who might be there (and sometimes an old flame).
+app.get('/api/encounter', auth, (req, res) => {
+  const sc = SCENARIOS.find(s => s.id === req.query.scenario);
+  const all = db.prepare(`SELECT * FROM templates WHERE status='published'
+    AND id NOT IN (SELECT template_id FROM characters WHERE user_id=? AND template_id IS NOT NULL)`).all(req.user.id)
+    .map(t => ({ ...t, f: j(t.data) })).filter(t => wanted(req.user, t.f));
+  let pool = sc ? all.filter(t => sc.jobs.includes(t.f.job)) : all;
+  if (pool.length < 3) pool = pool.concat(all.filter(t => !pool.includes(t)));
+  const picks = pool.sort(() => Math.random() - 0.5).slice(0, 3).map(t => ({ id: t.id, kind: t.kind, creator: t.creator_name, frame: publicFrame(t.f) }));
+  let reunion = null;
+  const ended = db.prepare(`SELECT r.id, c.persona FROM relationships r JOIN characters c ON c.id=r.character_id WHERE r.user_id=? AND r.status='ended' AND r.blocked=0`).all(req.user.id);
+  if (ended.length && Math.random() < 0.25) {
+    const e = ended[Math.floor(Math.random() * ended.length)];
+    reunion = { relId: e.id, frame: publicFrame(j(e.persona)) };
+  }
+  res.json({ picks, reunion });
+});
+
+app.post('/api/meet', auth, wrap(async (req, res) => {
+  const r = await meet(req.user, req.body || {});
+  if (r.error) return res.status(400).json(r);
+  res.json(r);
+}));
+
+// ---------- relationships ----------
+function ownRel(req, res) {
+  const rel = db.prepare('SELECT * FROM relationships WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
+  if (!rel) { res.status(404).json({ error: '找不到' }); return null; }
+  return rel;
+}
+function templateLook(tid) {
+  const t = tid && db.prepare('SELECT data FROM templates WHERE id=?').get(tid);
+  return t ? j(t.data, {}).look : undefined;
+}
+function relSummary(rel) {
+  const p = getPersona(rel);
+  const last = db.prepare(`SELECT * FROM messages WHERE rel_id=? AND kind != 'card' ORDER BY id DESC LIMIT 1`).get(rel.id);
+  const unread = db.prepare(`SELECT COUNT(*) n FROM messages WHERE rel_id=? AND sender='char' AND id>?`).get(rel.id, rel.last_read_id).n;
+  return {
+    id: rel.id, status: rel.status, stage: rel.stage, stageLabel: STAGES[rel.stage], mode: rel.mode, pinned: !!rel.pinned, starred: !!rel.starred,
+    outing: !!rel.outing_active, activity: j(rel.activity), pendingReplyAt: rel.pending_reply_at || null, charReadId: rel.char_read_id || 0,
+    presence: (() => { const pr = presenceOf(rel, p); return { code: pr.code, label: pr.label, lastSeen: pr.lastSeen || null }; })(), statusLine: rel.status_line, statusLineAt: rel.status_line_at, blocked: !!rel.blocked,
+    startType: rel.start_type, origin: p._char.origin, canShare: p._char.origin === 'custom' && rel.user_msg_count >= 10,
+    frame: publicFrame({ ...p, look: p.look || templateLook(p._char.template_id) }), voice: p.voice, now: charStatus(p).code,
+    last: last ? { text: last.kind === 'voice' ? '［語音訊息］' : last.kind === 'photo' ? '［照片］' : last.text, at: last.created_at, sender: last.sender } : null,
+    unread, endedAt: rel.ended_at, createdAt: rel.created_at,
+    scenarioId: (() => { const sc = j(rel.scenario, {}); return sc.id || SCENARIOS.find(x => x.label === sc.label)?.id || null; })(),
+  };
+}
+
+app.get('/api/rels', auth, (req, res) => {
+  const rels = db.prepare(`SELECT * FROM relationships WHERE user_id=? ORDER BY COALESCE(last_char_msg_at, created_at) DESC`).all(req.user.id);
+  res.json(rels.map(relSummary));
+});
+
+app.get('/api/rels/:id', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const settingMemories = db.prepare(`SELECT id, content FROM memories WHERE rel_id=? AND source='setting' ORDER BY id`).all(rel.id);
+  res.json({ ...relSummary(rel), settingMemories });
+});
+
+const msgOut = (m) => ({ id: m.id, sender: m.sender, kind: m.kind, text: m.text, media: m.media ? `/api/media/${m.media}` : null,
+  card: j(m.card), proactive: !!m.proactive, at: m.created_at, suggest: j(m.suggest) });
+
+app.get('/api/rels/:id/messages', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const after = Number(req.query.after) || 0;
+  const before = Number(req.query.before) || 0;
+  let rows;
+  if (after) rows = db.prepare('SELECT * FROM messages WHERE rel_id=? AND id>? ORDER BY id').all(rel.id, after);
+  else if (before) rows = db.prepare('SELECT * FROM messages WHERE rel_id=? AND id<? ORDER BY id DESC LIMIT 40').all(rel.id, before).reverse();
+  else rows = db.prepare('SELECT * FROM messages WHERE rel_id=? ORDER BY id DESC LIMIT 60').all(rel.id).reverse();
+  res.json(rows.map(msgOut));
+});
+
+const busyRels = new Set();
+app.post('/api/rels/:id/messages', auth, upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'voice', maxCount: 1 }]), wrap(async (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  if (rel.status !== 'active') return res.status(400).json({ error: '這段關係已經結束了' });
+  if (busyRels.has(rel.id)) return res.status(429).json({ error: `${ta(getPersona(rel))}還在回上一則` });
+  busyRels.add(rel.id);
+  try {
+    const before = db.prepare('SELECT MAX(id) m FROM messages WHERE rel_id=?').get(rel.id).m || 0;
+    let text = String(req.body?.text || '').slice(0, 2000).trim();
+    let imageMedia = null;
+    const photo = req.files?.photo?.[0];
+    const voice = req.files?.voice?.[0];
+    if (photo) {
+      imageMedia = `${id('p_')}.jpg`;
+      fs.writeFileSync(path.join(config.dataDir, 'uploads', imageMedia), photo.buffer);
+      addMessage(rel, 'user', 'photo', { text: text || null, media: imageMedia });
+      addStory(rel, 'photo', { media: [imageMedia], body: text || null });
+      logEvent(req.user.id, 'photo_share', { rel: rel.id });
+    } else if (voice) {
+      const ext = (voice.mimetype || '').includes('mp4') ? 'm4a' : 'webm';
+      const media = `${id('v_')}.${ext}`;
+      fs.writeFileSync(path.join(config.dataDir, 'audio', media), voice.buffer);
+      text = await stt({ userId: req.user.id, buffer: voice.buffer, filename: `voice.${ext}`, durationSec: Number(req.body?.duration) || 0 });
+      addMessage(rel, 'user', 'voice', { text, media });
+      logEvent(req.user.id, 'voice_send', { rel: rel.id });
+    } else {
+      if (!text) return res.status(400).json({ error: '空白訊息' });
+      addMessage(rel, 'user', 'text', { text });
+    }
+    db.prepare('UPDATE relationships SET user_msg_count=user_msg_count+1, last_user_msg_at=?, unanswered=0, user_busy_until=NULL WHERE id=?').run(now(), rel.id);
+    const out = await replyOrDefer(req.user, rel, { userText: text, imageMedia });
+    const rows = db.prepare('SELECT * FROM messages WHERE rel_id=? AND id>? ORDER BY id').all(rel.id, before);
+    res.json({ messages: rows.map(msgOut), ...out });
+  } finally {
+    busyRels.delete(rel.id);
+  }
+}));
+
+// 他現在有空就馬上回；在忙或睡覺就排到之後（由排程送出，並推播通知）
+async function replyOrDefer(user, rel, { userText = '', imageMedia = null, trigger = null, triggerKey = null }) {
+  const fresh = db.prepare('SELECT * FROM relationships WHERE id=?').get(rel.id);
+  const persona = getPersona(fresh);
+  const settings = j(user.settings, {});
+  if (fresh.pending_reply_at && !crisisSignal(userText)) return { pending: { at: fresh.pending_reply_at, presence: presenceOf(fresh, persona) } };
+  const delay = replyDelayMs(fresh, persona, { crisis: crisisSignal(userText), settings });
+  if (delay > 50000) {
+    const at = now() + delay;
+    db.prepare('UPDATE relationships SET pending_reply_at=? WHERE id=?').run(at, rel.id);
+    if (trigger) db.prepare('INSERT INTO followups (rel_id,due_at,topic) VALUES (?,?,?)').run(rel.id, at, trigger.slice(0, 120));
+    return { pending: { at, presence: presenceOf(fresh, persona) } };
+  }
+  await runTurn({ user, relId: rel.id, userText, imageMedia, trigger, triggerKey });
+  return {};
+}
+
+// 話題錦囊
+app.get('/api/rels/:id/topics', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  res.json(topicsFor(getPersona(rel)));
+});
+
+// 從話題錦囊發起：請他帶話題、玩遊戲、一起做事
+app.post('/api/rels/:id/nudge', auth, wrap(async (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  if (rel.status !== 'active') return res.status(400).json({ error: '這段關係已經結束了' });
+  if (busyRels.has(rel.id)) return res.status(429).json({ error: `${ta(getPersona(rel))}還在回上一則` });
+  const { kind, id: itemId } = req.body || {};
+  const persona = getPersona(rel);
+  let reason, label, act = null;
+  if (kind === 'lead') { reason = LEAD_REASON; label = `你請${persona.name}帶個話題`; }
+  else if (kind === 'game') { const g = GAMES.find(x => x.id === itemId); if (!g) return res.status(400).json({ error: '沒有這個遊戲' }); reason = g.reason; label = `你約${persona.name}玩「${g.label}」`; }
+  else if (kind === 'activity') {
+    const a = ACTIVITIES.find(x => x.id === itemId); if (!a) return res.status(400).json({ error: '沒有這個活動' });
+    if (rel.activity) return res.status(400).json({ error: '你們正在一起做別的事' });
+    reason = a.reason; label = a.invite.replace('{N}', persona.name);
+    if (a.id !== 'meal') act = { type: a.id, title: String(req.body?.title || '').slice(0, 30), minutes: a.minutes };
+  } else return res.status(400).json({ error: '不支援' });
+  busyRels.add(rel.id);
+  try {
+    const before = db.prepare('SELECT MAX(id) m FROM messages WHERE rel_id=?').get(rel.id).m || 0;
+    addMessage(rel, 'system', 'card', { card: { type: 'nudge', text: label } });
+    db.prepare('UPDATE relationships SET last_user_msg_at=?, unanswered=0 WHERE id=?').run(now(), rel.id);
+    logEvent(req.user.id, 'nudge', { rel: rel.id, kind, item: itemId || null });
+    const out = await replyOrDefer(req.user, rel, { trigger: reason, triggerKey: `nudge_${kind}` });
+    if (act && !out.pending) startActivity(db.prepare('SELECT * FROM relationships WHERE id=?').get(rel.id), persona, act);
+    const rows = db.prepare('SELECT * FROM messages WHERE rel_id=? AND id>? ORDER BY id').all(rel.id, before);
+    res.json({ messages: rows.map(msgOut), ...out });
+  } finally { busyRels.delete(rel.id); }
+}));
+
+// 結束一起做的事
+app.post('/api/rels/:id/activity/end', auth, wrap(async (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const before = db.prepare('SELECT MAX(id) m FROM messages WHERE rel_id=?').get(rel.id).m || 0;
+  await endActivity(rel, req.user, { reason: 'user' });
+  res.json({ messages: db.prepare('SELECT * FROM messages WHERE rel_id=? AND id>? ORDER BY id').all(rel.id, before).map(msgOut) });
+}));
+
+// 使用者在聊天室回報問題（同意的話附上最近的對話，方便找原因）
+app.post('/api/rels/:id/report-issue', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const text = String(req.body?.text || '').trim().slice(0, 1000);
+  if (!text) return res.status(400).json({ error: '寫一下發生了什麼' });
+  const recent = req.body?.includeChat
+    ? db.prepare(`SELECT id, sender, kind, text, card, proactive, reason, created_at FROM messages WHERE rel_id=? ORDER BY id DESC LIMIT 16`).all(rel.id).reverse()
+      .map(m => ({ ...m, text: (m.text || '').slice(0, 300), card: m.card ? j(m.card, {}).type : null }))
+    : null;
+  const p = getPersona(rel);
+  logIssue({ level: 'report', source: 'user', message: text, userId: req.user.id, relId: rel.id,
+    detail: { character: p.name, stage: rel.stage, mode: rel.mode, recent, client: String(req.headers['user-agent'] || '').slice(0, 200) } });
+  res.json({ ok: true });
+});
+
+// 手機端的程式錯誤
+app.post('/api/client-log', (req, res) => {
+  const s = req.cookies.sid && db.prepare('SELECT user_id FROM sessions WHERE token=?').get(req.cookies.sid);
+  const b = req.body || {};
+  logIssue({ level: 'error', source: 'client', message: String(b.message || 'client error').slice(0, 300), userId: s?.user_id,
+    detail: { stack: String(b.stack || '').slice(0, 2000), url: String(b.url || '').slice(0, 200), ua: String(req.headers['user-agent'] || '').slice(0, 200), appVersion: b.v } });
+  res.json({ ok: true });
+});
+
+// 舊版的一起散步已移除
+app.post('/api/rels/:id/walk', auth, (req, res) => res.status(410).json({ error: '一起散步已經改成「一起做點什麼」，在聊天室左下角的話題錦囊裡' }));
+
+
+// 角色個人頁（像 LINE）：封面、個性簽名、基本資料、生活動態
+app.get('/api/rels/:id/profile', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const p = getPersona(rel);
+  const posts = db.prepare('SELECT id, text, created_at FROM posts WHERE rel_id=? ORDER BY id DESC LIMIT 30').all(rel.id)
+    .map(x => ({ id: x.id, text: x.text, at: x.created_at }));
+  res.json({ ...relSummary(rel), signature: p.signature || '', signatureAt: p.signature_at || null,
+    cover: JOBS[p.job]?.scene || 'city', weekend: p.weekend, values: p.values, posts });
+});
+
+app.post('/api/rels/:id/read', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  db.prepare('UPDATE relationships SET last_read_id=MAX(last_read_id, ?) WHERE id=?').run(Number(req.body?.lastId) || 0, rel.id);
+  res.json({ ok: true });
+});
+
+app.patch('/api/rels/:id', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const b = req.body || {};
+  if ('starred' in b) db.prepare('UPDATE relationships SET starred=? WHERE id=?').run(b.starred ? 1 : 0, rel.id);
+  if ('mode' in b) {
+    if (b.mode === 'real' && rel.stage < 1) return res.status(400).json({ error: '成為朋友之後才能開啟真實模式' });
+    db.prepare('UPDATE relationships SET mode=? WHERE id=?').run(b.mode === 'real' ? 'real' : 'practice', rel.id);
+    logEvent(req.user.id, 'mode', { rel: rel.id, mode: b.mode });
+  }
+  if ('pinned' in b) db.prepare('UPDATE relationships SET pinned=? WHERE id=?').run(b.pinned && rel.stage >= 3 ? 1 : 0, rel.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/rels/:id/pin', auth, wrap(async (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const accept = !!req.body?.accept;
+  db.prepare('UPDATE relationships SET pinned=? WHERE id=?').run(accept && rel.stage >= 3 ? 1 : 0, rel.id);
+  const msgId = Number(req.body?.msgId);
+  if (msgId) db.prepare(`UPDATE messages SET card=json_set(card,'$.answered',?) WHERE id=? AND rel_id=?`).run(accept ? 'yes' : 'no', msgId, rel.id);
+  addMessage(rel, 'user', 'text', { text: accept ? '好啊' : '先不要啦' });
+  db.prepare('UPDATE relationships SET user_msg_count=user_msg_count+1, last_user_msg_at=?, unanswered=0 WHERE id=?').run(now(), rel.id);
+  await runTurn({ user: req.user, relId: rel.id, userText: accept ? '（對方答應讓你當置頂）好啊' : '（對方說先不要置頂）先不要啦' });
+  res.json({ ok: true });
+}));
+
+app.post('/api/rels/:id/end', auth, wrap(async (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  if (rel.status !== 'active') return res.json({ ok: true });
+  await endRelationship(rel, getPersona(rel), req.user, 'user_choice');
+  res.json({ ok: true });
+}));
+
+app.post('/api/rels/:id/block', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  db.prepare('UPDATE relationships SET blocked=? WHERE id=?').run(req.body?.blocked === false ? 0 : 1, rel.id);
+  res.json({ ok: true });
+});
+
+// Permanently delete a relationship and everything in it.
+app.delete('/api/rels/:id', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const files = db.prepare('SELECT media FROM messages WHERE rel_id=? AND media IS NOT NULL').all(rel.id).map(r => r.media);
+  for (const f of files) for (const dir of ['uploads', 'audio']) fs.rmSync(path.join(config.dataDir, dir, path.basename(f)), { force: true });
+  db.prepare('DELETE FROM characters WHERE id=?').run(rel.character_id); // cascades to relationship and its rows
+  res.json({ ok: true });
+});
+
+app.put('/api/rels/:id/setting-memories', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 10) : [];
+  db.prepare(`DELETE FROM memories WHERE rel_id=? AND source='setting'`).run(rel.id);
+  const ins = db.prepare(`INSERT INTO memories (rel_id,user_id,kind,content,weight,source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`);
+  for (const t of items) { const c = String(t).trim().slice(0, 120); if (c) ins.run(rel.id, rel.user_id, 'fact', c, 3, 'setting', now(), now()); }
+  res.json({ ok: true });
+});
+
+app.post('/api/rels/:id/share-preview', auth, wrap(async (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  res.json(await sharePreview(req.user, rel));
+}));
+app.post('/api/rels/:id/share', auth, wrap(async (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const r = await publishShare(req.user, rel, req.body || {});
+  if (r.error) return res.status(400).json(r);
+  res.json(r);
+}));
+
+// ---------- meal card ----------
+app.post('/api/meal/:msgId/choose', auth, (req, res) => {
+  const m = db.prepare(`SELECT * FROM messages WHERE id=? AND user_id=? AND kind='card'`).get(req.params.msgId, req.user.id);
+  if (!m) return res.status(404).json({ error: '找不到' });
+  const card = j(m.card);
+  const opt = card.options?.[Number(req.body?.idx)];
+  if (!opt) return res.status(400).json({ error: '選項不存在' });
+  card.chosen = opt.idx;
+  db.prepare('UPDATE messages SET card=? WHERE id=?').run(JSON.stringify(card), m.id);
+  const rel = db.prepare('SELECT * FROM relationships WHERE id=?').get(m.rel_id);
+  db.prepare('UPDATE relationships SET meal_declined=0 WHERE id=?').run(rel.id);
+  db.prepare('INSERT INTO followups (rel_id,due_at,topic) VALUES (?,?,?)').run(rel.id, now() + 45 * 60000, `對方選了你推薦的「${opt.store} ${opt.item}」，問對方到了沒、好不好吃`);
+  logEvent(req.user.id, 'meal_choose', { rel: rel.id, store: opt.store, item: opt.item, trend: opt.is_trend });
+  const firstMeal = db.prepare(`SELECT COUNT(*) n FROM events WHERE name='meal_choose' AND json_extract(data,'$.rel')=?`).get(rel.id).n === 1;
+  if (firstMeal) {
+    db.prepare('INSERT OR IGNORE INTO story (rel_id,user_id,type,title,created_at) VALUES (?,?,?,?,?)').run(rel.id, rel.user_id, 'milestone', `${ta(getPersona(rel))}第一次幫你點餐`, now());
+  }
+  res.json({ ok: true, url: opt.url });
+});
+
+app.post('/api/meal/:msgId/decline', auth, (req, res) => {
+  const m = db.prepare(`SELECT * FROM messages WHERE id=? AND user_id=? AND kind='card'`).get(req.params.msgId, req.user.id);
+  if (!m) return res.status(404).json({ error: '找不到' });
+  const card = j(m.card); card.declined = true;
+  db.prepare('UPDATE messages SET card=? WHERE id=?').run(JSON.stringify(card), m.id);
+  db.prepare('UPDATE relationships SET meal_declined=meal_declined+1 WHERE id=?').run(m.rel_id);
+  logEvent(req.user.id, 'meal_decline', { rel: m.rel_id });
+  res.json({ ok: true });
+});
+
+// ---------- story ----------
+app.get('/api/story', auth, (req, res) => {
+  const rels = db.prepare(`SELECT * FROM relationships WHERE user_id=? ORDER BY created_at`).all(req.user.id);
+  res.json(rels.map(rel => {
+    const items = db.prepare('SELECT * FROM story WHERE rel_id=? ORDER BY created_at DESC').all(rel.id)
+      .map(s => ({ id: s.id, type: s.type, title: s.title, body: s.body, place: s.place, scene: s.scene, media: (j(s.media) || []).map(f => `/api/media/${f}`), at: s.created_at }));
+    return { rel: relSummary(rel), items };
+  }));
+});
+
+// ---------- media (only the owner can fetch) ----------
+app.get('/api/media/:file', auth, (req, res) => {
+  const f = path.basename(req.params.file);
+  const own = db.prepare('SELECT 1 FROM messages WHERE user_id=? AND media=?').get(req.user.id, f)
+    || db.prepare(`SELECT 1 FROM story WHERE user_id=? AND media LIKE ?`).get(req.user.id, `%${f}%`);
+  if (!own) return res.status(404).end();
+  for (const dir of ['uploads', 'audio']) {
+    const p = path.join(config.dataDir, dir, f);
+    if (fs.existsSync(p)) { res.setHeader('Cache-Control', 'private, max-age=31536000, immutable'); return res.sendFile(p); }
+  }
+  res.status(404).end();
+});
+
+// ---------- push & analytics ----------
+app.post('/api/push/subscribe', auth, (req, res) => {
+  const sub = req.body;
+  if (!sub?.endpoint) return res.status(400).json({ error: 'bad subscription' });
+  db.prepare('INSERT OR REPLACE INTO push_subs (endpoint,user_id,sub) VALUES (?,?,?)').run(sub.endpoint, req.user.id, JSON.stringify(sub));
+  res.json({ ok: true });
+});
+app.post('/api/push/unsubscribe', auth, (req, res) => {
+  db.prepare('DELETE FROM push_subs WHERE endpoint=? AND user_id=?').run(req.body?.endpoint || '', req.user.id);
+  res.json({ ok: true });
+});
+
+const CLIENT_EVENTS = ['app_open', 'coming_soon_click', 'coming_soon_price', 'share_card', 'install_prompt', 'feedback'];
+app.post('/api/events', auth, (req, res) => {
+  const { name, data } = req.body || {};
+  if (CLIENT_EVENTS.includes(name)) logEvent(req.user.id, name, data);
+  res.json({ ok: true });
+});
+
+// ---------- admin ----------
+app.get('/api/admin/stats', (req, res) => {
+  const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+  if (!config.adminToken || token !== config.adminToken) return res.status(401).json({ error: 'unauthorized' });
+  res.json(adminStats(['f', 'm'].includes(req.query.cohort) ? req.query.cohort : 'all'));
+});
+app.post('/api/admin/tick', (req, res) => {
+  const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+  if (!config.adminToken || token !== config.adminToken) return res.status(401).json({ error: 'unauthorized' });
+  tick().then(() => res.json({ ok: true }));
+});
+
+mountAdmin(app);
+purgeOldLogs();
+setInterval(purgeOldLogs, 864e5);
+process.on('unhandledRejection', (e) => logIssue({ source: 'server', message: `未處理的錯誤：${e?.message || e}`, error: e instanceof Error ? e : undefined }));
+process.on('uncaughtException', (e) => logIssue({ source: 'server', message: `程式崩潰：${e.message}`, error: e }));
+
+// ---------- static PWA ----------
+const pub = path.join(__dirname, '..', 'public');
+app.use(express.static(pub, {
+  setHeaders(res, p) {
+    if (p.endsWith('sw.js') || p.endsWith('.html') || p.endsWith('.webmanifest')) res.setHeader('Cache-Control', 'no-cache');
+  },
+}));
+app.get('/admin', (req, res) => res.sendFile(path.join(pub, 'admin.html')));
+app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(pub, 'index.html')));
+
+app.listen(config.port, () => {
+  console.log(`companion listening on :${config.port}${config.mock ? ' (MOCK LLM — set OPENAI_API_KEY for real replies)' : ''}`);
+  startScheduler();
+});

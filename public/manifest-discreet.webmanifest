@@ -1,0 +1,14 @@
+{
+  "name": "日常",
+  "short_name": "日常",
+  "lang": "zh-Hant-TW",
+  "start_url": "/#/chat",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F2F1F6",
+  "theme_color": "#F2F1F6",
+  "icons": [
+    { "src": "/icons/discreet-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/discreet-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

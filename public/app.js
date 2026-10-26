@@ -1,0 +1,1341 @@
+// 伴旅 WithU — PWA front end (no build step).
+import { portraitSVG, sceneSVG, LOOK_OPTIONS, setPortraitStyle } from './art.js';
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const app = $('#app');
+const tabs = $('#tabs');
+
+const S = { me: null, meta: null, rels: [], timers: [], room: null };
+
+async function api(path, { method = 'GET', body, form } = {}) {
+  const res = await fetch(path, {
+    method, credentials: 'same-origin',
+    headers: form ? undefined : body ? { 'content-type': 'application/json' } : undefined,
+    body: form || (body ? JSON.stringify(body) : undefined),
+  });
+  const data = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
+  if (res.status === 401) { S.me = null; if (!/^#\/(welcome|join|recover)$/.test(location.hash)) location.hash = '#/welcome'; throw new Error('unauth'); }
+  if (!res.ok) { const err = new Error(data?.error || '連線有點問題，再試一次'); err.data = data; throw err; }
+  return data;
+}
+const track = (name, data) => api('/api/events', { method: 'POST', body: { name, data } }).catch(() => {});
+
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('on');
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('on'), 2400);
+}
+function clearTimers() { S.timers.forEach(clearInterval); S.timers = []; }
+
+// ---------- small helpers ----------
+const pad = (n) => String(n).padStart(2, '0');
+function hhmm(ts) { const d = new Date(ts); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+function ago(ts) {
+  const m = Math.round((Date.now() - ts) / 60000);
+  if (m < 1) return '剛剛'; if (m < 60) return `${m} 分鐘前`;
+  const h = Math.round(m / 60); if (h < 24) return `${h} 小時前`;
+  const d = new Date(ts); return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+function dayLabel(ts) {
+  const d = new Date(ts), t = new Date();
+  const same = (a, b) => a.toDateString() === b.toDateString();
+  if (same(d, t)) return '今天';
+  const y = new Date(t); y.setDate(t.getDate() - 1);
+  if (same(d, y)) return '昨天';
+  return `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+}
+function dateStr(ts) { const d = new Date(ts); return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`; }
+
+// 頭像小變化：season / festival accessory. A surprise, not a status.
+function seasonMark(d = new Date()) {
+  const m = d.getMonth() + 1, day = d.getDate();
+  if (m === 10 && day >= 24) return '🎃';
+  if (m === 12 && day >= 18 && day <= 26) return '🎄';
+  if (m === 2 && day >= 10 && day <= 15) return '🌹';
+  if (m >= 3 && m <= 5) return '🌸';
+  if (m >= 6 && m <= 8) return '🍉';
+  if (m >= 9 && m <= 11) return '🍂';
+  return '🧣';
+}
+function avatar(frame, size = 48, { lover = false, season = true } = {}) {
+  const discreet = S.me?.settings?.discreetNames;
+  const f = discreet ? { hue: frame?.hue, name: '' } : frame;
+  return `<span class="avatar${lover ? ' lover' : ''}" style="--s:${size}px">${portraitSVG(f, size)}
+    ${season ? `<span class="season">${seasonMark()}</span>` : ''}</span>`;
+}
+// 情境插圖卡片：用在「在哪裡遇見」和「來場偶遇」
+function sceneCards(list, picked) {
+  return `<div class="scene-grid">${list.map(s => `<button class="scene-card" data-s="${s.id}" aria-pressed="${s.id === picked}">
+    <span class="art">${sceneSVG(s.id, { label: s.label })}</span><span class="lb">${esc(s.label)}</span></button>`).join('')}</div>`;
+}
+// 代名詞：ta(frame) 依角色性別；TA() 依使用者想遇見的人
+const ta = (f) => (f?.gender === 'female' ? '她' : '他');
+const TA = () => (S.me?.seeks === 'female' ? '她' : S.me?.seeks === 'any' ? 'TA' : '他');
+const displayName = (frame) => S.me?.settings?.discreetNames ? (frame.name || '').slice(0, 1) + '先生' : frame.name;
+
+// ---------- sheet ----------
+function openSheet(html, mount) {
+  const root = $('#sheet-root');
+  root.innerHTML = `<div class="sheet-backdrop"></div><div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div>`;
+  const close = () => { root.innerHTML = ''; };
+  $('.sheet-backdrop', root).onclick = close;
+  mount?.($('.sheet', root), close);
+  return close;
+}
+
+// ---------- routing ----------
+const routes = [
+  [/^#\/welcome$/, renderWelcome],
+  [/^#\/join$/, renderJoin],
+  [/^#\/recover$/, renderRecover],
+  [/^#\/meet(?:\/(\w+))?$/, renderMeet],
+  [/^#\/chat\/([\w-]+)$/, renderRoom],
+  [/^#\/profile\/([\w-]+)$/, renderProfile],
+  [/^#\/chat$/, renderChatList],
+  [/^#\/explore$/, renderExplore],
+  [/^#\/story$/, renderStory],
+  [/^#\/me$/, renderMe],
+];
+async function route() {
+  clearTimers();
+  $('#sheet-root').innerHTML = '';
+  let hash = location.hash || '#/chat';
+  if (!S.me && !/^#\/(welcome|join|recover)$/.test(hash)) {
+    try { S.me = await api('/api/me'); } catch { return; }
+  }
+  if (!S.meta) S.meta = await fetch('/api/meta').then(r => r.json());
+  for (const [re, fn] of routes) {
+    const m = hash.match(re);
+    if (m) {
+      const tab = hash.split('/')[1];
+      const showTabs = ['chat', 'explore', 'story', 'me'].includes(tab) && !/^#\/chat\//.test(hash);
+      tabs.hidden = !showTabs;
+      if (showTabs && tab !== 'chat') refreshBadge();
+      $$('a', tabs).forEach(a => a.setAttribute('aria-current', a.dataset.tab === tab ? 'page' : 'false'));
+      window.scrollTo(0, 0);
+      return fn(...m.slice(1));
+    }
+  }
+  location.hash = '#/chat';
+}
+window.addEventListener('hashchange', route);
+
+// ======================================================================
+// Onboarding
+// ======================================================================
+function renderWelcome() {
+  tabs.hidden = true;
+  app.innerHTML = `<div class="welcome">
+    <div class="hero-art">${sceneSVG('city', { label: '黃昏的城市' })}</div>
+    <div class="mark">伴旅<span class="mark-en">WithU</span></div>
+    <p class="lede">不只在 App 裡陪你聊天。<br>會報備、會陪你吃飯，也想看看你眼前的世界。</p>
+    <a class="btn block" href="#/join" style="text-align:center;text-decoration:none">開始</a>
+    <p class="fine">已經在別的裝置用過？<a href="#/recover">用登入碼回來</a><br>
+    測試版・對方是 AI 角色，不是真人・限 18 歲以上</p>
+  </div>`;
+}
+
+function renderJoin() {
+  tabs.hidden = true;
+  app.innerHTML = `<div class="page" style="padding-bottom:32px">
+    <a class="icon-btn back" href="#/welcome" aria-label="返回">${icon('back')}</a>
+    <h1>先讓對方知道怎麼叫你</h1>
+    <form id="f">
+      <label class="field"><span>邀請碼</span><input class="input" name="invite" autocomplete="off" required></label>
+      <label class="field"><span>暱稱</span><input class="input" name="nickname" maxlength="16" required></label>
+      <label class="field"><span>希望對方怎麼稱呼你</span><input class="input" name="callName" maxlength="16" placeholder="例如：小芸、阿哲"></label>
+      <div class="field"><span>你是</span>${chipGroup('gender', [['female', '女生'], ['male', '男生'], ['other', '不想說']], '')}</div>
+      <div class="field"><span>你想遇見</span>${chipGroup('seeks', [['male', '男生'], ['female', '女生'], ['any', '都可以']], '')}<p class="small muted" style="margin:6px 0 0">之後可以在「我」裡面改。</p></div>
+      <p class="small muted">作息、喜好不用填，對方會從聊天裡慢慢認識你。</p>
+      <label class="check"><input type="checkbox" name="adult" required><span>我已年滿 18 歲</span></label>
+      <label class="check"><input type="checkbox" name="aiAck" required><span>我了解對方是 AI 角色，不是真人；對話會交由 AI 服務（OpenAI，美國）處理。</span></label>
+      <button class="btn block" style="margin-top:14px">繼續</button>
+    </form></div>`;
+  const pick = { gender: '', seeks: '' };
+  let seeksTouched = false;
+  $$('[data-group]').forEach(g => $$('.chip', g).forEach(c => c.onclick = () => {
+    $$('.chip', g).forEach(x => x.setAttribute('aria-pressed', String(x === c)));
+    pick[g.dataset.group] = c.dataset.v;
+    if (g.dataset.group === 'seeks') seeksTouched = true;
+  }));
+  const setSeeks = (v) => { if (seeksTouched) return; pick.seeks = v; $$('[data-group="seeks"] .chip').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.v === v))); };
+  // 邀請碼決定測試群組，並預選「想遇見」（仍可自己改）
+  $('[name=invite]').onchange = async (e) => {
+    const r = await fetch(`/api/auth/cohort?code=${encodeURIComponent(e.target.value.trim())}`).then(x => x.json()).catch(() => ({}));
+    if (r.cohort) setSeeks(r.cohort === 'm' ? 'female' : 'male');
+  };
+  $('#f').onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    if (!pick.seeks) return toast('選一下你想遇見誰');
+    try {
+      const r = await api('/api/auth/join', { method: 'POST', body: { ...fd, ...pick, adult: !!fd.adult, aiAck: !!fd.aiAck } });
+      S.me = await api('/api/me');
+      app.innerHTML = `<div class="page" style="padding-bottom:32px"><h1>這是你的登入碼</h1>
+        <p>換手機或清掉瀏覽器資料時，用它回來。之後也能在「我」裡面找到。</p>
+        <div class="code-box">${esc(r.recoveryCode)}</div>
+        <button class="btn block" id="go">好，去認識${TA()}</button></div>`;
+      $('#go').onclick = () => { location.hash = '#/meet'; };
+    } catch (err) { toast(err.message); }
+  };
+}
+
+function renderRecover() {
+  tabs.hidden = true;
+  app.innerHTML = `<div class="page"><a class="icon-btn back" href="#/welcome" aria-label="返回">${icon('back')}</a>
+    <h1>用登入碼回來</h1>
+    <form id="f"><label class="field"><span>登入碼</span><input class="input" name="code" placeholder="XXXX-XXXX" autocomplete="off" required></label>
+    <button class="btn block">回來</button></form></div>`;
+  $('#f').onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api('/api/auth/recover', { method: 'POST', body: { code: e.target.code.value } }); S.me = await api('/api/me'); location.hash = '#/chat'; }
+    catch (err) { toast(err.message); }
+  };
+}
+
+// ======================================================================
+// Meeting: 我想認識他（先選人） / 來場偶遇吧（先選情境）
+// ======================================================================
+const M = { templateId: null, custom: null, frame: null, scenarioId: null, scenarioText: '', reunionRelId: null };
+
+function personCard(t, pressed = false) {
+  const f = t.frame;
+  return `<button class="person" data-id="${esc(t.id)}" aria-pressed="${pressed}">
+    ${avatar(f, 56, { season: false })}
+    <span class="grow"><span class="nm">${esc(f.name)}</span>
+      <div class="info">${esc(f.age)} 歲・${esc(f.nationality)}・${esc(f.jobLabel)}・${esc(f.archetypeLabel || '')}</div>
+      <div class="intro">${esc(f.intro || '')}</div>
+      ${t.kind === 'shared' ? `<div class="info">由 ${esc(t.creator)} 塑造</div>` : ''}</span></button>`;
+}
+
+async function renderMeet(step) {
+  tabs.hidden = true;
+  const back = `<a class="icon-btn back" href="${S.rels.length ? '#/chat' : '#/meet'}" aria-label="返回">${icon('back')}</a>`;
+  if (!step) {
+    Object.assign(M, { templateId: null, custom: null, frame: null, scenarioId: null, scenarioText: '', reunionRelId: null });
+    app.innerHTML = `<div class="page" style="padding-bottom:32px">${back}
+      <h1>你想怎麼遇見${TA()}？</h1>
+      <button class="choice" data-go="person"><b>我想認識${TA()}</b><span>先選一個人，再決定你們在哪裡遇見</span></button>
+      <button class="choice" data-go="scene"><b>來場偶遇吧</b><span>先選一個情境，看看誰可能出現在那裡</span></button></div>`;
+    $$('[data-go]').forEach(b => b.onclick = () => { location.hash = `#/meet/${b.dataset.go}`; });
+    return;
+  }
+  if (step === 'person') {
+    const list = await api('/api/templates');
+    app.innerHTML = `<div class="page" style="padding-bottom:32px"><a class="icon-btn back" href="#/meet" aria-label="返回">${icon('back')}</a>
+      <h1>想認識誰？</h1>${list.length ? `<div class="people">${list.map(t => personCard(t)).join('')}</div>` : '<p class="muted">現有的角色你都認識了，自己捏一個吧。</p>'}
+      <h2>都不是你想要的？</h2><button class="choice" id="custom"><b>自己捏一個</b><span>點選${TA()}的框架，個性會在聊天中慢慢長出來</span></button></div>`;
+    $$('.person').forEach(b => b.onclick = () => {
+      const t = list.find(x => x.id === b.dataset.id);
+      M.templateId = t.id; M.frame = t.frame; M.custom = null;
+      location.hash = '#/meet/where';
+    });
+    $('#custom').onclick = () => { location.hash = '#/meet/custom'; };
+    return;
+  }
+  if (step === 'custom') return renderCustom();
+  if (step === 'where') return renderWhere();
+  if (step === 'scene') return renderScenePick();
+  if (step === 'who') return renderWho();
+  location.hash = '#/meet';
+}
+
+function chipGroup(name, options, value) {
+  return `<div class="chips" data-group="${name}">${options.map(([v, l]) =>
+    `<button type="button" class="chip" data-v="${esc(v)}" aria-pressed="${String(v) === String(value)}">${esc(l)}</button>`).join('')}</div>`;
+}
+function bindChips(root, state, onChange) {
+  $$('[data-group]', root).forEach(g => $$('.chip', g).forEach(c => c.onclick = () => {
+    $$('.chip', g).forEach(x => x.setAttribute('aria-pressed', 'false'));
+    c.setAttribute('aria-pressed', 'true');
+    state[g.dataset.group] = c.dataset.v;
+    onChange?.(g.dataset.group);
+  }));
+}
+
+function renderCustom(prev) {
+  const meta = S.meta;
+  const defGender = S.me?.seeks === 'female' ? 'female' : 'male';
+  const st = prev || { gender: defGender, age: '28', nationality: '台灣', job: defGender === 'female' ? 'designer' : 'engineer',
+    proactivity: 'slow', voice: '', hue: meta.hues[Math.floor(Math.random() * meta.hues.length)],
+    hairColor: LOOK_OPTIONS.hairColor[1][0], top: LOOK_OPTIONS.top[0][0], glasses: '0' };
+  const P = st.gender === 'female' ? '她' : '他';
+  const voices = meta.voices[st.gender] || meta.voices.male;
+  if (!voices.find(v => v.id === st.voice)) st.voice = voices[0].id;
+  const archList = Object.entries(meta.archetypes).filter(([, v]) => !v.for || v.for === st.gender);
+  if (!archList.find(([k]) => k === st.archetype)) st.archetype = archList[0][0];
+  const hairs = LOOK_OPTIONS.hair[st.gender];
+  if (!hairs.find(([k]) => k === st.hair)) st.hair = hairs[0][0];
+  const jobs = Object.entries(meta.jobs).map(([k, v]) => [k, v.label]);
+  const pro = Object.entries(meta.proactivity).map(([k, v]) => [k, v.label]);
+  const look = () => ({ hair: st.hair, hairColor: st.hairColor, top: st.top, skin: '#F1C9A6', accessory: 'collar', accent: '#9AA7B8', glasses: st.glasses === '1', style: st.style === 'anime' ? 'anime' : undefined });
+  app.innerHTML = `<div class="page" style="padding-bottom:32px"><a class="icon-btn back" href="#/meet/person" aria-label="返回">${icon('back')}</a>
+    <h1>${P}是什麼樣的人？</h1>
+    <div class="builder-face" id="face">${portraitSVG({ hue: st.hue, look: look(), gender: st.gender }, 132)}</div>
+    <label class="field"><span>名字</span><input class="input" id="nm" maxlength="12" value="${esc(st.name || '')}" placeholder="${st.gender === 'female' ? '例如：林語晴' : '例如：陳亦安'}"></label>
+    <div class="field"><span>性別</span>${chipGroup('gender', [['male', '男生'], ['female', '女生']], st.gender)}</div>
+    <div class="field"><span>髮型</span>${chipGroup('hair', hairs, st.hair)}</div>
+    <div class="field"><span>髮色</span>${chipGroup('hairColor', LOOK_OPTIONS.hairColor, st.hairColor)}</div>
+    <div class="field"><span>穿著</span>${chipGroup('top', LOOK_OPTIONS.top, st.top)}</div>
+    <div class="field"><span>眼鏡</span>${chipGroup('glasses', [['0', '不戴'], ['1', '戴眼鏡']], st.glasses)}</div>
+    <div class="field"><span>畫風</span>${chipGroup('style', LOOK_OPTIONS.style, st.style || 'real')}</div>
+    <div class="field"><span>年齡</span>${chipGroup('age', [['24', '24'], ['28', '28'], ['32', '32'], ['36', '36'], ['42', '42']], st.age)}</div>
+    <div class="field"><span>國籍</span>${chipGroup('nationality', [['台灣', '台灣'], ['日本', '日本'], ['韓國', '韓國'], ['香港', '香港'], ['法國', '法國']], st.nationality)}</div>
+    <div class="field"><span>職業（決定${P}的作息）</span>${chipGroup('job', jobs, st.job)}</div>
+    <div class="field"><span>角色原型</span>${chipGroup('archetype', archList.map(([k, v]) => [k, v.label]), st.archetype)}<p class="small muted" id="archdesc" style="margin-top:8px"></p></div>
+    <div class="field"><span>主動程度</span>${chipGroup('proactivity', pro, st.proactivity)}</div>
+    <div class="field"><span>聲線（之後不能換）</span>${chipGroup('voice', voices.map(v => [v.id, v.label]), st.voice)}</div>
+    <label class="field"><span>外觀描述（選填）</span><input class="input" id="ap" maxlength="80" value="${esc(st.appearance || '')}" placeholder="例如：笑起來有酒窩、常穿深色毛衣"></label>
+    <p class="small muted">個性、幽默感、說話方式，會在你們當朋友的時候慢慢長出來。不能使用真人或現有作品角色。</p>
+    <button class="btn block" id="next">下一步：在哪裡遇見${P}</button></div>`;
+  const desc = () => { $('#archdesc').textContent = meta.archetypes[st.archetype]?.desc || ''; };
+  desc();
+  bindChips(app, st, (k) => {
+    if (k === 'gender') return renderCustom(st);
+    if (['hair', 'hairColor', 'top', 'glasses', 'style'].includes(k)) $('#face').innerHTML = portraitSVG({ hue: st.hue, look: look(), gender: st.gender }, 132);
+    if (k === 'archetype') desc();
+  });
+  $('#nm').oninput = (e) => { st.name = e.target.value; };
+  $('#ap').oninput = (e) => { st.appearance = e.target.value; };
+  $('#next').onclick = () => {
+    if (!st.name?.trim()) return toast(`幫${P}取個名字吧`);
+    M.custom = { ...st, look: look() }; M.templateId = null;
+    M.frame = { name: st.name, hue: st.hue, job: st.job, jobLabel: meta.jobs[st.job].label, gender: st.gender, look: look() };
+    location.hash = '#/meet/where';
+  };
+}
+
+function renderWhere() {
+  if (!M.frame) { location.hash = '#/meet'; return; }
+  const sc = S.meta.scenarios;
+  const rec = sc.filter(s => s.jobs.includes(M.frame.job));
+  const rest = sc.filter(s => !rec.includes(s));
+  app.innerHTML = `<div class="page" style="padding-bottom:32px"><a class="icon-btn back" href="#/meet/person" aria-label="返回">${icon('back')}</a>
+    <h1>你們在哪裡遇見？</h1>
+    ${rec.length ? `<div class="list-label">適合${esc(M.frame.jobLabel)}的情境</div>${sceneCards(rec)}<div class="list-label" style="margin-top:18px">其他情境</div>` : ''}
+    ${sceneCards(rest)}
+    <h2>或自己寫</h2>
+    <textarea class="input" id="free" rows="3" maxlength="300" placeholder="例如：${ta(M.frame)}是我國中同班的青梅竹馬，畢業後在同學會重逢">${esc(M.scenarioText || '')}</textarea>
+    <p class="small muted">只能從陌生人或朋友開始；戀人要靠你們一起走到。</p>
+    <button class="btn block" id="go">就這樣遇見${ta(M.frame)}</button></div>`;
+  let picked = null;
+  $$('[data-s]').forEach(b => b.onclick = () => { $$('[data-s]').forEach(x => x.setAttribute('aria-pressed', 'false')); b.setAttribute('aria-pressed', 'true'); picked = b.dataset.s; $('#free').value = ''; });
+  $('#free').oninput = () => { if ($('#free').value) { picked = null; $$('[data-s]').forEach(x => x.setAttribute('aria-pressed', 'false')); } };
+  $('#go').onclick = () => {
+    M.scenarioText = $('#free').value.trim(); M.scenarioId = picked;
+    if (!M.scenarioText && !M.scenarioId) return toast('選一個情境，或自己寫一個');
+    doMeet();
+  };
+}
+
+function renderScenePick() {
+  app.innerHTML = `<div class="page" style="padding-bottom:32px"><a class="icon-btn back" href="#/meet" aria-label="返回">${icon('back')}</a>
+    <h1>今天會在哪裡偶遇？</h1>
+    ${sceneCards(S.meta.scenarios)}
+    <h2>或自己寫</h2>
+    <textarea class="input" id="free" rows="3" maxlength="300" placeholder="例如：週末在大稻埕的老咖啡店，下午有點悶">${esc(M.scenarioText || '')}</textarea>
+    <button class="btn block" id="go" style="margin-top:14px">看看誰在那裡</button></div>`;
+  let picked = null;
+  $$('[data-s]').forEach(b => b.onclick = () => { $$('[data-s]').forEach(x => x.setAttribute('aria-pressed', 'false')); b.setAttribute('aria-pressed', 'true'); picked = b.dataset.s; });
+  $('#go').onclick = () => {
+    M.scenarioText = $('#free').value.trim(); M.scenarioId = picked;
+    if (!M.scenarioText && !M.scenarioId) return toast('選一個情境，或自己寫一個');
+    location.hash = '#/meet/who';
+  };
+}
+
+async function renderWho() {
+  if (!M.scenarioId && !M.scenarioText) { location.hash = '#/meet/scene'; return; }
+  const r = await api(`/api/encounter?scenario=${encodeURIComponent(M.scenarioId || '')}`);
+  app.innerHTML = `<div class="page" style="padding-bottom:32px"><a class="icon-btn back" href="#/meet/scene" aria-label="返回">${icon('back')}</a>
+    <h1>可能在這裡出現的人</h1>
+    ${r.reunion ? `<button class="choice" id="reunion"><b>……是${esc(r.reunion.frame.name)}？</b><span>你們曾經在一起過。${ta(r.reunion.frame)}好像也看見你了。</span></button>` : ''}
+    ${r.picks.length ? `<div class="people">${r.picks.map(t => personCard(t)).join('')}</div>` : (r.reunion ? '' : '<p class="muted">今天這裡好像沒有新面孔。換個情境，或到「我想認識他」自己捏一個。</p>')}</div>`;
+  $$('.person').forEach(b => b.onclick = () => {
+    const t = r.picks.find(x => x.id === b.dataset.id);
+    M.templateId = t.id; M.frame = t.frame; doMeet();
+  });
+  if (r.reunion) $('#reunion').onclick = () => { M.reunionRelId = r.reunion.relId; M.frame = r.reunion.frame; doMeet(); };
+}
+
+async function doMeet() {
+  app.innerHTML = `<div class="going"><div>${avatar(M.frame, 72, { season: false })}<p class="hand" style="margin-top:18px">正在前往你們相遇的地方……</p></div></div>`;
+  try {
+    const r = await api('/api/meet', { method: 'POST', body: { templateId: M.templateId, custom: M.custom, scenarioId: M.scenarioId, scenarioText: M.scenarioText, reunionRelId: M.reunionRelId } });
+    location.hash = `#/chat/${r.relId}`;
+  } catch (e) {
+    const back = M.templateId && !M.reunionRelId && location.hash !== '#/meet/who' ? '#/meet/where' : (M.scenarioText ? '#/meet/scene' : null);
+    if (M.scenarioText && e.data) {
+      // 情境被擋：說明原因，給改寫版本，保留原本寫的內容
+      if (back) { location.hash = back; await new Promise(r => setTimeout(r, 120)); } else history.back();
+      openSheet(`<h3>這個情境需要改一下</h3><p>${esc(e.message)}</p>
+        ${e.data.rewrite ? `<div class="card" style="max-width:100%"><div class="small muted" style="margin-bottom:4px">改寫建議</div><p class="hand" style="font-size:16px;margin:0">${esc(e.data.rewrite)}</p></div>
+        <button class="btn block" id="useRw" style="margin-top:12px">用這個版本</button>` : ''}
+        <button class="btn ghost block" id="editRw" style="margin-top:10px">我自己改</button>`, (sheet, close) => {
+        $('#useRw', sheet) && ($('#useRw', sheet).onclick = () => { close(); M.scenarioText = e.data.rewrite; M.scenarioId = null; if (location.hash === '#/meet/scene') location.hash = '#/meet/who'; else doMeet(); });
+        $('#editRw', sheet).onclick = () => { close(); $('#free')?.focus(); };
+      });
+      return;
+    }
+    toast(e.message);
+    setTimeout(() => history.back(), 600);
+  }
+}
+
+// ======================================================================
+// 聊天（首頁）
+// ======================================================================
+async function renderChatList() {
+  const draw = async () => {
+    S.rels = await api('/api/rels'); refreshBadge(S.rels);
+    const active = S.rels.filter(r => r.status === 'active');
+    if (!active.length) {
+      app.innerHTML = `<div class="page"><h1>聊天</h1>${installBanner()}<div class="empty"><div class="empty-art">${sceneSVG('city', { label: '黃昏的城市' })}</div><p class="hand">還沒有遇見誰</p>
+        <p class="muted">${TA()}會在你的生活裡出現：咖啡廳、捷運上、加班後的便利商店。</p>
+        <a class="btn" href="#/meet" style="text-decoration:none;display:inline-block;margin-top:8px">去認識${TA()}</a></div></div>`;
+      bindInstall();
+      return;
+    }
+    const lover = active.find(r => r.pinned);
+    const others = active.filter(r => r !== lover).sort((a, b) => (b.starred - a.starred) || ((b.last?.at || 0) - (a.last?.at || 0)));
+    app.innerHTML = `<div class="page">
+      ${S.me.mock ? '<div class="banner-test">測試模式：尚未設定 OpenAI 金鑰，回覆為範例</div>' : ''}
+      <h1>聊天</h1>${installBanner()}
+      ${lover ? `<a class="lover-card" href="#/chat/${lover.id}">${avatar(lover.frame, 72, { lover: true })}
+        <span class="grow" style="min-width:0"><span class="name">${esc(displayName(lover.frame))}</span>
+        <span class="pres small">${presenceDot(lover.presence)}${esc(presenceText(lover.presence))}</span><span class="muted small last1">${esc(lover.last?.text || '')}</span></span>
+        ${lover.unread ? `<span class="badge">${lover.unread}</span>` : ''}</a>` : ''}
+      ${others.length ? `<div class="list-label">${lover ? '朋友' : '最近'}</div>` : ''}
+      ${others.map(r => `<a class="conv${r.mode === 'practice' && r.stage === 2 && r.unread ? ' glow' : ''}" href="#/chat/${r.id}"><span class="av-wrap">${avatar(r.frame, 50)}${r.presence?.code === 'online' ? '<span class="pdot online on-av" aria-label="上線中"></span>' : ''}</span>
+        <span class="meta"><span class="top"><span class="nm">${esc(displayName(r.frame))}</span>${r.starred ? '<span class="star" aria-label="特別關注">★</span>' : ''}
+        ${r.outing ? '<span class="tag">出遊中</span>' : ''}<span class="when">${r.last ? ago(r.last.at) : ''}</span></span>
+        <span class="last">${r.last?.sender === 'user' ? '你：' : ''}${esc(r.last?.text || '')}</span></span>
+        ${r.unread ? `<span class="badge">${r.unread}</span>` : ''}</a>`).join('')}
+      <div style="text-align:center;margin-top:22px"><a class="btn ghost sm" href="#/meet" style="text-decoration:none">認識新的人</a></div>
+    </div>`;
+    bindInstall();
+  };
+  await draw();
+  S.timers.push(setInterval(() => { if (document.visibilityState === 'visible' && !$('#sheet-root').innerHTML) draw().catch(() => {}); }, 20000));
+}
+
+// ---------- 上線狀態 ----------
+function presenceText(p) {
+  if (!p) return '';
+  if (p.code === 'away') return p.lastSeen ? `最後上線 ${ago(p.lastSeen)}` : '離線';
+  return p.label;
+}
+const presenceDot = (p) => p ? `<span class="pdot ${p.code}" aria-hidden="true"></span>` : '';
+
+// App 圖示與「聊天」分頁上的未讀數
+let badgeAt = 0;
+async function refreshBadge(rels) {
+  try {
+    if (!rels) { if (Date.now() - badgeAt < 8000) return; rels = await api('/api/rels'); }
+    badgeAt = Date.now();
+    const n = rels.filter(r => r.status === 'active').reduce((a, r) => a + (r.unread || 0), 0);
+    const a = $('a[data-tab="chat"]', tabs);
+    let b = a && $('.tab-badge', a);
+    if (a && n && !b) { b = document.createElement('span'); b.className = 'tab-badge'; a.appendChild(b); }
+    if (b) { if (n) b.textContent = n > 99 ? '99+' : n; else b.remove(); }
+    if (navigator.setAppBadge) n ? navigator.setAppBadge(n).catch(() => {}) : navigator.clearAppBadge().catch(() => {});
+  } catch {}
+}
+
+// 第一次聊完：問要不要開通知（iPhone 要先加入主畫面）
+function maybeAskNotify(rel) {
+  try {
+    if (S.askedNotify) return;
+    if (isIOS() && !isStandalone()) {
+      if (localStorage.getItem('a2hsShown')) return;
+      S.askedNotify = true; localStorage.setItem('a2hsShown', '1');
+      return openSheet(`<h3>把 App 加到主畫面</h3>
+        <p class="muted">iPhone 要從主畫面打開，${ta(rel.frame)}找你的時候才收得到通知。</p>
+        <ol class="steps"><li>點 Safari 下方的「分享」按鈕 <span class="kbd">⬆︎</span></li><li>往下滑，選「加入主畫面」</li><li>從主畫面的「伴旅」圖示打開，再到「我 → 通知」開啟</li></ol>
+        <button class="btn block" id="a2ok">知道了</button>`, (sh, close) => { $('#a2ok', sh).onclick = close; });
+    }
+    if (!('Notification' in window) || Notification.permission !== 'default' || !S.me?.pushKey || S.me?.settings?.notifyAsked) return;
+    S.askedNotify = true;
+    api('/api/me', { method: 'PATCH', body: { settings: { notifyAsked: true } } }).then(() => { S.me.settings.notifyAsked = true; }).catch(() => {});
+    openSheet(`<h3>要開啟通知嗎？</h3>
+      <p class="muted">${esc(rel.frame.name)}想找你、或忙完回你的時候，才通知得到你。你的勿擾時段不會響。</p>
+      <button class="btn block" id="nfOn">開啟通知</button><button class="btn ghost block" id="nfNo" style="margin-top:8px">先不要</button>`,
+      (sh, close) => { $('#nfOn', sh).onclick = async () => { close(); await enablePush(); }; $('#nfNo', sh).onclick = close; });
+  } catch {}
+}
+
+const sleep = (ms) => new Promise(r => setTimeout(r, Math.max(0, ms)));
+const jitter = (ms) => ms * (0.75 + Math.random() * 0.5);
+// 真人的節奏：先已讀，再打字；每秒大約 5 個字，一則最多 8 秒，兩則之間停一下
+const readMs = (len) => jitter(Math.min(3500, Math.max(900, 600 + len * 35)));
+const typeMs = (m) => m.kind === 'voice' ? jitter(2600) : jitter(Math.min(8000, Math.max(1300, (m.text || '').length * 190)));
+
+// ---------- chat room ----------
+function icon(name) {
+  const p = {
+    back: '<path d="M15 5l-7 7 7 7"/>',
+    send: '<path d="M4 12l16-8-6 16-2.5-6.5z"/>',
+    photo: '<rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><circle cx="9" cy="10.5" r="1.6"/><path d="M20 15.5l-4.5-4.5L7 19"/>',
+    mic: '<rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/>',
+    x: '<path d="M6 6l12 12M18 6L6 18"/>',
+    spark: '<path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z"/><path d="M18.5 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/>',
+    more: '<circle cx="12" cy="5.5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="18.5" r="1.2"/>',
+  }[name];
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${p}</svg>`;
+}
+
+function waveBars(seed, n = 22) {
+  let s = 0; for (const c of String(seed)) s = (s * 31 + c.charCodeAt(0)) >>> 0;
+  return Array.from({ length: n }, (_, i) => { s = (s * 1103515245 + 12345) >>> 0; return `<i style="height:${30 + (s % 70)}%"></i>`; }).join('');
+}
+
+function messageHtml(m, rel, prev) {
+  let out = '';
+  if (!prev || dayLabel(prev.at) !== dayLabel(m.at)) out += `<div class="day">${dayLabel(m.at)}</div>`;
+  const side = m.sender === 'user' ? 'me' : 'him';
+  const glow = side === 'him' && rel.mode === 'practice' && rel.stage === 2 ? ' glow' : '';
+  if (m.kind === 'scene') {
+    const art = m.id === S.room?.firstSceneId ? `<div class="scene-art">${sceneSVG(rel.scenarioId || 'city', { label: '你們相遇的地方' })}</div>` : '';
+    return out + `${art}<div class="scene" data-id="${m.id}">${esc(m.text)}</div>`;
+  }
+  if (m.kind === 'card') return out + cardHtml(m, rel);
+  if (m.kind === 'photo') {
+    return out + `<div class="msg me" data-id="${m.id}"><span class="time">${hhmm(m.at)}</span><div class="photo-bubble"><img src="${m.media}" alt="你分享的照片" loading="lazy">${m.text ? `<div class="cap">${esc(m.text)}</div>` : ''}</div></div>`;
+  }
+  if (m.kind === 'voice') {
+    return out + `<div class="msg ${side}${glow}" data-id="${m.id}">${side === 'me' ? `<span class="time">${hhmm(m.at)}</span>` : ''}
+      <div class="bubble"><div class="voice"><button class="play" data-audio="${m.media}" aria-label="播放語音"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+      <span class="wave">${waveBars(m.id)}</span></div>
+      <button class="voice-toggle" data-tx>轉文字</button><div class="voice-tx" hidden>${esc(m.text)}</div></div>
+      ${side === 'him' ? `<span class="time">${hhmm(m.at)}</span>` : ''}</div>`;
+  }
+  const readMark = side === 'me' && typeof m.id === 'number' && m.id <= (S.room?.charReadId || 0) ? '<span class="read">已讀</span>' : '';
+  return out + `<div class="msg ${side}${glow}" data-id="${m.id}">${side === 'me' ? `<span class="time">${readMark}${hhmm(m.at)}</span>` : ''}<div class="bubble">${esc(m.text)}</div>${side === 'him' ? `<span class="time">${hhmm(m.at)}</span>` : ''}</div>`;
+}
+
+function cardHtml(m, rel) {
+  const c = m.card || {};
+  const id = m.id;
+  switch (c.type) {
+    case 'milestone': return `<div class="milestone" data-id="${id}"><span>今天，${esc(c.title)}</span></div>`;
+    case 'hint': return `<div class="note" data-id="${id}">${esc(c.text)}</div>`;
+    case 'outing': return `<div class="note" data-id="${id}">${esc(c.text)}・出遊模式</div>`;
+    case 'walk': return `<div class="note" data-id="${id}">${esc(c.text)}</div>`;
+    case 'nudge': return `<div class="note" data-id="${id}">${esc(c.text)}</div>`;
+    case 'activity': return `<div class="note" data-id="${id}">${c.state === 'start' ? '▶︎ ' : ''}${esc(c.text)}</div>`;
+    case 'postcard': return `<div class="msg him" data-id="${id}">${postcardHtml({ ...c, name: rel.frame.name })}</div>`;
+    case 'travelogue': return `<div class="note" data-id="${id}">${ta(rel.frame)}整理好了今天的遊記「${esc(c.title)}」，收在<a href="#/story">我們的故事</a></div>`;
+    case 'ended': return `<div class="note" data-id="${id}">${esc(c.text)}</div>`;
+    case 'help': return `<div class="card help-card" data-id="${id}"><h4>${esc(c.title)}</h4>
+      ${c.lines.map(l => `<a href="tel:${l.phone}"><span>${esc(l.name)}${l.note ? `<span class="muted small">・${esc(l.note)}</span>` : ''}</span><b>${l.phone}</b></a>`).join('')}
+      <p class="small muted" style="margin:8px 0 0">${esc(c.footer)}</p></div>`;
+    case 'pin_request': return `<div class="msg him" data-id="${id}"><div class="card" style="margin:0">
+      <p class="hand" style="font-size:17px;margin:0 0 8px">${esc(c.text)}</p>
+      ${c.answered ? `<p class="small muted" style="margin:0">${c.answered === 'yes' ? '你答應了' : '你說先不要'}</p>` :
+      `<div class="actions"><button class="btn ghost sm" data-pin="no" data-msg="${id}">先不要</button><button class="btn rose sm" data-pin="yes" data-msg="${id}">好啊</button></div>`}</div></div>`;
+    case 'meal': {
+      const done = c.chosen !== undefined || c.declined;
+      return `<div class="msg him" data-id="${id}"><div class="card" style="margin:0;max-width:100%;width:86%">
+        <h4>${ta(rel.frame)}幫你挑的</h4>
+        ${c.options.map(o => `<div class="meal-opt${c.chosen === o.idx ? ' chosen' : ''}"><span class="grow">
+          <div class="store">${esc(o.store)}${o.is_trend ? '<span class="new-tag">新品</span>' : ''}</div>
+          <div class="item">${esc(o.item)}</div><div class="line">${esc(o.line)}</div></span>
+          ${done ? '' : `<button class="btn sm" data-meal="${id}" data-idx="${o.idx}">就這個</button>`}</div>`).join('')}
+        ${done ? `<p class="small muted" style="margin:8px 0 0">${c.declined ? '今天先不用' : '已經幫你打開 Uber Eats 了'}</p>` :
+        `<div class="actions" style="justify-content:space-between;align-items:center"><span class="small muted">${c.mode === 'api' ? '用 Face ID 確認後下單' : '會打開 Uber Eats，由你確認下單'}</span>
+        <button class="linkbtn small" data-meal-no="${id}">今天不用</button></div>`}</div></div>`;
+    }
+    default: return '';
+  }
+}
+
+// 明信片：你拍的風景照，或他寄來的風景插畫
+function postcardHtml(c, { large = false } = {}) {
+  const pic = c.media ? `<img src="${c.media}" alt="${esc(c.place || '明信片照片')}" loading="lazy">` : sceneSVG(c.scene || 'city', { label: c.place || '風景' });
+  return `<div class="postcard${large ? ' large' : ''}"><div class="pc-pic">${pic}<span class="pc-stamp">${c.from === 'walk' || c.from === 'you' ? '你拍的' : 'WithU'}</span></div>
+    <div class="pc-body"><p class="pc-msg">${esc(c.message)}</p>
+    <p class="pc-meta">${c.place ? `${esc(c.place)}・` : ''}${c.at ? dateStr(c.at) + '・' : ''}${esc(c.name || '')}</p></div></div>`;
+}
+
+async function renderRoom(relId) {
+  tabs.hidden = true;
+  let rel;
+  try { rel = await api(`/api/rels/${relId}`); } catch (e) { toast(e.message); location.hash = '#/chat'; return; }
+  S.room = { rel, messages: [], sending: false, recorder: null, charReadId: rel.charReadId || 0, presence: rel.presence };
+  const sub = () => rel.status !== 'active' ? '這段關係已經結束了' : `${presenceDot(S.room.presence)}${esc(presenceText(S.room.presence))}`;
+  const ACT = { watch: '🎬 一起看', focus: '⏳ 陪你專心', bedtime: '🌙 睡前聊聊' };
+  app.innerHTML = `<div class="room">
+    <header class="room-head">
+      <a class="icon-btn" href="#/chat" aria-label="返回聊天列表">${icon('back')}</a>
+      <button class="who" id="who">${avatar(rel.frame, 38, { lover: rel.pinned })}<span style="min-width:0">
+        <span class="nm">${esc(displayName(rel.frame))}${rel.outing ? '<span class="tag">出遊中</span>' : ''}</span><div class="sub" id="sub">${sub()}</div></span></button>
+      <button class="icon-btn" id="more" aria-label="關於${ta(rel.frame)}">${icon('more')}</button>
+    </header>
+    ${rel.activity ? `<div class="walk-banner"><span>${ACT[rel.activity.type] || '一起'}${rel.activity.title ? `：${esc(rel.activity.title)}` : ''}・<span id="actMin"></span></span><button class="linkbtn small" id="actEnd">結束</button></div>` : ''}
+    <div class="stream" id="stream"></div>
+    ${rel.status === 'active' ? `<div class="composer" id="composer">
+      <button class="icon-btn" id="topicBtn" aria-label="話題錦囊" title="不知道說什麼？">${icon('spark')}</button>
+      <button class="icon-btn" id="photoBtn" aria-label="傳照片">${icon('photo')}</button>
+      <input type="file" id="photoIn" accept="image/*" hidden>
+      <textarea id="txt" rows="1" placeholder="跟${ta(rel.frame)}說…" aria-label="訊息"></textarea>
+      <button class="icon-btn" id="micBtn" aria-label="錄語音">${icon('mic')}</button>
+      <button class="icon-btn send" id="sendBtn" aria-label="送出" hidden>${icon('send')}</button>
+    </div>
+    <div class="composer" id="recComposer" hidden>
+      <button class="icon-btn" id="recCancel" aria-label="取消錄音">${icon('x')}</button>
+      <div class="rec-bar"><i></i><span id="recT">0:00</span><span class="small">錄音中</span></div>
+      <button class="icon-btn send" id="recSend" aria-label="送出語音">${icon('send')}</button>
+    </div>` : `<div class="composer"><p class="small muted" style="margin:6px auto">${ta(rel.frame)}留下的信收在「我們的故事」裡。</p></div>`}
+  </div>`;
+  $('#who').onclick = () => { location.hash = `#/profile/${rel.id}`; };
+  $('#more').onclick = () => openCharSheet(rel);
+  const stream = $('#stream');
+
+  const msgs = await api(`/api/rels/${relId}/messages`);
+  S.room.messages = msgs;
+  S.room.firstSceneId = msgs.find(m => m.kind === 'scene')?.id;
+  stream.innerHTML = msgs.map((m, i) => messageHtml(m, rel, msgs[i - 1])).join('');
+  stream.scrollTop = stream.scrollHeight;
+  markRead();
+  bindStream(stream);
+
+  if (rel.status !== 'active') return;
+  const txt = $('#txt'), sendBtn = $('#sendBtn'), micBtn = $('#micBtn');
+  const sync = () => { const has = !!txt.value.trim(); sendBtn.hidden = !has; micBtn.hidden = has; txt.style.height = 'auto'; txt.style.height = Math.min(120, txt.scrollHeight) + 'px'; };
+  txt.oninput = sync;
+  txt.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && matchMedia('(pointer:fine)').matches) { e.preventDefault(); send(); } };
+  sendBtn.onclick = () => send();
+  // 回覆建議：他最後一則訊息附的 2–3 個好接的回覆
+  function drawSuggest() {
+    $('#suggest')?.remove();
+    if (S.me?.settings?.showSuggestions === false) return;
+    const last = S.room.messages.filter(m => typeof m.id === 'number' && m.kind !== 'card' || (m.card && ['meal', 'pin_request', 'postcard'].includes(m.card.type))).at(-1);
+    if (!last || last.sender !== 'char' || !last.suggest?.length) return;
+    const box = document.createElement('div');
+    box.id = 'suggest'; box.className = 'suggest';
+    const items = last.suggest.map(x => typeof x === 'string' ? { label: x, text: x } : x);
+    box.innerHTML = items.map((x, i) => `<button class="chip" data-i="${i}" title="${esc(x.text)}">${esc(x.label)}</button>`).join('');
+    $('#composer').before(box);
+    // 點方向 → 幫你寫好一句放進輸入框，可以改了再送
+    $$('.chip', box).forEach(c => c.onclick = () => { txt.value = items[c.dataset.i].text; sync(); txt.focus(); txt.setSelectionRange(txt.value.length, txt.value.length); track('suggest_pick', { label: items[c.dataset.i].label }); });
+  }
+  S.room.drawSuggest = drawSuggest;
+  drawSuggest();
+  $('#photoBtn').onclick = () => $('#photoIn').click();
+  $('#photoIn').onchange = async (e) => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    const blob = await shrinkImage(f);
+    const fd = new FormData(); fd.append('photo', blob, 'photo.jpg');
+    if (txt.value.trim()) { fd.append('text', txt.value.trim()); txt.value = ''; sync(); }
+    send(fd, URL.createObjectURL(blob));
+  };
+  micBtn.onclick = () => startRecording();
+  $('#topicBtn').onclick = () => openTopicBag();
+  $('#actEnd') && ($('#actEnd').onclick = async () => {
+    if (S.room.sending) return toast(`等${ta(rel.frame)}回完這一則`);
+    S.room.sending = true;
+    try { const r = await api(`/api/rels/${relId}/activity/end`, { method: 'POST' }); await revealSequential(r.messages || []); } catch (e) { toast(e.message); }
+    S.room.sending = false;
+    renderRoom(relId);
+  });
+  if (rel.activity) {
+    const tickAct = () => { const n = $('#actMin'); if (!n) return; const a = rel.activity;
+      n.textContent = a.type === 'focus' ? `還有 ${Math.max(1, Math.ceil((a.ends_at - Date.now()) / 60000))} 分鐘` : `${Math.max(1, Math.round((Date.now() - a.started_at) / 60000))} 分鐘`; };
+    tickAct(); S.timers.push(setInterval(tickAct, 20000));
+  }
+
+  async function openTopicBag() {
+    let t;
+    try { t = await api(`/api/rels/${relId}/topics`); } catch (e) { return toast(e.message); }
+    const P = ta(rel.frame);
+    openSheet(`<h3>話題錦囊</h3>
+      <button class="choice" id="tbLead"><b>💬 ${P}帶我聊</b><span>不知道要說什麼？讓${P}開個話題</span></button>
+      <div class="list-label">問${P}一件事</div><div class="tb-chips">${t.ask.map((q, i) => `<button class="chip" data-ask="${i}">${esc(q)}</button>`).join('')}</div>
+      <div class="list-label">玩個小遊戲</div><div class="tb-grid">${t.games.map(g => `<button class="tb-item" data-game="${g.id}"><b>${esc(g.label)}</b><span>${esc(g.desc)}</span></button>`).join('')}</div>
+      <div class="list-label">一起做點什麼</div><div class="tb-grid">${t.activities.map(a => `<button class="tb-item" data-act="${a.id}" ${rel.activity && a.id !== 'meal' ? 'disabled' : ''}><b>${esc(a.label)}</b><span>${esc(a.desc)}</span></button>`).join('')}</div>
+      <button class="choice" id="tbPhoto" style="margin-top:12px"><b>📷 分享一張照片</b><span>拍下你現在看到的，${P}會回應你</span></button>`, (sh, close) => {
+      $('#tbLead', sh).onclick = () => { close(); nudge({ kind: 'lead' }); };
+      $$('[data-ask]', sh).forEach(b => b.onclick = () => { close(); txt.value = t.ask[b.dataset.ask]; sync(); txt.focus(); });
+      $$('[data-game]', sh).forEach(b => b.onclick = () => { close(); nudge({ kind: 'game', id: b.dataset.game }); });
+      $$('[data-act]', sh).forEach(b => b.onclick = () => {
+        const id = b.dataset.act;
+        if (id === 'watch') {
+          sh.innerHTML = `<div class="grab"></div><h3>一起看什麼？</h3><input class="input" id="wTitle" maxlength="30" placeholder="劇名或電影（可以不填，讓${P}推薦）">
+            <button class="btn block" id="wGo" style="margin-top:12px">開始</button>`;
+          $('#wGo', sh).onclick = () => { const title = $('#wTitle', sh).value.trim(); close(); nudge({ kind: 'activity', id, title }); };
+          return;
+        }
+        close(); nudge({ kind: 'activity', id });
+      });
+      $('#tbPhoto', sh).onclick = () => { close(); $('#photoIn').click(); };
+    });
+  }
+
+  async function nudge(body) {
+    if (S.room.sending) return toast(`等${ta(rel.frame)}回完這一則`);
+    track('topic_bag', { kind: body.kind, id: body.id || null });
+    await exchange(() => api(`/api/rels/${relId}/nudge`, { method: 'POST', body }), 8);
+    if (body.kind === 'activity' && body.id !== 'meal') renderRoom(relId);
+  }
+
+  // 送出後的節奏：已讀 → 打字 → 一則一則出現；他在忙就先顯示「可能晚點回」
+  async function exchange(call, len) {
+    S.room.sending = true;
+    $('#suggest')?.remove();
+    const t0 = Date.now();
+    const quick = S.me?.settings?.realisticDelay === false || S.room.presence?.code === 'online' || /偷空/.test(S.room.presence?.label || '');
+    const rd = readMs(len);
+    let typing = null, typingAt = 0;
+    const readTimer = quick ? setTimeout(() => { markLocalRead(); typing = showTyping(); typingAt = Date.now(); }, rd) : null;
+    try {
+      const r = await call();
+      const res = Array.isArray(r) ? { messages: r } : r;
+      clearTimeout(readTimer);
+      if (res.pending) {
+        typing?.remove();
+        $$('.local', stream).forEach(n => n.remove());
+        await revealSequential(res.messages || [], {});
+        S.room.presence = res.pending.presence;
+        $('#sub').innerHTML = sub();
+        showPendingNote(res.pending);
+        return;
+      }
+      await sleep(t0 + rd - Date.now());
+      if (!typing) { markLocalRead(); typing = showTyping(); typingAt = Date.now(); }
+      $$('.local', stream).forEach(n => n.remove());
+      await revealSequential(res.messages || [], { typing, typingAt });
+    } catch (e) {
+      clearTimeout(readTimer); typing?.remove(); toast(e.message);
+    } finally { S.room.sending = false; }
+  }
+  function markLocalRead() {
+    $$('.local .msg.me .time', stream).forEach(t => { if (!$('.read', t)) t.insertAdjacentHTML('afterbegin', '<span class="read">已讀</span>'); });
+  }
+  function refreshReads() {
+    $$('.msg.me[data-id]', stream).forEach(m => {
+      const id = Number(m.dataset.id), t = $('.time', m);
+      if (id && id <= S.room.charReadId && t && !$('.read', t)) t.insertAdjacentHTML('afterbegin', '<span class="read">已讀</span>');
+    });
+  }
+  function showPendingNote(p) {
+    $('#pendingNote')?.remove();
+    const d = document.createElement('div');
+    d.id = 'pendingNote'; d.className = 'note pending-note';
+    const P = displayName(rel.frame);
+    d.textContent = p.presence?.code === 'dnd' ? `${P}睡了，醒來會回你` : p.presence?.code === 'busy' ? `${P}在上班，可能晚點回` : `${P}現在不在線上，等等會回你`;
+    stream.appendChild(d); stream.scrollTop = stream.scrollHeight;
+  }
+  if (rel.pendingReplyAt) showPendingNote({ presence: rel.presence });
+
+  async function send(form, previewUrl) {
+    if (S.room.sending) return toast(`等${ta(rel.frame)}回完這一則`);
+    let body;
+    if (!form) {
+      const text = txt.value.trim(); if (!text) return;
+      txt.value = ''; sync();
+      body = { text };
+      appendLocal({ sender: 'user', kind: 'text', text });
+    } else {
+      appendLocal(previewUrl ? { sender: 'user', kind: 'photo', media: previewUrl, text: form.get('text') } : { sender: 'user', kind: 'voice', media: null, text: '（語音傳送中）' });
+    }
+    const len = form ? 10 : body.text.length;
+    await exchange(() => form ? api(`/api/rels/${relId}/messages`, { method: 'POST', form }) : api(`/api/rels/${relId}/messages`, { method: 'POST', body }), len);
+  }
+
+  function appendLocal(m) {
+    const div = document.createElement('div');
+    div.className = 'local';
+    div.innerHTML = messageHtml({ ...m, id: 'local', at: Date.now() }, rel, S.room.messages.at(-1));
+    stream.appendChild(div);
+    stream.scrollTop = stream.scrollHeight;
+  }
+  function showTyping() {
+    const d = document.createElement('div');
+    d.className = 'msg him typing';
+    d.innerHTML = '<div class="bubble"><i></i><i></i><i></i></div>';
+    let gone = false;
+    stream.appendChild(d); stream.scrollTop = stream.scrollHeight;
+    return { remove: () => { gone = true; d.remove(); } };
+  }
+  async function revealSequential(fresh, { typing = null, typingAt = 0 } = {}) {
+    let first = true, gotChar = false;
+    for (const m of fresh) {
+      const prev = S.room.messages.at(-1);
+      if (S.room.messages.some(x => x.id === m.id)) continue;
+      if (m.sender === 'char' && m.kind !== 'card') {
+        gotChar = true;
+        $('#pendingNote')?.remove();
+        if (first && typing) { await sleep(typeMs(m) - (Date.now() - typingAt)); typing.remove(); typing = null; }
+        else { if (!first) await sleep(jitter(900)); const t = showTyping(); await sleep(typeMs(m)); t.remove(); }
+        first = false;
+      }
+      S.room.messages.push(m);
+      if (m.sender === 'char') S.room.charReadId = Math.max(S.room.charReadId, ...S.room.messages.filter(x => x.sender === 'user' && typeof x.id === 'number').map(x => x.id), 0);
+      const wrap = document.createElement('div');
+      wrap.className = 'reveal';
+      wrap.innerHTML = messageHtml(m, rel, prev);
+      stream.appendChild(wrap);
+      bindStream(wrap);
+      stream.scrollTop = stream.scrollHeight;
+      if (['ended', 'outing'].includes(m.card?.type) || (m.card?.type === 'activity')) { typing?.remove(); setTimeout(() => renderRoom(relId), 1500); return; }
+    }
+    typing?.remove();
+    if (gotChar) { S.room.presence = { code: 'online', label: '上線中' }; $('#sub') && ($('#sub').innerHTML = sub()); refreshReads(); setTimeout(() => maybeAskNotify(rel), 1800); }
+    markRead();
+    S.room.drawSuggest?.();
+  }
+  S.room.reveal = revealSequential;
+
+  async function startRecording() {
+    if (!navigator.mediaDevices?.getUserMedia) return toast('這個瀏覽器不能錄音');
+    let stream0;
+    try { stream0 = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch { return toast('需要麥克風權限才能錄語音'); }
+    const type = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm'].find(t => window.MediaRecorder?.isTypeSupported?.(t)) || '';
+    const rec = new MediaRecorder(stream0, type ? { mimeType: type } : undefined);
+    const chunks = []; const started = Date.now();
+    rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    const comp = $('#composer'), recC = $('#recComposer');
+    comp.hidden = true; recC.hidden = false; $('#recT').textContent = '0:00';
+    const timer = setInterval(() => { const s = Math.round((Date.now() - started) / 1000); $('#recT').textContent = `${Math.floor(s / 60)}:${pad(s % 60)}`; if (s >= 60) $('#recSend').click(); }, 500);
+    const stop = (sendIt) => {
+      clearInterval(timer);
+      rec.onstop = () => {
+        stream0.getTracks().forEach(t => t.stop());
+        comp.hidden = false; recC.hidden = true;
+        if (!sendIt) return;
+        const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
+        if (blob.size < 1500) return toast('太短了，再錄一次');
+        const fd = new FormData();
+        fd.append('voice', blob, (rec.mimeType || '').includes('mp4') ? 'voice.m4a' : 'voice.webm');
+        fd.append('duration', String(Math.round((Date.now() - started) / 1000)));
+        send(fd);
+      };
+      rec.stop();
+    };
+    $('#recCancel').onclick = () => stop(false);
+    $('#recSend').onclick = () => stop(true);
+    rec.start();
+  }
+
+  // poll for proactive messages while the room is open
+  S.timers.push(setInterval(async () => {
+    if (document.visibilityState !== 'visible' || S.room.sending) return;
+    const lastId = S.room.messages.filter(m => typeof m.id === 'number').at(-1)?.id || 0;
+    try { const fresh = await api(`/api/rels/${relId}/messages?after=${lastId}`); if (fresh.length) await revealSequential(fresh); } catch {}
+  }, 8000));
+  S.timers.push(setInterval(async () => {
+    if (document.visibilityState !== 'visible' || S.room.sending) return;
+    try { const r = await api(`/api/rels/${relId}`); S.room.presence = r.presence; $('#sub').innerHTML = sub(); } catch {}
+  }, 60000));
+
+  function markRead() {
+    const lastId = S.room.messages.filter(m => typeof m.id === 'number').at(-1)?.id;
+    if (lastId) api(`/api/rels/${relId}/read`, { method: 'POST', body: { lastId } }).then(() => { badgeAt = 0; }).catch(() => {});
+  }
+}
+
+// ---------- 角色個人頁（像 LINE 的主頁）----------
+async function renderProfile(relId) {
+  tabs.hidden = true;
+  let p;
+  try { p = await api(`/api/rels/${relId}/profile`); } catch (e) { toast(e.message); location.hash = '#/chat'; return; }
+  const f = p.frame, P = ta(f);
+  const days = (f.schedule?.days || []).map(d => '日一二三四五六'[d]).join('、');
+  app.innerHTML = `<div class="profile">
+    <div class="cover">${sceneSVG(p.cover, { label: `${f.name}工作的地方` })}
+      <a class="icon-btn cover-back" href="#/chat/${p.id}" aria-label="回到聊天">${icon('back')}</a></div>
+    <div class="pf-head">${avatar(f, 96, { lover: p.pinned, season: true })}
+      <h1 class="pf-name">${esc(displayName(f))}</h1>
+      ${p.signature ? `<p class="signature">${esc(p.signature)}</p>` : `<p class="signature muted">${P}還沒有寫個性簽名</p>`}
+      <p class="pf-pres small">${presenceDot(p.presence)}${esc(presenceText(p.presence))}</p>
+      ${p.statusLine && Date.now() - p.statusLineAt < 24 * 3600e3 ? `<p class="pf-mood">「${esc(p.statusLine)}」<span class="muted small">・${ago(p.statusLineAt)}</span></p>` : ''}
+      <div class="pf-chips"><span>${esc(f.age)} 歲</span><span>${esc(f.nationality)}</span><span>${esc(f.jobLabel)}</span>${p.mode === 'practice' ? `<span>${esc(p.stageLabel)}</span>` : ''}</div>
+      <div class="pf-actions"><a class="btn" href="#/chat/${p.id}" style="text-decoration:none">聊天</a><button class="btn ghost" id="pfSet">設定</button></div>
+    </div>
+    <div class="page pf-body">
+      <div class="section">
+        <div class="row"><span class="muted small" style="width:64px">關於</span><span class="grow">${esc(f.intro || '')}</span></div>
+        ${f.catchphrases?.length ? `<div class="row"><span class="muted small" style="width:64px">常說</span><span class="grow hand" style="font-size:16px">${f.catchphrases.map(x => `「${esc(x)}」`).join(' ')}</span></div>` : ''}
+        <div class="row"><span class="muted small" style="width:64px">上班</span><span class="grow">星期${esc(days)}・${esc(f.schedule?.start)}–${esc(f.schedule?.end)}</span></div>
+        ${p.weekend ? `<div class="row"><span class="muted small" style="width:64px">休假</span><span class="grow">${esc(p.weekend)}</span></div>` : ''}
+      </div>
+      <h2>${P}的動態</h2>
+      ${p.posts.length ? `<div class="posts">${p.posts.map(x => `<article class="post">${avatar(f, 36, { season: false })}<div class="grow"><div class="post-text hand">${esc(x.text)}</div><time>${ago(x.at)}</time></div></article>`).join('')}</div>`
+        : `<p class="muted small">${P}分享生活的時候，會留在這裡。</p>`}
+    </div></div>`;
+  $('#pfSet').onclick = async () => openCharSheet(await api(`/api/rels/${relId}`));
+}
+
+let currentAudio = null;
+function bindStream(root) {
+  $$('[data-audio]', root).forEach(b => b.onclick = () => {
+    if (!b.dataset.audio || b.dataset.audio === 'null') return;
+    if (currentAudio) { currentAudio.pause(); }
+    const a = new Audio(b.dataset.audio);
+    currentAudio = a;
+    const bars = $$('.wave i', b.parentElement);
+    a.ontimeupdate = () => { const p = a.currentTime / (a.duration || 1); bars.forEach((x, i) => x.classList.toggle('on', i / bars.length <= p)); };
+    a.onended = () => bars.forEach(x => x.classList.remove('on'));
+    a.play().catch(() => toast('播放失敗'));
+  });
+  $$('[data-tx]', root).forEach(b => b.onclick = () => { const t = b.nextElementSibling; t.hidden = !t.hidden; b.textContent = t.hidden ? '轉文字' : '收起'; });
+  $$('[data-meal]', root).forEach(b => b.onclick = async () => {
+    // open the window first (synchronously) so iOS doesn't block it as a popup
+    const w = window.open('about:blank', '_blank');
+    try {
+      const r = await api(`/api/meal/${b.dataset.meal}/choose`, { method: 'POST', body: { idx: Number(b.dataset.idx) } });
+      if (w) w.location = r.url; else location.href = r.url;
+      const card = b.closest('[data-id]');
+      card.querySelectorAll('[data-meal]').forEach(x => x.remove());
+      b.closest('.meal-opt')?.classList.add('chosen');
+      card.querySelector('.actions')?.replaceWith(Object.assign(document.createElement('p'), { className: 'small muted', textContent: '已經幫你打開 Uber Eats 了' }));
+    } catch (e) { w?.close(); toast(e.message); }
+  });
+  $$('[data-meal-no]', root).forEach(b => b.onclick = async () => {
+    await api(`/api/meal/${b.dataset.mealNo}/decline`, { method: 'POST' }).catch(() => {});
+    const card = b.closest('[data-id]');
+    card.querySelectorAll('[data-meal]').forEach(x => x.remove());
+    b.closest('.actions').replaceWith(Object.assign(document.createElement('p'), { className: 'small muted', textContent: '今天先不用' }));
+  });
+  $$('[data-pin]', root).forEach(b => b.onclick = async () => {
+    const relId = S.room.rel.id;
+    b.closest('.actions').innerHTML = '<span class="small muted">……</span>';
+    try {
+      await api(`/api/rels/${relId}/pin`, { method: 'POST', body: { accept: b.dataset.pin === 'yes', msgId: Number(b.dataset.msg) } });
+      renderRoom(relId);
+    } catch (e) { toast(e.message); }
+  });
+}
+
+async function shrinkImage(file, max = 1280) {
+  const img = await createImageBitmap(file).catch(() => null);
+  if (!img) return file;
+  const k = Math.min(1, max / Math.max(img.width, img.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return new Promise(r => c.toBlob(b => r(b || file), 'image/jpeg', 0.85));
+}
+
+// ---------- character sheet ----------
+function openCharSheet(rel) {
+  const f = rel.frame;
+  const days = (f.schedule?.days || []).map(d => '日一二三四五六'[d]).join('、');
+  openSheet(`
+    <div style="display:flex;gap:14px;align-items:center;margin-bottom:12px">${avatar(f, 64, { lover: rel.pinned })}
+      <div><h3 style="margin:0">${esc(displayName(f))}</h3><div class="small muted">${esc(f.age)} 歲・${esc(f.nationality)}・${esc(f.jobLabel)}</div>
+      <div class="small muted">${esc(f.archetypeLabel || '')}・上班日 星期${esc(days)} ${esc(f.schedule?.start)}–${esc(f.schedule?.end)}</div></div></div>
+    ${f.intro ? `<p class="hand" style="font-size:16px">${esc(f.intro)}</p>` : ''}
+    ${rel.status === 'active' ? `
+    <div class="section">
+      <div class="row"><label for="star">特別關注</label><input type="checkbox" id="star" ${rel.starred ? 'checked' : ''}></div>
+      <div class="row"><div class="grow">關係模式<div class="small muted" id="modeHelp"></div></div>
+        <div class="seg" role="group"><button data-mode="practice" aria-pressed="${rel.mode === 'practice'}">練習</button><button data-mode="real" aria-pressed="${rel.mode === 'real'}" ${rel.stage < 1 ? 'disabled' : ''}>真實</button></div></div>
+      ${rel.stage >= 3 ? `<div class="row"><label for="pin">置頂在聊天首頁</label><input type="checkbox" id="pin" ${rel.pinned ? 'checked' : ''}></div>` : ''}
+    </div>
+    ${rel.startType === 'friend' ? `<h2 style="margin-top:18px">你們共同的過去</h2><p class="small muted">這些是相遇時設定的回憶，和你們真正聊出來的記憶分開保存。</p>
+      <textarea class="input" id="setmem" rows="4">${esc((rel.settingMemories || []).map(m => m.content).join('\n'))}</textarea>
+      <button class="btn ghost sm" id="saveMem" style="margin-top:8px">儲存</button>` : ''}
+    ${rel.canShare ? `<h2>分享${P}</h2><p class="small muted">只會分享${P}的個性與說話方式；你們的聊天和回憶永遠不會分享。</p><button class="btn ghost sm" id="share">讓其他人也能認識他</button>` : ''}
+    <h2>其他</h2>
+    <button class="btn danger sm" id="end">結束這段關係</button>` : `
+    <div class="section">
+      <div class="row"><label for="block">不想再遇到${P}</label><input type="checkbox" id="block" ${rel.blocked ? 'checked' : ''}></div>
+    </div>
+    <button class="btn danger sm" id="del">永久刪除這段故事</button>`}
+    <p style="margin-top:18px"><button class="linkbtn small" id="reportIssue">聊天怪怪的？回報問題</button></p>
+    <p class="small muted">${esc(f.name)}是 AI 角色。</p>`,
+  (sheet, close) => {
+    const modeHelp = () => {
+      const m = $('[data-mode][aria-pressed="true"]', sheet)?.dataset.mode;
+      $('#modeHelp', sheet) && ($('#modeHelp', sheet).textContent = rel.stage < 1 ? '成為朋友之後可以開啟真實模式' :
+        m === 'real' ? `關係完全隱形，只能從${P}的言行感覺；${P}可能冷戰或提分手` : `會看到里程碑和輕提示，${P}不會跟你分手`);
+    };
+    modeHelp();
+    $('#star', sheet) && ($('#star', sheet).onchange = (e) => api(`/api/rels/${rel.id}`, { method: 'PATCH', body: { starred: e.target.checked } }).then(() => { rel.starred = e.target.checked; }));
+    $('#pin', sheet) && ($('#pin', sheet).onchange = (e) => api(`/api/rels/${rel.id}`, { method: 'PATCH', body: { pinned: e.target.checked } }));
+    $$('[data-mode]', sheet).forEach(b => b.onclick = async () => {
+      if (b.disabled) return;
+      if (b.dataset.mode === 'real' && rel.mode !== 'real' && !confirm(`真實模式下，關係進度完全看不見，${P}也可能冷戰或提分手。要開啟嗎？`)) return;
+      try {
+        await api(`/api/rels/${rel.id}`, { method: 'PATCH', body: { mode: b.dataset.mode } });
+        rel.mode = b.dataset.mode;
+        $$('[data-mode]', sheet).forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+        modeHelp();
+      } catch (e) { toast(e.message); }
+    });
+    $('#saveMem', sheet) && ($('#saveMem', sheet).onclick = async () => {
+      await api(`/api/rels/${rel.id}/setting-memories`, { method: 'PUT', body: { items: $('#setmem', sheet).value.split('\n') } });
+      toast('已儲存');
+    });
+    $('#share', sheet) && ($('#share', sheet).onclick = () => { close(); openShareSheet(rel); });
+    $('#reportIssue', sheet).onclick = () => { close(); openReportSheet(rel); };
+    $('#end', sheet) && ($('#end', sheet).onclick = async () => {
+      if (!confirm(`要結束和${f.name}的關係嗎？${P}會留下一封信，你們的故事會保留在「我們的故事」。`)) return;
+      await api(`/api/rels/${rel.id}/end`, { method: 'POST' });
+      close(); renderRoom(rel.id);
+    });
+    $('#block', sheet) && ($('#block', sheet).onchange = (e) => api(`/api/rels/${rel.id}/block`, { method: 'POST', body: { blocked: e.target.checked } }));
+    $('#del', sheet) && ($('#del', sheet).onclick = async () => {
+      if (!confirm('永久刪除後，聊天、回憶、照片都會消失，不能復原。確定嗎？')) return;
+      await api(`/api/rels/${rel.id}`, { method: 'DELETE' });
+      close(); location.hash = '#/story';
+    });
+  });
+}
+
+function openReportSheet(rel) {
+  openSheet(`<h3>回報問題</h3>
+    <p class="small muted">例如：${ta(rel.frame)}說的話和設定不符、突然沒回應、重複同樣的話、按鈕沒反應。</p>
+    <textarea class="input" id="rpText" rows="4" placeholder="發生了什麼事？"></textarea>
+    <label class="check"><input type="checkbox" id="rpChat" checked><span>附上最近的 16 則對話，幫助我們找原因（只有負責測試的人看得到）</span></label>
+    <button class="btn block" id="rpSend">送出</button>`, (sheet, close) => {
+    $('#rpSend', sheet).onclick = async () => {
+      const text = $('#rpText', sheet).value.trim();
+      if (!text) return toast('寫一下發生了什麼');
+      try { await api(`/api/rels/${rel.id}/report-issue`, { method: 'POST', body: { text, includeChat: $('#rpChat', sheet).checked } }); close(); toast('收到了，謝謝你'); }
+      catch (e) { toast(e.message); }
+    };
+  });
+}
+
+async function openShareSheet(rel) {
+  const close = openSheet(`<p class="hand">正在整理${ta(rel.frame)}的樣子……</p>`);
+  let d;
+  try { d = await api(`/api/rels/${rel.id}/share-preview`, { method: 'POST' }); } catch (e) { close(); return toast(e.message); }
+  close();
+  openSheet(`<h3>分享前，確認一下${ta(rel.frame)}的人設</h3>
+    <p class="small muted">其他人拿到的是一份複本，會從朋友期重新認識${ta(rel.frame)}。</p>
+    <label class="field"><span>一句介紹</span><input class="input" id="s_intro" value="${esc(d.intro)}"></label>
+    <label class="field"><span>核心性格</span><input class="input" id="s_traits" value="${esc(d.traits)}"></label>
+    <label class="field"><span>說話方式</span><input class="input" id="s_speech" value="${esc(d.speech)}"></label>
+    <label class="field"><span>口頭禪（用「、」分開）</span><input class="input" id="s_cp" value="${esc((d.catchphrases || []).join('、'))}"></label>
+    <label class="field"><span>價值觀</span><input class="input" id="s_values" value="${esc(d.values)}"></label>
+    <label class="field"><span>週末</span><input class="input" id="s_weekend" value="${esc(d.weekend)}"></label>
+    <button class="btn block" id="pub">發布到角色廣場</button>`, (sheet, c2) => {
+    $('#pub', sheet).onclick = async () => {
+      const v = (k) => $(`#s_${k}`, sheet).value;
+      try {
+        await api(`/api/rels/${rel.id}/share`, { method: 'POST', body: { intro: v('intro'), traits: v('traits'), speech: v('speech'), catchphrases: v('cp').split(/[、,，]/).map(s => s.trim()).filter(Boolean), values: v('values'), weekend: v('weekend') } });
+        c2(); toast('已發布到角色廣場');
+      } catch (e) { toast(e.message); }
+    };
+  });
+}
+
+// ======================================================================
+// 探索：角色廣場
+// ======================================================================
+async function renderExplore() {
+  const list = await api('/api/templates');
+  const official = list.filter(t => t.kind === 'official');
+  const shared = list.filter(t => t.kind === 'shared');
+  const tile = (t) => `<button class="tile" data-id="${esc(t.id)}">${avatar(t.frame, 52, { season: false })}
+    <span class="nm">${esc(t.frame.name)}</span><span class="info">${esc(t.frame.jobLabel)}・${esc(t.frame.archetypeLabel || '')}</span>
+    <span class="intro">${esc(t.frame.intro || '')}</span><span class="by">${t.kind === 'official' ? '官方角色' : `${esc(t.creator)} 塑造`}</span></button>`;
+  app.innerHTML = `<div class="page"><h1>探索</h1>
+    <h2 style="margin-top:0">住在這座城市裡的人</h2>
+    ${official.length ? `<div class="grid">${official.map(tile).join('')}</div>` : `<div class="empty" style="padding:8px 0 16px"><div class="empty-art">${sceneSVG('city', { label: '城市' })}</div><p class="muted">這座城市裡的人，你都認識了。</p></div>`}
+    <h2>大家塑造的人</h2>
+    ${shared.length ? `<div class="grid">${shared.map(tile).join('')}</div>` : `<p class="muted">還沒有人分享。你和${TA()}聊得夠熟之後，可以讓其他人也認識${TA()}。</p>`}
+  </div>`;
+  $$('.tile').forEach(b => b.onclick = () => {
+    const t = list.find(x => x.id === b.dataset.id);
+    const f = t.frame;
+    openSheet(`<div style="display:flex;gap:14px;align-items:center">${avatar(f, 64, { season: false })}<div><h3 style="margin:0">${esc(f.name)}</h3>
+      <div class="small muted">${esc(f.age)} 歲・${esc(f.nationality)}・${esc(f.jobLabel)}・${esc(f.archetypeLabel || '')}</div></div></div>
+      ${f.signature ? `<p class="signature" style="margin-top:12px">${esc(f.signature)}</p>` : ''}
+      <p class="hand" style="font-size:17px;margin-top:14px">${esc(f.intro || '')}</p>
+      <p class="small">${esc(f.traits || '')}</p>
+      ${f.catchphrases?.length ? `<p class="small muted">常說：${f.catchphrases.map(x => `「${esc(x)}」`).join(' ')}</p>` : ''}
+      ${t.kind === 'shared' ? `<p class="small muted">由 ${esc(t.creator)} 塑造。你拿到的是複本，${ta(f)}會從頭認識你。</p>` : ''}
+      <button class="btn block" id="meetHim">認識${ta(f)}</button>
+      ${t.kind === 'shared' ? '<p style="text-align:center;margin-top:12px"><button class="linkbtn small" id="report">檢舉這個角色</button></p>' : ''}`,
+    (sheet, close) => {
+      $('#meetHim', sheet).onclick = () => { close(); Object.assign(M, { templateId: t.id, frame: f, custom: null, reunionRelId: null }); location.hash = '#/meet/where'; };
+      $('#report', sheet) && ($('#report', sheet).onclick = async () => {
+        const reason = prompt('哪裡不適合？（例如：模仿真人、未成年設定）'); if (reason === null) return;
+        await api(`/api/templates/${t.id}/report`, { method: 'POST', body: { reason } }); close(); toast('謝謝，我們會處理');
+      });
+    });
+  });
+}
+
+// ======================================================================
+// 我們的故事
+// ======================================================================
+async function renderStory() {
+  const data = await api('/api/story');
+  if (!data.length) {
+    app.innerHTML = `<div class="page"><h1>我們的故事</h1><div class="empty"><div class="empty-art">${sceneSVG('album', { label: '相片' })}</div><p class="hand">故事還沒開始</p><p class="muted">分享照片、一起出門、${TA()}第一次叫你的小名，都會收在這裡。</p></div></div>`;
+    return;
+  }
+  const sel = S.storySel && data.find(d => d.rel.id === S.storySel) ? S.storySel : (data.find(d => d.rel.pinned) || data.find(d => d.rel.status === 'active') || data[0]).rel.id;
+  S.storySel = sel;
+  const cur = data.find(d => d.rel.id === sel);
+  const items = cur.items;
+  const milestones = items.filter(i => i.type === 'milestone');
+  const photos = items.filter(i => i.type === 'photo');
+  const places = {};
+  photos.filter(p => p.place).forEach(p => { places[p.place] = places[p.place] || []; places[p.place].push(p); });
+  const trips = items.filter(i => i.type === 'travelogue');
+  const postcards = items.filter(i => i.type === 'postcard');
+  const letter = items.find(i => i.type === 'letter');
+  app.innerHTML = `<div class="page"><h1>我們的故事</h1>
+    <div class="story-tabs">${data.map(d => `<button data-rel="${d.rel.id}" aria-pressed="${d.rel.id === sel}">${avatar(d.rel.frame, 48, { season: false, lover: d.rel.pinned })}<span>${esc(displayName(d.rel.frame))}${d.rel.status === 'ended' ? '・已結束' : ''}</span></button>`).join('')}</div>
+    <p class="small muted">${dateStr(cur.rel.createdAt)} 相遇${cur.rel.status === 'ended' ? `・${dateStr(cur.rel.endedAt)} 分開` : ''}</p>
+    ${letter ? `<h2>${ta(cur.rel.frame)}留給你的信</h2><div class="letter">${esc(letter.body)}</div>` : ''}
+    <h2>里程碑</h2>
+    ${milestones.length ? `<div class="timeline">${milestones.slice().reverse().map(m => `<div class="tl-item"><div class="t">${esc(m.title)}</div><time>${dateStr(m.at)}</time></div>`).join('')}</div>` : '<p class="muted small">還沒有。慢慢來。</p>'}
+    <h2>回憶地圖</h2>
+    ${Object.keys(places).length ? `<div class="places">${Object.entries(places).map(([name, ps]) => `<div class="place"><span class="pin"><b>${ps.length}</b></span><span class="grow"><div class="nm">${esc(name)}</div><div class="small muted">${dateStr(ps.at(-1).at)} 第一次一起看</div></span></div>`).join('')}</div>` : '<p class="muted small">傳景色給他，告訴他是哪裡，就會記在這裡。</p>'}
+    <h2>明信片</h2>
+    ${postcards.length ? `<div class="pc-grid">${postcards.map(p => `<button class="pc-thumb" data-pc="${p.id}">${postcardHtml({ media: p.media[0], scene: p.scene, message: p.body, place: p.place, at: p.at, name: p.scene ? cur.rel.frame.name : '', from: p.scene ? 'him' : 'walk' })}</button>`).join('')}</div>`
+      : `<p class="muted small">和${ta(cur.rel.frame)}一起散步時拍的照片會變成明信片；${ta(cur.rel.frame)}休假時也會寄明信片給你。</p>`}
+    <h2>相簿</h2>
+    ${photos.length ? `<div class="album">${photos.map(p => `<button data-photo="${p.id}"><img src="${p.media[0]}" alt="${esc(p.place || '你分享的照片')}" loading="lazy"></button>`).join('')}</div>` : '<p class="muted small">你分享給他的照片會在這裡。</p>'}
+    <h2>遊記</h2>
+    ${trips.length ? trips.map(t => `<div class="trip">${t.media[0] ? `<img src="${t.media[0]}" alt="">` : ''}<div class="body"><div class="t">${esc(t.title)}</div>
+      <div class="small muted">${dateStr(t.at)}${t.place ? `・${esc(t.place)}` : ''}</div><p>${esc(t.body)}</p>
+      <button class="btn ghost sm" data-card="${t.id}">做成分享圖卡</button></div></div>`).join('') : `<p class="muted small">跟${ta(cur.rel.frame)}說要出門，${ta(cur.rel.frame)}會問你要不要帶${ta(cur.rel.frame)}一起去。</p>`}
+    ${milestones.length ? `<p style="margin-top:20px"><button class="btn ghost sm" id="msCard">把最新的里程碑做成圖卡</button></p>` : ''}
+  </div>`;
+  $$('[data-rel]').forEach(b => b.onclick = () => { S.storySel = b.dataset.rel; renderStory(); });
+  $$('[data-pc]').forEach(b => b.onclick = () => {
+    const p = postcards.find(x => String(x.id) === b.dataset.pc);
+    const c = { media: p.media[0], scene: p.scene, message: p.body, place: p.place, at: p.at, name: p.scene ? cur.rel.frame.name : '', from: p.scene ? 'him' : 'walk' };
+    openSheet(`${postcardHtml(c, { large: true })}<button class="btn ghost block" id="pcShare" style="margin-top:14px">做成分享圖卡</button>`, (sheet) => {
+      $('#pcShare', sheet).onclick = () => makeShareCard({ hue: cur.rel.frame.hue, kicker: p.scene ? `${cur.rel.frame.name}寄來的明信片` : `和${cur.rel.frame.name}散步`, title: p.place || '明信片', body: p.body, date: dateStr(p.at), photo: p.media[0] });
+    });
+  });
+  $$('[data-photo]').forEach(b => b.onclick = () => {
+    const p = photos.find(x => String(x.id) === b.dataset.photo);
+    openSheet(`<img src="${p.media[0]}" alt="" style="width:100%;border-radius:14px"><p class="hand" style="font-size:17px">${esc(p.place || '')}</p><p class="small muted">${dateStr(p.at)}</p>`);
+  });
+  $$('[data-card]').forEach(b => b.onclick = () => {
+    const t = trips.find(x => String(x.id) === b.dataset.card);
+    makeShareCard({ hue: cur.rel.frame.hue, kicker: `和${cur.rel.frame.name}的遊記`, title: t.title, body: t.body, date: dateStr(t.at), photo: t.media[0] });
+  });
+  $('#msCard') && ($('#msCard').onclick = () => {
+    const m = milestones[0];
+    makeShareCard({ hue: cur.rel.frame.hue, kicker: `我和${cur.rel.frame.name}`, title: `今天，${m.title}`, body: '', date: dateStr(m.at) });
+  });
+}
+
+// 9:16 限動圖卡
+async function makeShareCard({ hue, kicker, title, body, date, photo }) {
+  const W = 1080, H = 1920;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  await document.fonts.load('700 80px "LXGW WenKai TC"').catch(() => {});
+  const grad = g.createLinearGradient(0, 0, W, H);
+  grad.addColorStop(0, `hsl(${hue} 45% 88%)`); grad.addColorStop(1, `hsl(${(hue + 40) % 360} 40% 72%)`);
+  g.fillStyle = grad; g.fillRect(0, 0, W, H);
+  let y = 260;
+  if (photo) {
+    const img = await new Promise(r => { const i = new Image(); i.onload = () => r(i); i.onerror = () => r(null); i.src = photo; });
+    if (img) {
+      const bw = 880, bh = 880, k = Math.max(bw / img.width, bh / img.height);
+      g.save(); roundRect(g, 100, 200, bw, bh, 48); g.clip();
+      g.drawImage(img, 100 + (bw - img.width * k) / 2, 200 + (bh - img.height * k) / 2, img.width * k, img.height * k);
+      g.restore(); y = 1180;
+    }
+  }
+  g.fillStyle = '#26223A';
+  g.font = '40px "LXGW WenKai TC", serif'; g.globalAlpha = .7; g.fillText(kicker, 100, y); g.globalAlpha = 1;
+  g.font = '700 84px "LXGW WenKai TC", serif'; y = wrapText(g, title, 100, y + 110, 880, 110);
+  if (body) { g.font = '44px "LXGW WenKai TC", serif'; y = wrapText(g, body, 100, y + 40, 880, 72, photo ? 5 : 12); }
+  g.font = '34px "Noto Sans TC", sans-serif'; g.globalAlpha = .6; g.fillText(`${date}・伴旅 WithU`, 100, H - 140); g.globalAlpha = 1;
+  c.toBlob(async (blob) => {
+    const file = new File([blob], 'story-card.png', { type: 'image/png' });
+    track('share_card', {});
+    if (navigator.canShare?.({ files: [file] })) { try { await navigator.share({ files: [file] }); return; } catch {} }
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'story-card.png'; a.click();
+  }, 'image/png');
+}
+function roundRect(g, x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
+function wrapText(g, text, x, y, maxW, lh, maxLines = 99) {
+  let line = '', lines = 0;
+  for (const ch of text.replace(/\n/g, '')) {
+    if (g.measureText(line + ch).width > maxW) { g.fillText(line, x, y); y += lh; line = ch; if (++lines >= maxLines) return y; }
+    else line += ch;
+  }
+  if (line) { g.fillText(line, x, y); y += lh; }
+  return y;
+}
+
+// ======================================================================
+// 我
+// ======================================================================
+const COMING = [
+  { key: 'voice_pack', name: '聲線包', desc: '換一種聲線說話' },
+  { key: 'anniversary', name: '紀念日劇情', desc: '生日、交往紀念日的限定劇情與語音' },
+  { key: 'outfit', name: '季節穿搭', desc: '頭像換上當季造型' },
+  { key: 'theme', name: '聊天室主題', desc: '換一個屬於你們的聊天背景' },
+];
+
+async function renderMe() {
+  S.me = await api('/api/me');
+  const st = S.me.settings || {};
+  const pushOn = 'Notification' in window && Notification.permission === 'granted';
+  app.innerHTML = `<div class="page"><h1>我</h1>
+    <div class="section">
+      <div class="row"><span class="grow">暱稱</span><input class="input" id="nick" style="max-width:55%" value="${esc(S.me.nickname)}"></div>
+      <div class="row"><span class="grow">對方怎麼稱呼你</span><input class="input" id="call" style="max-width:55%" value="${esc(S.me.callName)}"></div>
+      <div class="row"><span class="grow">你是</span><div class="seg">${[['female', '女生'], ['male', '男生'], ['other', '不想說']].map(([v, l]) => `<button data-gd="${v}" aria-pressed="${S.me.gender === v}">${l}</button>`).join('')}</div></div>
+      <div class="row"><span class="grow">想遇見<div class="small muted">影響探索和相遇推薦</div></span><div class="seg">${[['male', '男生'], ['female', '女生'], ['any', '都可以']].map(([v, l]) => `<button data-sk="${v}" aria-pressed="${S.me.seeks === v}">${l}</button>`).join('')}</div></div>
+    </div>
+
+    <h2>通知</h2>
+    <div class="section">
+      <div class="row"><div class="grow">有新訊息時通知我<div class="small muted">${isIOS() && !isStandalone() ? 'iPhone 需要先「加入主畫面」' : S.me.pushKey ? '' : '伺服器尚未設定推播'}</div></div>
+        <button class="btn sm ${pushOn ? 'ghost' : ''}" id="push" ${!S.me.pushKey ? 'disabled' : ''}>${pushOn ? '已開啟' : '開啟'}</button></div>
+      <div class="row"><label for="sugg" class="grow">顯示回覆方向<div class="small muted">不知道怎麼回的時候，點一下幫你寫好一句</div></label><input type="checkbox" id="sugg" ${st.showSuggestions !== false ? 'checked' : ''}></div>
+      <div class="row"><label for="rdelay" class="grow">忙的時候晚點回<div class="small muted">上班、睡覺時會晚一點才回你，比較像真人</div></label><input type="checkbox" id="rdelay" ${st.realisticDelay !== false ? 'checked' : ''}></div>
+      <div class="row"><span class="grow">頭像畫風</span><div class="seg">${[['auto', '依角色'], ['real', '寫實'], ['anime', '二次元']].map(([v, l]) => `<button data-ps="${v}" aria-pressed="${(st.portraitStyle || 'auto') === v}">${l}</button>`).join('')}</div></div>
+      <div class="row"><span class="grow">通知預覽</span><div class="seg"><button data-np="full" aria-pressed="${st.notifyPreview !== 'discreet'}">顯示內容</button><button data-np="discreet" aria-pressed="${st.notifyPreview === 'discreet'}">只顯示有新訊息</button></div></div>
+      <div class="row"><label for="discreet" class="grow">低調模式<div class="small muted">名字和頭像改成被看到也不尷尬的樣子</div></label><input type="checkbox" id="discreet" ${st.discreetNames ? 'checked' : ''}></div>
+    </div>
+
+    <h2>${TA()}主動找你</h2>
+    <div class="section">
+      <div class="row"><span class="grow">頻率</span><div class="seg">${[['low', '少一點'], ['normal', '剛好'], ['high', '多一點']].map(([v, l]) => `<button data-lv="${v}" aria-pressed="${(st.proactiveLevel || 'normal') === v}">${l}</button>`).join('')}</div></div>
+      <div class="row"><span class="grow">每天最多</span><select class="input" id="cap" style="max-width:110px">${[2, 4, 6, 8, 12].map(n => `<option ${Number(st.dailyCap || 6) === n ? 'selected' : ''}>${n}</option>`).join('')}</select><span>則</span></div>
+      <div class="row"><span class="grow">勿擾時段</span><input type="time" class="input" id="dndS" style="max-width:110px" value="${esc(st.dndStart || '23:30')}"><span>–</span><input type="time" class="input" id="dndE" style="max-width:110px" value="${esc(st.dndEnd || '07:30')}"></div>
+      <div class="row"><span class="grow">平常吃午餐</span><input type="time" class="input" id="lunch" style="max-width:110px" value="${esc(st.lunchAt || '12:15')}"></div>
+      <div class="row"><span class="grow">平常吃晚餐</span><input type="time" class="input" id="dinner" style="max-width:110px" value="${esc(st.dinnerAt || '19:00')}"></div>
+    </div>
+    <p class="small muted">你在聊天中說「白天別吵我」，${TA()}也會遵守。</p>
+
+    <h2>即將推出</h2>
+    <p class="small muted">測試期間所有功能都開放。下面這些還在做，點一下告訴我們你有沒有興趣。</p>
+    <div class="section">${COMING.map(c => `<div class="row"><span class="grow">${c.name}<div class="small muted">${c.desc}</div></span><button class="btn ghost sm" data-coming="${c.key}">想要</button></div>`).join('')}</div>
+
+    <h2>隱私與資料</h2>
+    <div class="section">
+      <div class="row"><span class="grow">登入碼<div class="small muted">換裝置時用它回來</div></span><code>${esc(S.me.recoveryCode)}</code></div>
+      <div class="row"><span class="grow">下載我的資料</span><a class="btn ghost sm" href="/api/me/export" download>下載</a></div>
+      <div class="row"><span class="grow">刪除帳號與所有資料</span><button class="btn danger sm" id="delAll">刪除</button></div>
+    </div>
+    <p class="small muted">${TA()}看得到的記憶不會顯示成清單；${TA()}記錯時直接告訴${TA()}就好，請${TA()}「忘掉」某件事，${TA()}也會真的刪除。對話會傳送到 OpenAI（美國）處理以產生回覆。</p>
+
+    <h2>關於</h2>
+    <div class="section">
+      <div class="row"><span class="grow">這裡的角色都是 AI，不是真人。</span></div>
+      <div class="row"><span class="grow">需要有人說說話</span><a class="btn ghost sm" href="tel:1925">安心專線 1925</a></div>
+      <div class="row"><span class="grow">意見回饋</span><button class="btn ghost sm" id="fb">寫給我們</button></div>
+      <div class="row"><span class="grow">登出這個裝置</span><button class="btn ghost sm" id="logout">登出</button></div>
+    </div>
+    <p class="small muted" style="text-align:center">伴旅 WithU・測試版</p>
+  </div>`;
+
+  const save = async (patch) => {
+    try {
+      await api('/api/me', { method: 'PATCH', body: patch });
+      S.me = await api('/api/me');
+      toast('已儲存');
+    } catch (e) { toast(e.message); }
+  };
+  const saveSettings = (s) => save({ settings: s });
+  $('#nick').onchange = (e) => save({ nickname: e.target.value });
+  $('#call').onchange = (e) => save({ callName: e.target.value });
+  $$('[data-gd]').forEach(b => b.onclick = () => { $$('[data-gd]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); save({ gender: b.dataset.gd }); });
+  $$('[data-sk]').forEach(b => b.onclick = () => { $$('[data-sk]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); save({ seeks: b.dataset.sk }).then(() => renderMe()); });
+  $$('[data-np]').forEach(b => b.onclick = () => { $$('[data-np]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); saveSettings({ notifyPreview: b.dataset.np }); });
+  $('#sugg').onchange = (e) => saveSettings({ showSuggestions: e.target.checked });
+  $('#rdelay').onchange = (e) => saveSettings({ realisticDelay: e.target.checked });
+  $$('[data-ps]').forEach(b => b.onclick = () => { $$('[data-ps]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); setPortraitStyle(b.dataset.ps); saveSettings({ portraitStyle: b.dataset.ps }); });
+  $$('[data-lv]').forEach(b => b.onclick = () => { $$('[data-lv]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); saveSettings({ proactiveLevel: b.dataset.lv }); });
+  $('#discreet').onchange = (e) => { saveSettings({ discreetNames: e.target.checked }); setManifest(e.target.checked); };
+  $('#cap').onchange = (e) => saveSettings({ dailyCap: Number(e.target.value) });
+  $('#dndS').onchange = $('#dndE').onchange = () => saveSettings({ dndStart: $('#dndS').value, dndEnd: $('#dndE').value });
+  $('#lunch').onchange = (e) => saveSettings({ lunchAt: e.target.value });
+  $('#dinner').onchange = (e) => saveSettings({ dinnerAt: e.target.value });
+  $('#push').onclick = () => enablePush().then(ok => { if (ok) renderMe(); });
+  $$('[data-coming]').forEach(b => b.onclick = () => {
+    const item = COMING.find(c => c.key === b.dataset.coming);
+    track('coming_soon_click', { item: item.key });
+    openSheet(`<h3>${item.name}</h3><p>如果要付費，你覺得多少錢合理？</p>
+      <div class="chips">${[0, 30, 60, 90, 150, 300].map(p => `<button class="chip" data-price="${p}">${p === 0 ? '不會買' : `NT$${p}`}</button>`).join('')}</div>
+      <p class="small muted" style="margin-top:14px">只是問問，測試期間不會收費。</p>`, (sheet, close) => {
+      $$('[data-price]', sheet).forEach(c => c.onclick = () => { track('coming_soon_price', { item: item.key, price: Number(c.dataset.price) }); close(); toast('謝謝你告訴我們'); });
+    });
+  });
+  $('#delAll').onclick = async () => {
+    if (!confirm('會刪除你的帳號、所有角色、聊天、回憶與照片，不能復原。確定嗎？')) return;
+    if (prompt('輸入「刪除」確認') !== '刪除') return;
+    await api('/api/me', { method: 'DELETE' });
+    S.me = null; location.hash = '#/welcome';
+  };
+  $('#fb').onclick = () => openSheet(`<h3>寫給我們</h3><textarea class="input" id="fbt" rows="5" placeholder="喜歡什麼、哪裡怪怪的、希望角色會做什麼"></textarea><button class="btn block" id="fbs" style="margin-top:10px">送出</button>`,
+    (sheet, close) => { $('#fbs', sheet).onclick = () => { track('feedback', { text: $('#fbt', sheet).value.slice(0, 2000) }); close(); toast('收到了，謝謝'); }; });
+  $('#logout').onclick = async () => { await api('/api/auth/logout', { method: 'POST' }); S.me = null; location.hash = '#/welcome'; };
+}
+
+// ======================================================================
+// PWA: service worker, install, push
+// ======================================================================
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+let deferredInstall = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
+
+function installBanner() {
+  if (isStandalone() || localStorage.getItem('installDismissed')) return '';
+  if (isIOS()) return `<div class="install"><span class="grow">把這個 App 加到主畫面，才收得到訊息：點分享按鈕 → 「加入主畫面」。</span><button class="icon-btn" id="instX" aria-label="關閉">${icon('x')}</button></div>`;
+  if (deferredInstall) return `<div class="install"><span class="grow">把這個 App 加到主畫面，用起來更順手。</span><button class="btn sm" id="instGo">加入</button><button class="icon-btn" id="instX" aria-label="關閉">${icon('x')}</button></div>`;
+  return '';
+}
+function bindInstall() {
+  $('#instX') && ($('#instX').onclick = () => { try { localStorage.setItem('installDismissed', '1'); } catch {} $('.install')?.remove(); });
+  $('#instGo') && ($('#instGo').onclick = async () => { track('install_prompt', {}); deferredInstall.prompt(); deferredInstall = null; $('.install')?.remove(); });
+}
+function setManifest(discreet) {
+  $('#manifest').href = discreet ? '/manifest-discreet.webmanifest' : '/manifest.webmanifest';
+}
+
+function urlB64ToUint8(base64) {
+  const pad = '='.repeat((4 - base64.length % 4) % 4);
+  const raw = atob((base64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+async function enablePush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) { toast(isIOS() ? '請先把 App 加入主畫面，再從主畫面打開' : '這個瀏覽器不支援通知'); return false; }
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') { toast('沒有開啟通知權限'); return false; }
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8(S.me.pushKey) });
+  await api('/api/push/subscribe', { method: 'POST', body: sub.toJSON() });
+  toast('有新訊息時會通知你');
+  return true;
+}
+
+// 手機端錯誤回報到後台「系統紀錄」（同一則錯誤只送一次）
+const sentErrors = new Set();
+function reportClientError(message, stack) {
+  const key = String(message).slice(0, 120);
+  if (sentErrors.has(key) || sentErrors.size > 20 || /unauth|Failed to fetch|Load failed|NetworkError/.test(key)) return;
+  sentErrors.add(key);
+  fetch('/api/client-log', { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'same-origin',
+    body: JSON.stringify({ message: key, stack: String(stack || '').slice(0, 2000), url: location.hash, v: 'v8' }) }).catch(() => {});
+}
+window.addEventListener('error', (e) => reportClientError(e.message, e.error?.stack));
+window.addEventListener('unhandledrejection', (e) => reportClientError(e.reason?.message || String(e.reason), e.reason?.stack));
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.me) track('app_open', {}); });
+
+(async () => {
+  try { S.me = await api('/api/me'); } catch { S.me = null; }
+  if (S.me) { setManifest(!!S.me.settings?.discreetNames); setPortraitStyle(S.me.settings?.portraitStyle); track('app_open', {}); }
+  if (!S.me && !/^#\/(welcome|join|recover)$/.test(location.hash)) { location.hash = '#/welcome'; return; }
+  if (S.me && (!location.hash || location.hash === '#/welcome')) {
+    const rels = await api('/api/rels').catch(() => []);
+    S.rels = rels;
+    location.hash = rels.length ? '#/chat' : '#/meet';
+    if (location.hash === (rels.length ? '#/chat' : '#/meet')) route();
+    return;
+  }
+  route();
+})();

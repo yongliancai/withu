@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>伴旅 WithU 後台</title>
+<meta name="robots" content="noindex">
+<style>
+  :root { --paper:#F2F1F6; --surface:#FFFFFF; --ink:#26223A; --muted:#77728C; --line:#E0DDEA; --me:#3B3561; --rose:#C2477F; --danger:#B3403A; --ok:#5E8C6A; }
+  @media (prefers-color-scheme: dark) { :root { --paper:#17151F; --surface:#211E2C; --ink:#ECE9F5; --muted:#9B96AE; --line:#322E40; --me:#5B4FB0; --rose:#E07AA8; --danger:#E0736B; --ok:#7FB08B; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--paper); color:var(--ink); font:15px/1.6 "Noto Sans TC",system-ui,sans-serif; }
+  main { max-width:1120px; margin:0 auto; padding:24px 16px 60px; }
+  h1 { font-size:22px; margin:0 0 16px; } h2 { font-size:16px; margin:28px 0 8px; }
+  p { margin: 0 0 10px; }
+  .muted { color:var(--muted); } .small { font-size:13px; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
+  .kpi { padding:14px; border:1px solid var(--line); border-radius:12px; background: var(--surface); }
+  .kpi b { display:block; font-size:24px; font-variant-numeric:tabular-nums; }
+  .kpi span { color:var(--muted); font-size:13px; }
+  .wrap { overflow-x:auto; background: var(--surface); border-radius: 12px; border: 1px solid var(--line); }
+  table { border-collapse:collapse; width:100%; font-size:13px; font-variant-numeric:tabular-nums; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  th { color:var(--muted); font-weight:500; white-space:nowrap; }
+  td.nw { white-space: nowrap; }
+  td.text { max-width: 520px; white-space: pre-wrap; word-break: break-word; }
+  input, select, textarea, button { font:inherit; padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:inherit; }
+  button { background:var(--me); color:#fff; border:0; cursor:pointer; }
+  button.ghost { background:transparent; color:inherit; border:1px solid var(--line); }
+  button.danger { background:transparent; color:var(--danger); border:1px solid currentColor; }
+  button.sm { padding:4px 10px; font-size:13px; }
+  .tabs { display:flex; gap:6px; flex-wrap:wrap; margin: 16px 0 20px; }
+  .tabs button { background:transparent; color:inherit; border:1px solid var(--line); }
+  .tabs button[aria-pressed="true"] { background:var(--me); color:#fff; border-color:var(--me); }
+  .row-form { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom: 12px; }
+  .tag { display:inline-block; font-size:12px; padding:1px 8px; border-radius:999px; border:1px solid var(--line); }
+  .tag.off { color: var(--danger); border-color: currentColor; }
+  .tag.on { color: var(--ok); border-color: currentColor; }
+  .tag.warn { color: var(--rose); border-color: currentColor; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:10px; }
+  .notice { background: var(--surface); border-left: 3px solid var(--rose); padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; }
+  #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:var(--ink); color:var(--paper); padding:8px 16px; border-radius:999px; opacity:0; transition:.2s; pointer-events:none; }
+  #toast.on { opacity:1; }
+</style>
+</head>
+<body><main>
+  <h1>伴旅 WithU 後台</h1>
+  <form id="login" class="row-form"><input id="tok" type="password" placeholder="ADMIN_TOKEN" autocomplete="current-password"> <button>進入</button></form>
+  <nav class="tabs" id="tabs" hidden></nav>
+  <div id="out"></div>
+</main>
+<div id="toast"></div>
+<script>
+const out = document.getElementById('out');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const dt = t => t ? new Date(t).toLocaleString('zh-TW', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+const COH = { f: '女性向', m: '男性向' };
+const SEEK = { male: '男生', female: '女生', any: '都可以' };
+let TOKEN = sessionStorage.getItem('tok') || '';
+let TAB = location.hash.slice(1) || 'stats';
+let cohort = 'all';
+
+function toast(m) { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 2200); }
+async function api(path, method = 'GET', body) {
+  const r = await fetch('/api/admin' + path, { method, headers: { Authorization: 'Bearer ' + TOKEN, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  if (r.status === 401) { sessionStorage.removeItem('tok'); document.getElementById('tabs').hidden = true; document.getElementById('login').hidden = false; out.innerHTML = '<p>權杖不正確，請重新輸入。</p>'; throw new Error('unauth'); }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { toast(d.error || '操作失敗'); throw new Error(d.error); }
+  return d;
+}
+
+// 使用者回報附上的對話整理成好讀的格式，其他資料原樣顯示
+function formatDetail(d) {
+  if (!d || typeof d !== 'object') return String(d ?? '');
+  const { recent, ...rest } = d;
+  let s = JSON.stringify(rest, null, 2);
+  if (Array.isArray(recent)) s += '\n\n— 最近的對話 —\n' + recent.map(m => `${m.sender === 'user' ? '使用者' : m.sender === 'char' ? '角色' : '系統'}${m.proactive ? '（主動）' : ''}：${m.text || (m.card ? '［' + m.card + '］' : '［' + m.kind + '］')}`).join('\n');
+  return s;
+}
+
+const TABS = [['stats', '數據'], ['officials', '官方角色'], ['invites', '邀請碼'], ['testers', '測試者'], ['square', '角色廣場'], ['trends', '流行新品'], ['feedback', '意見回饋'], ['crisis', '危機事件'], ['styles', '說話風格'], ['logs', '系統紀錄']];
+function drawTabs() {
+  document.getElementById('login').hidden = true;
+  const n = document.getElementById('tabs'); n.hidden = false;
+  n.innerHTML = TABS.map(([k, l]) => `<button data-t="${k}" aria-pressed="${k === TAB}">${l}</button>`).join('');
+  n.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { TAB = b.dataset.t; location.hash = TAB; drawTabs(); render(); });
+}
+async function render() {
+  out.innerHTML = '<p class="muted">載入中…</p>';
+  try { await VIEWS[TAB](); } catch (e) { if (e.message !== 'unauth') console.error(e); }
+}
+
+const VIEWS = {
+  // ------------------------------------------------ 數據
+  async stats() {
+    const d = await api('/stats?cohort=' + cohort);
+    const pct = r => r ? `${r.rate}%<span class="muted small"> (${r.retained}/${r.eligible})</span>` : '—';
+    const avg = (k) => d.perUser.length ? (d.perUser.reduce((s, u) => s + u[k], 0) / d.perUser.length).toFixed(1) : '0';
+    out.innerHTML = `
+      <div class="row-form">${['all', 'f', 'm'].map(k => `<button class="${k === cohort ? '' : 'ghost'}" data-c="${k}">${k === 'all' ? '全部' : COH[k] + '群組'}${k === 'all' ? '' : `（${d.cohortCounts[k]} 人）`}</button>`).join('')}</div>
+      <p class="muted small">${dt(Date.parse(d.generatedAt))} 更新${d.mock ? '・測試模式（未接 OpenAI）' : ''}</p>
+      <div class="kpis">
+        <div class="kpi"><b>${d.users}</b><span>測試者</span></div>
+        <div class="kpi"><b>${pct(d.retention.d1)}</b><span>D1 留存</span></div>
+        <div class="kpi"><b>${pct(d.retention.d7)}</b><span>D7 留存</span></div>
+        <div class="kpi"><b>${pct(d.retention.d30)}</b><span>D30 留存</span></div>
+        <div class="kpi"><b>${avg('userMsgsPerDay')}</b><span>每人每天傳的訊息</span></div>
+        <div class="kpi"><b>NT$${d.totalCostTwd}</b><span>累計模型成本</span></div>
+      </div>
+      <h2>本週摘要（最近 7 天）</h2>
+      <div class="kpis">
+        <div class="kpi"><b>${d.weekly.newUsers}</b><span>新加入</span></div>
+        <div class="kpi"><b>${d.weekly.activeUsers}</b><span>有聊天的人</span></div>
+        <div class="kpi"><b>${d.weekly.userMessages}</b><span>使用者傳的訊息</span></div>
+        <div class="kpi"><b>${d.weekly.replyToProactive ?? '—'}${d.weekly.replyToProactive == null ? '' : '%'}</b><span>主動訊息 2 小時內被回覆</span></div>
+        <div class="kpi"><b>${d.weekly.mealsChosen}／${d.weekly.mealsDeclined}</b><span>訂餐 選了／拒絕</span></div>
+        <div class="kpi"><b>${d.weekly.habitsAdded}</b><span>新記下的相處習慣</span></div>
+        <div class="kpi"><b>${d.weekly.feedback}</b><span>意見回饋</span></div>
+        <div class="kpi"><b>${d.weekly.crisis}</b><span>危機事件</span></div>
+        <div class="kpi"><b>${d.weekly.breakups}</b><span>分手</span></div>
+        <div class="kpi"><b>NT$${d.weekly.costTwd}</b><span>本週成本</span></div>
+      </div>
+      <div class="card" style="margin-top:12px"><b>每週檢查</b>
+        <p class="small" style="margin:6px 0 0">1. 主動訊息回覆率偏低（低於 40%）→ 到「官方角色」調整語氣，或把頻率改少。<br>
+        2. 「大家最常要求的相處習慣」裡重複出現的要求 → 代表整體規則需要改，把它寫進官方角色或告訴我改規則。<br>
+        3. 訂餐被拒絕比選擇多 → 推薦時機太頻繁或品項不合，檢查流行新品清單。<br>
+        4. 看「意見回饋」與「危機事件」，未確認的危機事件要處理。<br>
+        5. 調整的是官方角色和整體規則，不要去改個別使用者的角色。</p></div>
+      <h2>大家最常要求的相處習慣</h2>
+      <div class="wrap"><table><thead><tr><th>要求</th><th>次數</th></tr></thead><tbody>
+      ${(d.topHabits || []).map(x => `<tr><td>${esc(x.text)}</td><td>${x.n}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">還沒有人提出</td></tr>'}
+      </tbody></table></div>
+      <h2>每位測試者</h2>
+      <div class="wrap"><table><thead><tr><th>暱稱</th><th>群組</th><th>想遇見</th><th>加入</th><th>天數</th><th>使用者/天</th><th>角色/天</th><th>主動</th><th>語音</th><th>平均輸入 tok</th><th>平均輸出 tok</th><th>照片</th><th>訂餐</th><th>拒絕</th><th>出遊</th><th>關係</th><th>NT$/天</th><th>月推估</th></tr></thead>
+      <tbody>${d.perUser.map(u => `<tr><td class="nw">${esc(u.nickname)}</td><td>${COH[u.cohort]}</td><td>${SEEK[u.seeks] || ''}</td><td class="nw">${u.joined}</td><td>${u.days}</td><td>${u.userMsgsPerDay}</td><td>${u.charMsgsPerDay}</td><td>${u.proactive}</td><td>${u.voice}</td><td>${u.avgInputTokens}</td><td>${u.avgOutputTokens}</td>
+        <td>${u.lifeEvents.photos}</td><td>${u.lifeEvents.meals}</td><td>${u.lifeEvents.mealDeclines}</td><td>${u.lifeEvents.outings}</td><td>${esc(u.relationships.join('、'))}</td><td>${u.costPerDayTwd}</td><td>${u.projectedMonthlyTwd}</td></tr>`).join('') || '<tr><td colspan="18" class="muted">還沒有測試者</td></tr>'}</tbody></table></div>
+      <h2>角色被認識的次數</h2>
+      <div class="wrap"><table><thead><tr><th>角色</th><th>性別</th><th>類型</th><th>塑造者</th><th>認識次數</th><th>檢舉</th><th>狀態</th></tr></thead><tbody>
+      ${(d.templates || []).map(t => `<tr><td>${esc(t.name)}</td><td>${t.gender === 'female' ? '女' : '男'}</td><td>${t.kind === 'official' ? '官方' : '分享'}</td><td>${esc(t.creator || '')}</td><td>${t.uses}</td><td>${t.reports}</td><td>${t.status === 'published' ? '上架' : '已下架'}</td></tr>`).join('')}
+      </tbody></table></div>
+      <h2>即將推出：興趣與願付價格</h2>
+      <div class="wrap"><table><thead><tr><th>項目</th><th>點擊</th><th>回答數</th><th>中位數 NT$</th><th>不會買</th></tr></thead><tbody>
+      ${Object.entries(d.comingSoon).map(([k, v]) => { const p = v.prices.slice().sort((a, b) => a - b); const med = p.length ? p[Math.floor(p.length / 2)] : '—';
+        return `<tr><td>${esc(k)}</td><td>${v.clicks}</td><td>${p.length}</td><td>${med}</td><td>${p.filter(x => x === 0).length}</td></tr>`; }).join('') || '<tr><td colspan="5" class="muted">還沒有資料</td></tr>'}
+      </tbody></table></div>
+      <h2>模型用量</h2>
+      <div class="wrap"><table><thead><tr><th>類型</th><th>模型</th><th>次數</th><th>輸入</th><th>快取</th><th>輸出</th><th>字元/秒</th></tr></thead><tbody>
+      ${d.usageTotals.map(t => `<tr><td>${esc(t.kind)}</td><td>${esc(t.model)}</td><td>${t.n}</td><td>${t.i}</td><td>${t.c}</td><td>${t.o}</td><td>${t.u}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">還沒有資料</td></tr>'}
+      </tbody></table></div>`;
+    out.querySelectorAll('[data-c]').forEach(b => b.onclick = () => { cohort = b.dataset.c; render(); });
+  },
+
+  // ------------------------------------------------ 官方角色
+  async officials() {
+    const list = await api('/officials');
+    out.innerHTML = `
+      <p class="muted">每週檢查後調整官方角色。改動會套用到之後新認識的人；勾選「同步」也會更新還沒定型（還沒到曖昧）的角色，但不會動到他們在相處中長出來的個性和記憶。</p>
+      ${list.map(o => `<form class="card" data-id="${o.id}">
+        <div class="row-form" style="justify-content:space-between;margin:0 0 8px"><b>${esc(o.name)} <span class="muted small">${o.gender === 'female' ? '女' : '男'}・${esc(o.jobLabel)}・被認識 ${o.uses} 次</span></b>
+          <span><label class="small"><input type="checkbox" name="syncUnlocked"> 同步到還沒定型的角色</label> <button>儲存</button></span></div>
+        ${[['intro', '一句介紹'], ['signature', '預設個性簽名'], ['traits', '核心性格'], ['values', '價值觀與邊界'], ['weekend', '休假時做什麼'], ['appearance', '外觀']].map(([k, l]) =>
+          `<label class="small muted" style="display:block;margin-top:6px">${l}<input name="${k}" value="${esc(o[k] || '')}" style="width:100%"></label>`).join('')}
+        <label class="small muted" style="display:block;margin-top:6px">口頭禪（一行一個）<textarea name="catchphrases" rows="2" style="width:100%">${esc((o.catchphrases || []).join('\n'))}</textarea></label>
+        <label class="small muted" style="display:block;margin-top:6px">生活中正在進行的事（一行一個，${'他'}會從這裡分享生活）<textarea name="threads" rows="3" style="width:100%">${esc((o.threads || []).join('\n'))}</textarea></label>
+      </form>`).join('')}`;
+    out.querySelectorAll('form[data-id]').forEach(f => f.onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(f);
+      const body = Object.fromEntries([...fd.entries()].filter(([k]) => k !== 'syncUnlocked'));
+      body.catchphrases = String(body.catchphrases || '').split('\n');
+      body.threads = String(body.threads || '').split('\n');
+      body.syncUnlocked = fd.get('syncUnlocked') === 'on';
+      const r = await api('/officials/' + f.dataset.id, 'POST', body);
+      toast(r.synced ? `已儲存，並同步到 ${r.synced} 個角色` : '已儲存');
+    });
+  },
+
+  // ------------------------------------------------ 邀請碼
+  async invites() {
+    const list = await api('/invites');
+    out.innerHTML = `
+      <p class="muted">在這裡新增的邀請碼立即生效，不用重啟。寫在 <code>.env</code> 的邀請碼只能在 .env 裡改。</p>
+      <form class="row-form" id="add">
+        <input name="code" placeholder="邀請碼（留空自動產生）" maxlength="40">
+        <select name="cohort"><option value="f">女性向群組</option><option value="m">男性向群組</option></select>
+        <input name="note" placeholder="備註，例如：第二批・研究室" maxlength="80" style="min-width:220px">
+        <button>新增</button>
+      </form>
+      <div class="wrap"><table><thead><tr><th>邀請碼</th><th>群組</th><th>已註冊</th><th>備註</th><th>狀態</th><th></th></tr></thead><tbody>
+      ${list.map(c => `<tr><td class="nw"><code>${esc(c.code)}</code></td><td>${COH[c.cohort]}</td><td>${c.uses}</td><td>${esc(c.note || '')}</td>
+        <td>${c.active ? '<span class="tag on">可使用</span>' : '<span class="tag off">已停用</span>'}</td>
+        <td>${c.source === 'admin' ? `<button class="sm ${c.active ? 'danger' : 'ghost'}" data-code="${esc(c.code)}" data-active="${c.active ? 0 : 1}">${c.active ? '停用' : '恢復'}</button>` : '<span class="muted small">.env</span>'}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">還沒有邀請碼</td></tr>'}
+      </tbody></table></div>
+      <p class="muted small" style="margin-top:10px">停用邀請碼只會讓新的人無法用它註冊，已經註冊的測試者不受影響。</p>`;
+    document.getElementById('add').onsubmit = async (e) => {
+      e.preventDefault();
+      const r = await api('/invites', 'POST', Object.fromEntries(new FormData(e.target)));
+      toast(`已新增 ${r.code}`); render();
+    };
+    out.querySelectorAll('[data-code]').forEach(b => b.onclick = async () => {
+      await api('/invites/' + encodeURIComponent(b.dataset.code), 'PATCH', { active: b.dataset.active === '1' }); render();
+    });
+  },
+
+  // ------------------------------------------------ 測試者
+  async testers() {
+    const list = await api('/testers');
+    out.innerHTML = `
+      <p class="muted">停用帳號會立即登出他的所有裝置，角色也不會再主動傳訊息；資料保留，可以隨時恢復。</p>
+      <div class="wrap"><table><thead><tr><th>暱稱</th><th>群組</th><th>本人</th><th>想遇見</th><th>邀請碼</th><th>往來角色</th><th>加入</th><th>最後上線</th><th>狀態</th><th></th></tr></thead><tbody>
+      ${list.map(u => `<tr><td class="nw">${esc(u.nickname)}</td><td>${COH[u.cohort]}</td><td>${{ female: '女', male: '男', other: '不說' }[u.gender] || '—'}</td><td>${SEEK[u.seeks] || ''}</td>
+        <td><code>${esc(u.invite || '')}</code></td><td>${u.rels}</td><td class="nw">${dt(u.createdAt)}</td><td class="nw">${dt(u.lastActiveAt)}</td>
+        <td>${u.disabled ? '<span class="tag off">已停用</span>' : '<span class="tag on">使用中</span>'}</td>
+        <td class="nw"><button class="sm ghost" data-code="${u.id}">重發登入碼</button> <button class="sm ${u.disabled ? 'ghost' : 'danger'}" data-dis="${u.id}" data-v="${u.disabled ? 0 : 1}">${u.disabled ? '恢復' : '停用'}</button></td></tr>`).join('') || '<tr><td colspan="10" class="muted">還沒有測試者</td></tr>'}
+      </tbody></table></div>
+      <div id="codeOut"></div>`;
+    out.querySelectorAll('[data-code]').forEach(b => b.onclick = async () => {
+      const u = list.find(x => x.id === b.dataset.code);
+      if (!confirm(`要幫「${u.nickname}」重新產生登入碼嗎？舊的登入碼會失效，但目前已登入的裝置不受影響。`)) return;
+      const r = await api(`/testers/${u.id}/new-code`, 'POST');
+      document.getElementById('codeOut').innerHTML = `<div class="card" style="margin-top:14px">「${esc(u.nickname)}」的新登入碼：<b style="font-size:20px;letter-spacing:2px"><code>${esc(r.recoveryCode)}</code></b><br><span class="muted small">請私下傳給本人。這組碼只會顯示這一次。</span></div>`;
+    });
+    out.querySelectorAll('[data-dis]').forEach(b => b.onclick = async () => {
+      const u = list.find(x => x.id === b.dataset.dis);
+      if (b.dataset.v === '1' && !confirm(`要停用「${u.nickname}」的帳號嗎？`)) return;
+      await api(`/testers/${u.id}/disable`, 'POST', { disabled: b.dataset.v === '1' }); render();
+    });
+  },
+
+  // ------------------------------------------------ 角色廣場
+  async square() {
+    const list = await api('/square');
+    out.innerHTML = `
+      <p class="muted">使用者分享的角色。被檢舉 3 次會自動下架；你可以在這裡手動下架或恢復（恢復時檢舉數會歸零）。</p>
+      ${list.map(t => `<div class="card">
+        <div class="row-form" style="margin:0 0 6px;justify-content:space-between">
+          <span><b>${esc(t.name)}</b> <span class="muted small">${t.gender === 'female' ? '女' : '男'}・由 ${esc(t.creator)} 塑造・${dt(t.createdAt)}・${t.uses} 人認識過</span></span>
+          <span>${t.status === 'published' ? '<span class="tag on">上架中</span>' : '<span class="tag off">已下架</span>'}
+            <button class="sm ${t.status === 'published' ? 'danger' : 'ghost'}" data-id="${t.id}" data-s="${t.status === 'published' ? 'hidden' : 'published'}">${t.status === 'published' ? '下架' : '恢復上架'}</button></span>
+        </div>
+        <p>${esc(t.intro || '')}</p>
+        <p class="small muted">性格：${esc(t.traits || '')}${t.catchphrases?.length ? `・口頭禪：${t.catchphrases.map(esc).join('、')}` : ''}</p>
+        ${t.reports.length ? `<p class="small"><span class="tag warn">檢舉 ${t.reports.length}</span></p>${t.reports.map(r => `<p class="small">「${esc(r.reason || '（未說明）')}」<span class="muted">— ${esc(r.by || '')}・${dt(r.at)}</span></p>`).join('')}` : ''}
+      </div>`).join('') || '<p class="muted">還沒有人分享角色。</p>'}`;
+    out.querySelectorAll('[data-id]').forEach(b => b.onclick = async () => { await api('/square/' + b.dataset.id, 'POST', { status: b.dataset.s }); render(); });
+  },
+
+  // ------------------------------------------------ 流行新品
+  async trends() {
+    const list = await api('/trends');
+    const today = new Date().toISOString().slice(0, 10);
+    out.innerHTML = `
+      <p class="muted">陪吃飯推薦「新品」時，只會從這份清單挑，避免 AI 編造不存在的品項。請附上品牌官方公告的網址，並設定到期日，過期會自動不用。</p>
+      <form class="row-form" id="add">
+        <input name="brand" placeholder="品牌，例如：50嵐" required maxlength="40">
+        <input name="item" placeholder="品項" required maxlength="60">
+        <input name="note" placeholder="一句說明，例如：秋季限定" maxlength="80">
+        <input name="source" placeholder="官方來源網址" maxlength="300" style="min-width:240px">
+        <label class="small muted">到期 <input name="until" type="date"></label>
+        <button>新增</button>
+      </form>
+      <div class="wrap"><table><thead><tr><th>品牌</th><th>品項</th><th>說明</th><th>來源</th><th>到期</th><th></th></tr></thead><tbody>
+      ${list.map(t => `<tr><td>${esc(t.brand)}</td><td>${esc(t.item)}</td><td>${esc(t.note || '')}</td>
+        <td>${t.source ? `<a href="${esc(t.source)}" target="_blank" rel="noopener">來源</a>` : '<span class="muted">—</span>'}</td>
+        <td class="nw">${t.until ? esc(t.until) + (t.until < today ? ' <span class="tag off">已過期</span>' : '') : '<span class="muted">不限</span>'}</td>
+        <td><button class="sm danger" data-del="${t.id}">刪除</button></td></tr>`).join('') || '<tr><td colspan="6" class="muted">清單是空的，陪吃飯只會推薦一般餐點。</td></tr>'}
+      </tbody></table></div>`;
+    document.getElementById('add').onsubmit = async (e) => { e.preventDefault(); await api('/trends', 'POST', Object.fromEntries(new FormData(e.target))); toast('已新增'); render(); };
+    out.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => { if (!confirm('刪除這個新品？')) return; await api('/trends/' + b.dataset.del, 'DELETE'); render(); });
+  },
+
+  // ------------------------------------------------ 意見回饋
+  async feedback() {
+    const list = await api('/feedback');
+    out.innerHTML = `<p class="muted">測試者在「我 → 意見回饋」寫的內容，最新的在最上面。</p>
+      <div class="wrap"><table><thead><tr><th>時間</th><th>暱稱</th><th>群組</th><th>內容</th></tr></thead><tbody>
+      ${list.map(f => `<tr><td class="nw">${dt(f.at)}</td><td class="nw">${esc(f.nickname)}</td><td>${COH[f.cohort]}</td><td class="text">${esc(f.text)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">還沒有回饋</td></tr>'}
+      </tbody></table></div>`;
+  },
+
+  // ------------------------------------------------ 說話風格
+  async styles() {
+    const packs = await api('/styles');
+    out.innerHTML = `<p class="muted">角色依「年齡 × 性別」套用一包說話風格（個性再由原型微調）。規則寫傳訊息的習慣；示範對話用「對方：／你：」，每段之間用 --- 分開。改完立即生效。</p>
+      ${packs.map(p => `<div class="card" style="margin-bottom:14px"><h3 style="margin:0 0 8px">${esc(p.label)} ${p.edited ? '<span class="tag on">已修改</span>' : ''}</h3>
+        <label class="small muted">規則</label><textarea data-r="${p.key}" rows="6" style="width:100%">${esc(p.rules)}</textarea>
+        <label class="small muted">示範對話</label><textarea data-e="${p.key}" rows="10" style="width:100%">${esc(p.examples)}</textarea>
+        <div class="row-form" style="margin-top:8px"><button data-save="${p.key}">儲存</button>${p.edited ? `<button class="ghost" data-reset="${p.key}">恢復預設</button>` : ''}</div></div>`).join('')}`;
+    out.querySelectorAll('[data-save]').forEach(b => b.onclick = async () => {
+      const k = b.dataset.save;
+      await api('/styles/' + k, 'POST', { rules: out.querySelector(`[data-r="${k}"]`).value, examples: out.querySelector(`[data-e="${k}"]`).value });
+      render();
+    });
+    out.querySelectorAll('[data-reset]').forEach(b => b.onclick = async () => { if (confirm('恢復成預設內容？')) { await api('/styles/' + b.dataset.reset, 'POST', { reset: true }); render(); } });
+  },
+
+  // ------------------------------------------------ 系統紀錄
+  async logs() {
+    const f = VIEWS._logFilter || (VIEWS._logFilter = { level: '', source: '', status: 'open' });
+    const q = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
+    const d = await api('/logs?' + q);
+    const LV = { error: ['錯誤', 'off'], warn: ['警告', 'warn'], report: ['使用者回報', 'on'] };
+    const SRC = { server: '伺服器', scheduler: '主動訊息', llm: 'AI 模型', tts: '語音合成', stt: '語音轉文字', push: '推播', client: '手機端', user: '使用者回報', scenario: '相遇情境' };
+    const sel = (name, opts) => `<select data-f="${name}">${opts.map(([v, l]) => `<option value="${v}" ${f[name] === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+    out.innerHTML = `
+      <p class="muted">系統自己解決不了的問題會記在這裡，保留 30 天。同樣的錯誤一分鐘內只記一次。</p>
+      <div class="kpis" style="margin-bottom:14px">
+        <div class="kpi"><b>${d.counts.error || 0}</b><span>未處理的錯誤</span></div>
+        <div class="kpi"><b>${d.counts.warn || 0}</b><span>未處理的警告</span></div>
+        <div class="kpi"><b>${d.counts.report || 0}</b><span>未處理的使用者回報</span></div>
+        ${d.sources.map(s => `<div class="kpi"><b>${s.n}</b><span>${SRC[s.source] || s.source}・近 7 天</span></div>`).join('')}
+      </div>
+      <div class="row-form">
+        ${sel('status', [['open', '未處理'], ['resolved', '已處理'], ['', '全部']])}
+        ${sel('level', [['', '所有等級'], ['error', '錯誤'], ['warn', '警告'], ['report', '使用者回報']])}
+        ${sel('source', [['', '所有來源'], ...Object.entries(SRC)])}
+      </div>
+      <div class="wrap"><table><thead><tr><th>時間</th><th>等級</th><th>來源</th><th>內容</th><th>測試者</th><th>角色</th><th></th></tr></thead><tbody>
+      ${d.rows.map(l => `<tr><td class="nw">${dt(l.at)}</td><td><span class="tag ${LV[l.level]?.[1] || ''}">${LV[l.level]?.[0] || l.level}</span></td><td class="nw">${SRC[l.source] || esc(l.source)}</td>
+        <td class="text">${esc(l.message)}${l.note ? `<br><span class="muted small">處理：${esc(l.note)}</span>` : ''}
+          <details><summary class="small muted">詳細資料</summary><pre style="white-space:pre-wrap;font-size:12px;max-height:320px;overflow:auto">${esc(formatDetail(l.detail))}</pre></details></td>
+        <td class="nw">${esc(l.nickname || '—')}</td><td class="nw">${esc(l.character || '—')}</td>
+        <td class="nw"><button class="sm ${l.resolvedAt ? 'ghost' : ''}" data-log="${l.id}" data-res="${l.resolvedAt ? 0 : 1}">${l.resolvedAt ? '重新開啟' : '標記已處理'}</button></td></tr>`).join('') || '<tr><td colspan="7" class="muted">沒有紀錄</td></tr>'}
+      </tbody></table></div>`;
+    out.querySelectorAll('[data-f]').forEach(s => s.onchange = () => { f[s.dataset.f] = s.value; render(); });
+    out.querySelectorAll('[data-log]').forEach(b => b.onclick = async () => {
+      let note = '';
+      if (b.dataset.res === '1') { note = prompt('處理方式（可留空）', ''); if (note === null) return; }
+      await api('/logs/' + b.dataset.log, 'POST', { resolved: b.dataset.res === '1', note }); render();
+    });
+  },
+
+  // ------------------------------------------------ 危機事件
+  async crisis() {
+    const list = await api('/crisis');
+    const open = list.filter(c => !c.reviewedAt).length;
+    out.innerHTML = `
+      <div class="notice">這裡只列出<b>什麼時候、哪位測試者、和哪個角色的對話</b>觸發了危機偵測，不顯示對話內容。觸發時，App 已經自動顯示求助專線，角色也切換成支持模式。
+      若你判斷需要關心，請透過你和測試者原本的聯絡管道私下聯繫；處理後在這裡留下紀錄。</div>
+      <p>${open ? `<span class="tag warn">${open} 筆尚未確認</span>` : '<span class="muted">全部都已確認</span>'}</p>
+      <div class="wrap"><table><thead><tr><th>時間</th><th>暱稱</th><th>群組</th><th>角色</th><th>之後最後上線</th><th>處理紀錄</th><th></th></tr></thead><tbody>
+      ${list.map(c => `<tr><td class="nw">${dt(c.at)}</td><td class="nw">${esc(c.nickname)}</td><td>${COH[c.cohort]}</td><td>${esc(c.character)}</td><td class="nw">${dt(c.lastActiveAt)}</td>
+        <td class="text">${c.reviewedAt ? `${esc(c.note || '已確認')}<br><span class="muted small">${dt(c.reviewedAt)}</span>` : '<span class="tag warn">未確認</span>'}</td>
+        <td><button class="sm ghost" data-rev="${c.id}">${c.reviewedAt ? '修改' : '標記已確認'}</button></td></tr>`).join('') || '<tr><td colspan="7" class="muted">沒有危機事件</td></tr>'}
+      </tbody></table></div>`;
+    out.querySelectorAll('[data-rev]').forEach(b => b.onclick = async () => {
+      const c = list.find(x => String(x.id) === b.dataset.rev);
+      const note = prompt('處理紀錄（例如：已私訊關心，對方說還好）', c.note || '');
+      if (note === null) return;
+      await api('/crisis/' + c.id, 'POST', { note }); render();
+    });
+  },
+};
+
+document.getElementById('login').onsubmit = (e) => {
+  e.preventDefault();
+  TOKEN = document.getElementById('tok').value.trim();
+  sessionStorage.setItem('tok', TOKEN);
+  drawTabs(); render();
+};
+if (TOKEN) { drawTabs(); render(); }
+</script>
+</body></html>
