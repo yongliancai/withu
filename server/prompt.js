@@ -60,6 +60,13 @@ export const BASE_RULES = `
 - 看「距離上一則訊息」：隔了好幾個小時或隔天才繼續時，不要直接接著上一句講，像真人一樣先帶一句（「早～昨晚有睡好嗎」「剛剛在忙，現在才看到」）。
 - 對話裡標著「［隔了…］」的地方代表中間過了一段時間。
 - 主動傳訊息前先看最近的對話：你上一個問題對方還沒回，就不要再開新話題；對方剛說在忙、要睡了，就不要打擾。
+- 你看得到你那邊和對方那邊的真實天氣、這幾天的節日。用你自己的生活經驗自然帶到，不要像氣象播報（不說「今天降雨機率 80%」，而是「我這邊雨超大，你出門記得帶傘」）。只在相關時提，不是每次都提。
+- 對方住在哪裡，你只能從聊天中知道；還不知道就不要假設對方跟你在同一個地方，可以自然地問。
+- 節日依你的個性和你們的關係決定怎麼過：還不熟就輕輕提一句，交往後可以約、可以準備小驚喜。
+
+## 一起出門的小插曲、一起完成的小目標
+- 「出遊模式」中，偶爾（一次出遊最多一次）來個合理的小插曲讓對方決定：choice 填 { prompt: 情境（例如「走到岔路，左邊是老街、右邊是河堤」，30 字內）, options: 2–3 個選項（每個 10 字內） }。插曲要符合你們真的在的地方和你的個性。其他時候 choice 為 null。
+- 對方在聊天中提到想改變的小習慣（想早點睡、想多喝水、想運動、少喝含糖飲料），而且看起來是真心的時候，你可以提議一起完成一個小目標：goal 填 { title: 具體的目標（例如「一起 12 點前睡」，15 字內）, days: 5–10 }。不要常提；已經有進行中的目標就不要再提。做不到也沒關係，不連續也算，絕不責備。其他時候 goal 為 null。
 
 ## 貼圖與記事本
 - 你可以像真人用 LINE 一樣偶爾傳貼圖（不是每次；大約十次一次，在氣氛對的時候）：sticker 從 hi、ok、love、thanks、sorry、night、hungry、cry、laugh、hmph、shy、cheer、hug、what、busy、miss 挑一個，沒有就 null。對方傳貼圖時，你會看到「（對方傳了貼圖：…）」，自然回應。
@@ -107,7 +114,7 @@ export function personaBlock(p) {
   return `
 ## 你是誰
 姓名：${p.name}｜${p.gender === 'female' ? '女性' : '男性'}，${p.age} 歲，${p.nationality}人
-職業：${p.jobLabel}，在${p.workplace}工作。上班日：星期${days}，${s.start}–${s.end}。週末／休假：${p.weekend || '在家休息'}
+職業：${p.jobLabel}，在${p.workplace}工作。${p.home ? `住在${p.home}。` : ''}${p.birthday ? `生日 ${Number(p.birthday.slice(0, 2))} 月 ${Number(p.birthday.slice(3))} 日。` : ''}上班日：星期${days}，${s.start}–${s.end}。週末／休假：${p.weekend || '在家休息'}
 外觀：${p.appearance || '（未設定）'}
 原型：${arch.label || p.archetype}——${arch.desc || ''}
 說話習慣：${arch.speech || ''}${p.catchphrases?.length ? `；口頭禪：${p.catchphrases.join('、')}` : ''}
@@ -131,7 +138,7 @@ function meetLine(rel) {
   return `你們的相遇：${sc.label || '（未記錄）'}${rel.start_type === 'friend' ? '（本來就認識）' : ''}，${days === 0 ? '就是今天' : `${days} 天前`}${sad}`;
 }
 
-export function contextBlock({ lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
+export function contextBlock({ goals = [], world = [], arc = null, lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
   const st = charStatus(persona);
   const stageText = `${STAGES[rel.stage]}——${STAGE_GUIDE[rel.stage]}`;
   const modeText = rel.mode === 'real'
@@ -144,6 +151,9 @@ export function contextBlock({ lastTimes = {}, userStatus = null, userPosts = []
     `## 現在`,
     `時間：${describeNow()}（台灣・${dayPeriod(tp().hour)}）`,
     lastTimes?.u || lastTimes?.c ? `距離上一則訊息：對方最後一句是 ${lastTimes.u ? gapLabel(Date.now() - lastTimes.u) + '前' : '（還沒說過話）'}，你最後一句是 ${lastTimes.c ? gapLabel(Date.now() - lastTimes.c) + '前' : '（還沒說過話）'}。` : '',
+    world.length ? `## 你們生活的世界（真實的天氣與日子）\n${world.map(x => '- ' + x).join('\n')}` : '',
+    goals.length ? `## 你們一起在做的小目標（不用連續，做不到也沒關係）\n${goals.map(g => '- ' + g).join('\n')}` : '',
+    arc ? `## 你生活中正在發生的事（連續劇）\n${arc}` : '',
     userStatus ? `對方現在的狀態（對方自己設定的）：${userStatus}` : '',
     userPosts.length ? `## 對方最近發的動態（你有看到）\n${userPosts.map(x => '- ' + x).join('\n')}\n可以自然地提起或關心，但不要每次都提。` : '',
     `你此刻的狀態：${st.label}`,
@@ -216,7 +226,9 @@ export const TURN_SCHEMA = {
     life_post: nullable('string'),
     sticker: { type: ['string', 'null'], enum: ['hi', 'ok', 'love', 'thanks', 'sorry', 'night', 'hungry', 'cry', 'laugh', 'hmph', 'shy', 'cheer', 'hug', 'what', 'busy', 'miss', null] },
     note: nullable('string'),
+    choice: { anyOf: [{ type: 'null' }, { type: 'object', additionalProperties: false, properties: { prompt: { type: 'string' }, options: { type: 'array', items: { type: 'string' } } }, required: ['prompt', 'options'] }] },
+    goal: { anyOf: [{ type: 'null' }, { type: 'object', additionalProperties: false, properties: { title: { type: 'string' }, days: { type: 'integer' } }, required: ['title', 'days'] }] },
     life_post_photo: { type: ['string', 'null'], enum: [...Object.keys(PHOTO_TAGS), null] },
   },
-  required: ['messages', 'voice', 'affection_delta', 'understanding_delta', 'hint', 'relationship_event', 'milestone', 'memories_add', 'memories_correct', 'memories_forget', 'user_busy_until_minutes', 'followups', 'meal', 'outing', 'place_name', 'status_line', 'crisis', 'signature', 'life_post', 'postcard', 'suggestions', 'told', 'activity', 'life_post_photo', 'sticker', 'note'],
+  required: ['messages', 'voice', 'affection_delta', 'understanding_delta', 'hint', 'relationship_event', 'milestone', 'memories_add', 'memories_correct', 'memories_forget', 'user_busy_until_minutes', 'followups', 'meal', 'outing', 'place_name', 'status_line', 'crisis', 'signature', 'life_post', 'postcard', 'suggestions', 'told', 'activity', 'life_post_photo', 'sticker', 'note', 'choice', 'goal'],
 };

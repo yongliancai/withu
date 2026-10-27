@@ -7,7 +7,7 @@ export function mockTurn({ rel, persona, user, userText = '', imageMedia, trigge
     relationship_event: 'none', milestone: null, memories_add: [], memories_correct: [], memories_forget: [],
     user_busy_until_minutes: null, followups: [], meal: null, outing: 'none', place_name: null, status_line: null, crisis: false, signature: null, life_post: null, postcard: null,
     suggestions: [{ label: '😂 吐槽他', text: '你也太誇張了吧哈哈' }, { label: '❓ 問後來呢', text: '然後呢？後來怎麼了' }, { label: '🙋 說說我自己', text: '我今天也遇到一件事' }],
-    told: null, activity: null, life_post_photo: null, sticker: null, note: null,
+    told: null, activity: null, life_post_photo: null, sticker: null, note: null, choice: null, goal: null,
   };
   const name = user.call_name;
   if (crisis) return { ...base, crisis: true, messages: [{ text: `${name}，我在這裡。` }, { text: '你願意跟我說說現在發生了什麼嗎？不急，慢慢說。' }] };
@@ -15,6 +15,7 @@ export function mockTurn({ rel, persona, user, userText = '', imageMedia, trigge
   if (trigger) {
     if (/上班/.test(trigger)) return { ...base, status_line: `在${persona.workplace}上班中`, messages: [{ text: `我要去${persona.workplace}上班囉，今天${persona.schedule.end}下班。` }] };
     if (/明信片/.test(trigger) && !/散步/.test(trigger)) return { ...base, postcard: { scene: 'river', place: '大稻埕碼頭', message: '今天的夕陽很像你上次說的那種顏色，寄給你。' }, messages: [{ text: '寄了一張明信片給你。' }] };
+    if (/心情按鈕/.test(trigger)) return { ...base, sticker: /壓力|累|難過|生氣/.test(trigger) ? 'hug' : 'laugh', messages: [{ text: /壓力|累/.test(trigger) ? '怎麼了？先深呼吸一下' : /無聊/.test(trigger) ? '無聊喔？來玩二選一' : '收到你的心情了' }, { text: '我在這裡' }] };
     if (/帶話題/.test(trigger)) return { ...base, told: '今天店裡來了一隻橘貓', messages: [{ text: '跟你說，今天店門口來了一隻橘貓' }, { text: '一直坐在那邊等人摸 超會' }, { text: '你喜歡貓還是狗？' }] };
     if (/二選一/.test(trigger)) return { ...base, messages: [{ text: '好啊 第一題' }, { text: '夏天去海邊 還是去山上？' }] };
     if (/一起看/.test(trigger)) return { ...base, messages: [{ text: '好啊！想看什麼？' }, { text: '我最近在追一部日劇，還蠻好看的' }] };
@@ -43,6 +44,8 @@ export function mockTurn({ rel, persona, user, userText = '', imageMedia, trigge
   if (/回家了|到家了/.test(userText)) return { ...base, outing: rel.outing_active ? 'end' : 'none', messages: [{ text: '辛苦啦，今天好開心。' }] };
   if (/別一直|不要一直|溫柔一點/.test(userText)) return { ...base, memories_add: [{ kind: 'style', content: '對方希望：' + userText.slice(0, 30), weight: 5 }], messages: [{ text: '好，我知道了。' }] };
   if (/討厭|不吃/.test(userText)) return { ...base, memories_add: [{ kind: 'dislike', content: userText.slice(0, 40), weight: 3 }], messages: [{ text: '好，我記住了。' }] };
+  if (rel.outing_active && /走|逛|到了/.test(userText)) return { ...base, choice: { prompt: '前面有岔路，左邊是老街、右邊是河堤', options: ['走老街', '去河堤吹風'] }, messages: [{ text: '欸你看，前面分兩條路' }] };
+  if (/早點睡|熬夜|想早睡/.test(userText)) return { ...base, goal: { title: '一起 12 點前睡', days: 7 }, messages: [{ text: '那我們一起試試看？' }] };
   if (/貼圖/.test(userText)) return { ...base, sticker: 'hug', messages: [{ text: '收到你的貼圖了' }] };
   if (/下次|約好|一起去/.test(userText)) return { ...base, note: '下次一起去吃豆花', messages: [{ text: '好啊，說好了喔' }] };
   if (/一起看/.test(userText)) return { ...base, activity: { type: 'watch', title: '日劇', minutes: 90 }, messages: [{ text: '好啊，我也開起來了' }] };

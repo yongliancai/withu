@@ -490,3 +490,41 @@ a { color: inherit; }
 .sv-reply button { border:0; background:none; color:#fff; font:inherit; font-weight:600; }
 .sv-foot { padding:14px; text-align:center; color:rgba(255,255,255,.8); padding-bottom:calc(env(safe-area-inset-bottom) + 14px); }
 .sq { font-size:12px; opacity:.75; border-left:3px solid currentColor; padding-left:8px; margin-bottom:6px; }
+
+/* ---- 心情按鈕 ---- */
+.mood-fab { position:fixed; right:max(16px, calc(50% - 240px + 16px)); bottom:calc(var(--tabs-h) + env(safe-area-inset-bottom) + 16px); width:60px; height:60px; border-radius:50%; border:0; background:var(--surface); box-shadow:0 6px 18px rgba(38,34,58,.18); padding:6px; z-index:15; animation:fabwob 3.2s ease-in-out infinite; }
+.mood-fab svg, .mood-head svg { width:100%; height:100%; }
+.mood-head { padding:4px; }
+@keyframes fabwob { 0%,100% { transform:rotate(0) } 45% { transform:rotate(-6deg) } 55% { transform:rotate(6deg) } }
+.mood-to { display:flex; gap:12px; overflow-x:auto; padding:4px 0 12px; }
+.mood-to button { border:0; background:none; display:flex; flex-direction:column; align-items:center; gap:4px; font:inherit; font-size:12px; color:var(--ink); opacity:.55; }
+.mood-to button[aria-pressed="true"] { opacity:1; }
+.mood-grid2 { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+.mood-btn { border:0; background:var(--surface); border-radius:16px; padding:12px 4px; display:flex; flex-direction:column; align-items:center; gap:4px; font:inherit; font-size:13px; color:var(--ink); box-shadow:0 1px 3px rgba(38,34,58,.08); }
+.mood-btn .em { font-size:28px; }
+.mood-press { text-align:center; padding:12px 0 8px; }
+.mood-big { width:140px; height:140px; border-radius:50%; border:0; background:radial-gradient(circle at 35% 30%, #fff, #FBE3EA); box-shadow:0 10px 30px rgba(194,71,127,.25); font-size:72px; line-height:1; user-select:none; -webkit-user-select:none; touch-action:manipulation; }
+.mood-big.pop { animation:mpop .28s ease-out; }
+@keyframes mpop { 0% { transform:scale(1) } 40% { transform:scale(1.18) rotate(-4deg) } 100% { transform:scale(1) } }
+.mood-count { margin-top:14px; color:var(--muted); }
+.mood-count b { font-size:28px; color:var(--ink); }
+.mood-particle { position:fixed; z-index:80; font-size:26px; pointer-events:none; animation:mfly .9s ease-out forwards; }
+@keyframes mfly { from { transform:translate(-50%,-50%) scale(.6); opacity:1 } to { transform:translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(1.3) rotate(var(--r)); opacity:0 } }
+.poke-card { display:flex; align-items:center; gap:8px; background:linear-gradient(135deg,#FBE3EA,#EFE7FB); color:#3B3561; border-radius:18px; padding:10px 14px; font-weight:600; }
+.poke-card .em { font-size:30px; }
+.poke-card b { margin-left:6px; color:#C2477F; }
+
+.choice-opts { display:flex; flex-wrap:wrap; gap:8px; }
+.goal-row { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--line); }
+.goal-row .dots { display:flex; gap:4px; margin:6px 0 2px; flex-wrap:wrap; }
+.goal-row .dots i { width:12px; height:12px; border-radius:50%; background:var(--line); }
+.goal-row .dots i.on { background:#C2477F; }
+
+/* ---- 紀念日 ---- */
+.ann-list { display:flex; flex-direction:column; gap:8px; }
+.ann { display:flex; align-items:center; gap:12px; background:var(--surface); border-radius:14px; padding:10px 14px; }
+.ann.today { background:linear-gradient(135deg,#FBE3EA,#EFE7FB); color:#3B3561; }
+.ann-ic { font-size:22px; }
+.ann .grow { display:flex; flex-direction:column; }
+.ann-left { font-size:13px; font-weight:600; color:#C2477F; white-space:nowrap; }
+.ann-banner { display:block; margin:6px 0 12px; padding:10px 14px; border-radius:14px; background:linear-gradient(135deg,#FBE3EA,#EFE7FB); color:#3B3561; text-decoration:none; font-weight:600; }

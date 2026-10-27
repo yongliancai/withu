@@ -453,7 +453,7 @@ async function renderChatList() {
     const others = active.filter(r => r !== lover).sort((a, b) => (b.starred - a.starred) || ((b.last?.at || 0) - (a.last?.at || 0)));
     app.innerHTML = `<div class="page">
       ${S.me.mock ? '<div class="banner-test">測試模式：尚未設定 OpenAI 金鑰，回覆為範例</div>' : ''}
-      <h1>聊天</h1>${installBanner()}
+      <h1>聊天</h1>${installBanner()}<div id="annBanner"></div>
       ${lover ? `<a class="lover-card" href="#/chat/${lover.id}">${avatar(lover.frame, 72, { lover: true })}
         <span class="grow" style="min-width:0"><span class="name">${esc(displayName(lover.frame))}</span>
         ${lover.statusLine && Date.now() - lover.statusLineAt < 12 * 3600e3
@@ -467,8 +467,15 @@ async function renderChatList() {
         <span class="last">${r.last?.sender === 'user' ? '你：' : ''}${esc(r.last?.text || '')}</span></span>
         ${r.unread ? `<span class="badge">${r.unread}</span>` : ''}</a>`).join('')}
       <div style="text-align:center;margin-top:22px"><a class="btn ghost sm" href="#/meet" style="text-decoration:none">認識新的人</a></div>
-    </div>`;
+    </div>
+    <button class="mood-fab" id="moodFab" aria-label="心情按鈕">${moodFace()}</button>`;
     bindInstall();
+    $('#moodFab').onclick = () => openMoodButton();
+    api('/api/anniversaries').then(list => {
+      const a = list.find(x => x.kind === 'his_birthday') || list[0];
+      if (!a || !$('#annBanner')) return;
+      $('#annBanner').innerHTML = `<a class="ann-banner" href="#/chat/${a.relId}">${a.kind === 'his_birthday' ? '🎂' : a.kind === 'your_birthday' ? '🎉' : '💗'} ${a.left === 0 ? '今天' : '明天'}是${a.kind === 'his_birthday' ? esc(a.name) + '的生日' : a.kind === 'your_birthday' ? '你的生日' : `你和${esc(a.name)}的「${esc(a.title)}」`}</a>`;
+    }).catch(() => {});
   };
   await draw();
   S.timers.push(setInterval(() => { if (document.visibilityState === 'visible' && !$('#sheet-root').innerHTML) draw().catch(() => {}); }, 20000));
@@ -585,6 +592,11 @@ function cardHtml(m, rel) {
     case 'walk': return `<div class="note" data-id="${id}">${esc(c.text)}</div>`;
     case 'nudge': return `<div class="note" data-id="${id}">${esc(c.text)}</div>`;
     case 'note': return `<div class="note" data-id="${id}">📝 記進記事本：${esc(c.text)}</div>`;
+    case 'choice': return `<div class="msg him" data-id="${id}"><div class="card choice-card"><p class="hand" style="margin:0 0 8px;font-size:16px">${esc(c.prompt)}</p>
+      ${c.chosen !== undefined ? `<p class="small muted" style="margin:0">你們選了「${esc(c.options[c.chosen])}」</p>` : `<div class="choice-opts">${c.options.map((o, i) => `<button class="btn ghost sm" data-choice="${id}" data-idx="${i}">${esc(o)}</button>`).join('')}</div>`}</div></div>`;
+    case 'goal': return `<div class="msg him" data-id="${id}"><div class="card goal-card"><div class="small muted">一起完成的小目標</div><p class="hand" style="font-size:17px;margin:4px 0 6px">${esc(c.title)}</p><div class="small muted">${c.days} 天，不用連續，做不到也沒關係</div>
+      ${c.answered ? `<p class="small muted" style="margin:8px 0 0">${c.answered === 'yes' ? '你們開始了・在記事本可以打勾' : '你說先不要'}</p>` : `<div class="actions"><button class="btn ghost sm" data-goal="${id}" data-acc="0">先不要</button><button class="btn sm" data-goal="${id}" data-acc="1">好啊</button></div>`}</div></div>`;
+    case 'poke': return `<div class="msg me" data-id="${id}"><div class="poke-card"><span class="em">${esc(c.emoji)}</span><span>${esc(c.label)}${c.count > 1 ? `<b>×${c.count}</b>` : ''}</span></div></div>`;
     case 'activity': return `<div class="note" data-id="${id}">${c.state === 'start' ? '▶︎ ' : ''}${esc(c.text)}</div>`;
     case 'postcard': return `<div class="msg him" data-id="${id}">${postcardHtml({ ...c, name: rel.frame.name })}</div>`;
     case 'travelogue': return `<div class="note" data-id="${id}">${ta(rel.frame)}整理好了今天的遊記「${esc(c.title)}」，收在<a href="#/story">我們的故事</a></div>`;
@@ -640,6 +652,7 @@ async function renderRoom(relId) {
       <a class="icon-btn" href="#/chat" aria-label="返回聊天列表">${icon('back')}</a>
       <button class="who" id="who">${avatar(rel.frame, 38, { lover: rel.pinned })}<span style="min-width:0">
         <span class="nm">${esc(displayName(rel.frame))}${rel.outing ? '<span class="tag">出遊中</span>' : ''}</span><div class="sub" id="sub">${sub()}</div></span></button>
+      <button class="icon-btn mood-head" id="moodBtn" aria-label="心情按鈕">${moodFace()}</button>
       <button class="icon-btn" id="more" aria-label="聊天室選單">${icon('menu')}</button>
     </header>
     ${rel.activity ? `<div class="walk-banner"><span>${ACT[rel.activity.type] || '一起'}${rel.activity.title ? `：${esc(rel.activity.title)}` : ''}・<span id="actMin"></span></span><button class="linkbtn small" id="actEnd">結束</button></div>` : ''}
@@ -662,6 +675,7 @@ async function renderRoom(relId) {
   </div>`;
   $('#who').onclick = () => { location.hash = `#/profile/${rel.id}`; };
   $('#more').onclick = () => openRoomMenu(rel);
+  $('#moodBtn') && ($('#moodBtn').onclick = () => rel.status === 'active' ? openMoodButton(rel.id) : toast('這段關係已經結束了'));
   const stream = $('#stream');
 
   const msgs = await api(`/api/rels/${relId}/messages`);
@@ -949,6 +963,16 @@ async function renderProfile(relId) {
 
 let currentAudio = null;
 function bindStream(root) {
+  $$('[data-choice]', root).forEach(b => b.onclick = async () => {
+    const relId = S.room?.rel?.id; if (!relId || S.room.sending) return;
+    S.room.sending = true; $$('[data-choice]', root).forEach(x => x.disabled = true);
+    try { const r = await api(`/api/rels/${relId}/choice`, { method: 'POST', body: { msgId: Number(b.dataset.choice), idx: Number(b.dataset.idx) } }); S.room.sending = false; renderRoom(relId); } catch (e) { toast(e.message); S.room.sending = false; }
+  });
+  $$('[data-goal]', root).forEach(b => b.onclick = async () => {
+    const relId = S.room?.rel?.id; if (!relId || S.room.sending) return;
+    S.room.sending = true; $$('[data-goal]', root).forEach(x => x.disabled = true);
+    try { await api(`/api/rels/${relId}/goal`, { method: 'POST', body: { msgId: Number(b.dataset.goal), accept: b.dataset.acc === '1' } }); S.room.sending = false; renderRoom(relId); } catch (e) { toast(e.message); S.room.sending = false; }
+  });
   $$('[data-audio]', root).forEach(b => b.onclick = () => {
     if (!b.dataset.audio || b.dataset.audio === 'null') return;
     if (currentAudio) { currentAudio.pause(); }
@@ -999,6 +1023,62 @@ async function shrinkImage(file, max = 1280) {
 }
 
 // ---------- character sheet ----------
+function moodFace() {
+  return `<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M8 36 q0-24 24-24 q24 0 24 24 q0 18-24 18 q-24 0-24-18z" fill="#FFF6EC" stroke="#3B3561" stroke-width="3"/>
+    <path d="M22 34 q3-4 6 0 M36 34 q3-4 6 0" stroke="#3B3561" stroke-width="3" fill="none" stroke-linecap="round"/><path d="M28 42 q4 4 8 0" stroke="#3B3561" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <ellipse cx="19" cy="41" rx="4" ry="2.5" fill="#F4A6B4"/><ellipse cx="45" cy="41" rx="4" ry="2.5" fill="#F4A6B4"/><path d="M50 14 c0-4 6-4 6 0 c0-4 6-4 6 0 c0 4-6 7-6 7 s-6-3-6-7z" fill="#E0525F"/></svg>`;
+}
+// ---------- 心情按鈕：不想打字時按一按，連按越多下代表越強烈 ----------
+async function openMoodButton(relId = null) {
+  const rels = (S.rels.length ? S.rels : await api('/api/rels')).filter(r => r.status === 'active');
+  if (!rels.length) return toast('先去認識一個人吧');
+  let target = relId || (rels.find(r => r.pinned) || rels.slice().sort((a, b) => (b.last?.at || 0) - (a.last?.at || 0))[0]).id;
+  const emos = S.meta.emotions || [];
+  openSheet(`<h3>現在的心情是？</h3><p class="small muted">按一下就會傳給${relId ? esc(displayName(rels.find(r => r.id === relId)?.frame || {})) : '他'}；連按越多下，代表越強烈。</p>
+    ${relId ? '' : `<div class="mood-to">${rels.map(r => `<button data-to="${r.id}" aria-pressed="${r.id === target}">${avatar(r.frame, 40, { season: false })}<span>${esc(displayName(r.frame))}</span></button>`).join('')}</div>`}
+    <div class="mood-grid2">${emos.map(e => `<button class="mood-btn" data-emo="${e.id}"><span class="em">${e.emoji}</span><span>${esc(e.label)}</span></button>`).join('')}</div>
+    <div class="mood-press" id="mp" hidden><button class="mood-big" id="mpBtn" aria-label="再按一下"><span id="mpEmo"></span></button><div class="mood-count"><b id="mpN">1</b> 下・<span id="mpHint">繼續按，或等一下就會送出</span></div></div>`, (sh, close) => {
+    $$('[data-to]', sh).forEach(b => b.onclick = () => { target = b.dataset.to; $$('[data-to]', sh).forEach(x => x.setAttribute('aria-pressed', String(x === b))); });
+    let emo = null, count = 0, timer = null;
+    const burst = (x, y) => {
+      for (let i = 0; i < 6; i++) {
+        const p = document.createElement('span');
+        p.className = 'mood-particle'; p.textContent = emo.emoji;
+        p.style.left = x + 'px'; p.style.top = y + 'px';
+        p.style.setProperty('--dx', `${(Math.random() - .5) * 180}px`); p.style.setProperty('--dy', `${-60 - Math.random() * 140}px`); p.style.setProperty('--r', `${(Math.random() - .5) * 90}deg`);
+        document.body.appendChild(p); setTimeout(() => p.remove(), 900);
+      }
+    };
+    const send = async () => {
+      close();
+      const r = rels.find(x => x.id === target);
+      try {
+        const res = await api(`/api/rels/${target}/poke`, { method: 'POST', body: { emotion: emo.id, count } });
+        track('poke', { emotion: emo.id, count });
+        if (location.hash === `#/chat/${target}` && S.room?.reveal) { await S.room.reveal(res.messages || []); if (res.pending) toast(`${displayName(r.frame)}現在不在線上，看到會回你`); }
+        else toast(res.pending ? `${displayName(r.frame)}現在${res.pending.presence?.code === 'dnd' ? '睡了' : '在忙'}，看到會回你` : `已經讓${displayName(r.frame)}知道了`);
+      } catch (e) { toast(e.message); }
+    };
+    const press = (ev) => {
+      count++;
+      $('#mpN', sh).textContent = count;
+      const big = $('#mpBtn', sh); big.classList.remove('pop'); void big.offsetWidth; big.classList.add('pop');
+      const rect = big.getBoundingClientRect();
+      burst(ev?.clientX || rect.left + rect.width / 2, ev?.clientY || rect.top + rect.height / 2);
+      try { navigator.vibrate?.(12); } catch {}
+      $('#mpHint', sh).textContent = count >= 15 ? '爆表了！' : count >= 6 ? '很強烈喔' : '繼續按，或等一下就會送出';
+      clearTimeout(timer); timer = setTimeout(send, 1600);
+    };
+    $$('[data-emo]', sh).forEach(b => b.onclick = (ev) => {
+      emo = emos.find(x => x.id === b.dataset.emo);
+      $('.mood-grid2', sh).hidden = true; $('.mood-to', sh) && ($('.mood-to', sh).hidden = true);
+      $('#mp', sh).hidden = false; $('#mpEmo', sh).textContent = emo.emoji;
+      press(ev);
+    });
+    $('#mpBtn', sh).onclick = press;
+  });
+}
+
 // ---------- 聊天室選單（像 LINE）----------
 const THEMES = [['default', '預設'], ['night', '夜晚'], ['cafe', '咖啡廳'], ['sea', '海邊'], ['sakura', '櫻花'], ['forest', '森林']];
 function openRoomMenu(rel) {
@@ -1036,9 +1116,15 @@ async function openNotes(rel) {
     $$('[data-nd]', sh).forEach(c => c.onchange = async () => { await api(`/api/rels/${rel.id}/notes/${c.dataset.nd}`, { method: 'PATCH', body: { done: c.checked } }); draw(sh); });
     $$('[data-nx]', sh).forEach(b => b.onclick = async () => { await api(`/api/rels/${rel.id}/notes/${b.dataset.nx}`, { method: 'PATCH', body: { delete: true } }); draw(sh); });
   };
-  openSheet(`<h3>記事本</h3><p class="small muted">你們的約定與清單</p><div id="nlist"></div>
+  const goals = await api(`/api/rels/${rel.id}/goals`);
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
+  const goalHtml = goals.filter(g => g.status === 'active' || g.status === 'done').map(g => `<div class="goal-row"><div class="grow"><b>${esc(g.title)}</b><div class="dots">${Array.from({ length: g.days }, (_, k) => `<i class="${k < g.done.length ? 'on' : ''}"></i>`).join('')}</div>
+    <div class="small muted">${g.status === 'done' ? '完成了！' : `做到 ${g.done.length}/${g.days} 天・不用連續`}</div></div>
+    ${g.status === 'active' ? `<button class="btn sm ${g.done.includes(today) ? 'ghost' : ''}" data-gd="${g.id}" ${g.done.includes(today) ? 'disabled' : ''}>${g.done.includes(today) ? '今天做到了' : '今天做到了？'}</button>` : ''}</div>`).join('');
+  openSheet(`<h3>記事本</h3>${goalHtml ? `<p class="small muted">一起完成的小目標</p>${goalHtml}` : ''}<p class="small muted" style="margin-top:12px">你們的約定與清單</p><div id="nlist"></div>
     <div class="row-form"><input class="input" id="nnew" maxlength="40" placeholder="例如：下次一起去吃豆花"><button class="btn sm" id="nadd">新增</button></div>`, (sh) => {
     draw(sh);
+    $$('[data-gd]', sh).forEach(b => b.onclick = async () => { const r = await api(`/api/rels/${rel.id}/goals/${b.dataset.gd}/done`, { method: 'POST' }); toast(r.finished ? '你們一起完成了！' : `${r.done}/${r.days}，很棒`); openNotes(rel); });
     $('#nadd', sh).onclick = async () => { const t = $('#nnew', sh).value.trim(); if (!t) return; await api(`/api/rels/${rel.id}/notes`, { method: 'POST', body: { text: t } }); $('#nnew', sh).value = ''; draw(sh); };
   });
 }
@@ -1314,6 +1400,8 @@ async function renderStory() {
     <div class="story-tabs">${data.map(d => `<button data-rel="${d.rel.id}" aria-pressed="${d.rel.id === sel}">${avatar(d.rel.frame, 48, { season: false, lover: d.rel.pinned })}<span>${esc(displayName(d.rel.frame))}${d.rel.status === 'ended' ? '・已結束' : ''}</span></button>`).join('')}</div>
     <p class="small muted">${dateStr(cur.rel.createdAt)} 相遇${cur.rel.status === 'ended' ? `・${dateStr(cur.rel.endedAt)} 分開` : ''}</p>
     ${letter ? `<h2>${ta(cur.rel.frame)}留給你的信</h2><div class="letter">${esc(letter.body)}</div>` : ''}
+    ${cur.anniversaries?.length ? `<h2>紀念日</h2><div class="ann-list">${cur.anniversaries.map(a => `<div class="ann ${a.left === 0 ? 'today' : ''}"><span class="ann-ic">${{ his_birthday: '🎂', your_birthday: '🎉', together: '💗', met: '🌱' }[a.kind] || '📅'}</span>
+      <span class="grow"><b>${esc(a.title)}</b><span class="small muted">${a.date.replace(/-/g, '.')}</span></span><span class="ann-left">${a.left === 0 ? '今天' : a.left === 1 ? '明天' : `還有 ${a.left} 天`}</span></div>`).join('')}</div>` : ''}
     <h2>回憶錄</h2>
     ${cur.memoir.map(ch => `<div class="mm-ch"><div class="mm-head"><b>${esc(ch.title)}</b><span class="small muted">${ch.unlocked}／${ch.total}</span></div>
       <div class="mm-grid">${ch.cards.map(c => c.unlocked

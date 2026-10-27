@@ -10,10 +10,10 @@ import { db, now, j, logEvent } from './db.js';
 import { stt, jsonCall } from './llm.js';
 import { JOBS, ARCHETYPES, PROACTIVITY, VOICES, SCENARIOS, AVATAR_HUES, charStatus, MOODS, CATEGORIES } from './characters.js';
 import { STAGES } from './prompt.js';
-import { id, runTurn, addMessage, getPersona, endRelationship, addStory, ta, startActivity, endActivity, STICKERS } from './engine.js';
+import { id, runTurn, addMessage, getPersona, endRelationship, addStory, ta, startActivity, endActivity, STICKERS, milestone } from './engine.js';
 import { presenceOf, replyDelayMs } from './presence.js';
 import { crisisSignal } from './safety.js';
-import { topicsFor, GAMES, ACTIVITIES, LEAD_REASON } from './topics.js';
+import { topicsFor, GAMES, ACTIVITIES, LEAD_REASON, EMOTIONS, pokeReason } from './topics.js';
 import { seedOfficial, meet, sharePreview, publishShare, cleanupOrphans } from './meet.js';
 import { startScheduler, tick } from './scheduler.js';
 import { pushEnabled } from './push.js';
@@ -21,6 +21,7 @@ import { adminStats } from './admin.js';
 import { logIssue, purgeOldLogs } from './logger.js';
 import { mountAdmin, cohortForCode } from './adminRoutes.js';
 import { memoirFor } from './memoir.js';
+import { anniversariesFor } from './anniv.js';
 import { userStatus, createUserPost, userPostsOut, charStories, markStorySeen, mediaOwnedBy } from './social.js';
 import { feedFor, likePost, commentPost } from './feed.js';
 import { LIB_DIR, pickPhoto, photoById, fillLibrary, generatePhotos, photoSources, saveUpload, PHOTO_TAGS, photoCount } from './photos.js';
@@ -202,7 +203,7 @@ app.delete('/api/me', auth, (req, res) => {
 });
 
 // ---------- meta, square, meeting ----------
-app.get('/api/meta', (req, res) => res.json({ jobs: JOBS, archetypes: ARCHETYPES, proactivity: PROACTIVITY, voices: VOICES, scenarios: SCENARIOS, hues: AVATAR_HUES, stages: STAGES, moods: MOODS, categories: CATEGORIES }));
+app.get('/api/meta', (req, res) => res.json({ jobs: JOBS, archetypes: ARCHETYPES, proactivity: PROACTIVITY, voices: VOICES, scenarios: SCENARIOS, hues: AVATAR_HUES, stages: STAGES, moods: MOODS, categories: CATEGORIES, emotions: EMOTIONS }));
 
 const publicFrame = (f) => ({ name: f.name, gender: f.gender, age: f.age, nationality: f.nationality, jobLabel: f.jobLabel, job: f.job,
   archetype: f.archetype, archetypeLabel: ARCHETYPES[f.archetype]?.label, look: f.look, proactivity: f.proactivity, appearance: f.appearance,
@@ -468,6 +469,88 @@ app.post('/api/rels/:id/nudge', auth, wrap(async (req, res) => {
   } finally { busyRels.delete(rel.id); }
 }));
 
+// 出遊小插曲：選一個
+app.post('/api/rels/:id/choice', auth, wrap(async (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const m = db.prepare(`SELECT * FROM messages WHERE id=? AND rel_id=? AND kind='card'`).get(Number(req.body?.msgId), rel.id);
+  const card = m && j(m.card);
+  if (!card || card.type !== 'choice' || card.chosen !== undefined) return res.status(400).json({ error: '已經選過了' });
+  const opt = card.options[Number(req.body?.idx)];
+  if (!opt) return res.status(400).json({ error: '選項不存在' });
+  card.chosen = Number(req.body.idx);
+  db.prepare('UPDATE messages SET card=? WHERE id=?').run(JSON.stringify(card), m.id);
+  const before = db.prepare('SELECT MAX(id) m FROM messages WHERE rel_id=?').get(rel.id).m || 0;
+  addMessage(rel, 'user', 'text', { text: opt });
+  db.prepare('UPDATE relationships SET user_msg_count=user_msg_count+1, last_user_msg_at=?, unanswered=0 WHERE id=?').run(now(), rel.id);
+  milestone(rel, `一起出門時，你們選了「${opt}」`.slice(0, 40));
+  await runTurn({ user: req.user, relId: rel.id, userText: `（${card.prompt}）我選：${opt}` });
+  res.json({ messages: db.prepare('SELECT * FROM messages WHERE rel_id=? AND id>? ORDER BY id').all(rel.id, before).map(msgOut) });
+}));
+
+// 一起完成的小目標
+app.post('/api/rels/:id/goal', auth, wrap(async (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const m = db.prepare(`SELECT * FROM messages WHERE id=? AND rel_id=? AND kind='card'`).get(Number(req.body?.msgId), rel.id);
+  const card = m && j(m.card);
+  if (!card || card.type !== 'goal' || card.answered) return res.status(400).json({ error: '已經回覆過了' });
+  const accept = !!req.body?.accept;
+  card.answered = accept ? 'yes' : 'no';
+  db.prepare('UPDATE messages SET card=? WHERE id=?').run(JSON.stringify(card), m.id);
+  const before = db.prepare('SELECT MAX(id) m FROM messages WHERE rel_id=?').get(rel.id).m || 0;
+  if (accept) {
+    db.prepare('INSERT INTO goals (rel_id,title,days,created_at) VALUES (?,?,?,?)').run(rel.id, card.title, card.days, now());
+    // 每隔一天晚上問一下，不施壓
+    for (let d = 1; d <= card.days; d += 2) {
+      const t = new Date(Date.now() + d * 864e5); const due = new Date(t.toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' }) + 'T21:30:00+08:00').getTime();
+      db.prepare('INSERT INTO followups (rel_id,due_at,topic) VALUES (?,?,?)').run(rel.id, due, `你們一起在做「${card.title}」。輕鬆地問一句今天怎麼樣、分享你自己的狀況；做不到也沒關係，不要給壓力`);
+    }
+    logEvent(req.user.id, 'goal_start', { rel: rel.id });
+  }
+  addMessage(rel, 'user', 'text', { text: accept ? '好啊，一起試試看' : '先不要好了' });
+  await runTurn({ user: req.user, relId: rel.id, userText: accept ? `（答應一起完成「${card.title}」）好啊，一起試試看` : '（先不要這個目標）先不要好了' });
+  res.json({ messages: db.prepare('SELECT * FROM messages WHERE rel_id=? AND id>? ORDER BY id').all(rel.id, before).map(msgOut) });
+}));
+app.get('/api/rels/:id/goals', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  res.json(db.prepare(`SELECT * FROM goals WHERE rel_id=? ORDER BY status='active' DESC, id DESC LIMIT 10`).all(rel.id)
+    .map(g => ({ id: g.id, title: g.title, days: g.days, done: j(g.done, []), status: g.status, at: g.created_at })));
+});
+app.post('/api/rels/:id/goals/:gid/done', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const g = db.prepare(`SELECT * FROM goals WHERE id=? AND rel_id=? AND status='active'`).get(req.params.gid, rel.id);
+  if (!g) return res.status(404).json({ error: '找不到' });
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
+  const done = j(g.done, []);
+  if (!done.includes(today)) done.push(today);
+  const finished = done.length >= g.days;
+  db.prepare('UPDATE goals SET done=?, status=?, ended_at=? WHERE id=?').run(JSON.stringify(done), finished ? 'done' : 'active', finished ? now() : null, g.id);
+  if (finished) {
+    milestone(rel, `你們一起完成了「${g.title}」`.slice(0, 40));
+    db.prepare(`UPDATE followups SET done=1 WHERE rel_id=? AND done=0 AND topic LIKE ?`).run(rel.id, `%${g.title}%`);
+  }
+  res.json({ done: done.length, days: g.days, finished });
+});
+
+// 心情按鈕
+app.post('/api/rels/:id/poke', auth, wrap(async (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  if (rel.status !== 'active') return res.status(400).json({ error: '這段關係已經結束了' });
+  const e = EMOTIONS.find(x => x.id === req.body?.emotion);
+  if (!e) return res.status(400).json({ error: '沒有這個心情' });
+  if (busyRels.has(rel.id)) return res.status(429).json({ error: `${ta(getPersona(rel))}還在回上一則` });
+  const count = Math.max(1, Math.min(99, Number(req.body?.count) || 1));
+  busyRels.add(rel.id);
+  try {
+    const before = db.prepare('SELECT MAX(id) m FROM messages WHERE rel_id=?').get(rel.id).m || 0;
+    addMessage(rel, 'user', 'card', { text: `${e.emoji} ${e.label}${count > 1 ? ` ×${count}` : ''}`, card: { type: 'poke', emotion: e.id, emoji: e.emoji, label: e.label, count } });
+    db.prepare('UPDATE relationships SET last_user_msg_at=?, unanswered=0 WHERE id=?').run(now(), rel.id);
+    logEvent(req.user.id, 'poke', { rel: rel.id, emotion: e.id, count });
+    const out = await replyOrDefer(req.user, rel, { trigger: pokeReason(e, count), triggerKey: 'nudge_poke' });
+    const rows = db.prepare('SELECT * FROM messages WHERE rel_id=? AND id>? ORDER BY id').all(rel.id, before);
+    res.json({ messages: rows.map(msgOut), ...out });
+  } finally { busyRels.delete(rel.id); }
+}));
+
 // 結束一起做的事
 app.post('/api/rels/:id/activity/end', auth, wrap(async (req, res) => {
   const rel = ownRel(req, res); if (!rel) return;
@@ -618,6 +701,12 @@ app.post('/api/meal/:msgId/decline', auth, (req, res) => {
   res.json({ ok: true });
 });
 
+// 即將到來的紀念日（聊天列表的小提醒用）
+app.get('/api/anniversaries', auth, (req, res) => {
+  const rels = db.prepare(`SELECT * FROM relationships WHERE user_id=? AND status='active' AND blocked=0`).all(req.user.id);
+  res.json(rels.flatMap(rel => { const p = getPersona(rel); return anniversariesFor(rel, p, { within: 1 }).map(a => ({ ...a, relId: rel.id, name: p.name })); }));
+});
+
 // ---------- 動態牆 ----------
 app.get('/api/feed', auth, (req, res) => {
   res.json(feedFor(req.user.id).map(({ persona, ...p }) => ({ ...p, frame: publicFrame(persona) })));
@@ -639,7 +728,7 @@ app.get('/api/story', auth, (req, res) => {
   res.json(rels.map(rel => {
     const items = db.prepare('SELECT * FROM story WHERE rel_id=? ORDER BY created_at DESC').all(rel.id)
       .map(s => ({ id: s.id, type: s.type, title: s.title, body: s.body, place: s.place, scene: s.scene, photo: s.photo_id ? photoById(s.photo_id) : null, media: (j(s.media) || []).map(f => `/api/media/${f}`), at: s.created_at }));
-    return { rel: relSummary(rel), items, memoir: memoirFor(rel, getPersona(rel)) };
+    return { rel: relSummary(rel), items, memoir: memoirFor(rel, getPersona(rel)), anniversaries: rel.status === 'active' ? anniversariesFor(rel, getPersona(rel), { within: 120 }).slice(0, 8) : [] };
   }));
 });
 

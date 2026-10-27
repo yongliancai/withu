@@ -18,6 +18,8 @@ import { pickPhoto } from './photos.js';
 import { addPost } from './feed.js';
 import { reviewOutgoing, gapLabel } from './review.js';
 import { statusLine, postsVisibleTo } from './social.js';
+import { worldContext } from './world.js';
+import { arcContext } from './arcs.js';
 
 export const id = (p = '') => p + crypto.randomBytes(9).toString('base64url');
 
@@ -30,9 +32,14 @@ export function getPersona(rel) {
   const c = db.prepare('SELECT * FROM characters WHERE id=?').get(rel.character_id);
   const p = j(c.persona, {});
   // 舊版建立的角色沒有這些欄位：從官方設定或職業補上
-  if (!p.threads || p.signature === undefined || !p.look) {
+  if (!p.threads || p.signature === undefined || !p.look || !p.home || !p.birthday) {
     const t = c.template_id && db.prepare('SELECT data FROM templates WHERE id=?').get(c.template_id);
     const tf = t ? j(t.data, {}) : {};
+    // 住哪一區、生日：官方角色從設定補；自己捏的依名字固定給一個
+    let h = 0; for (const ch of String(p.name || c.id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    const TPE = ['台北市大安區', '台北市中山區', '台北市信義區', '台北市松山區', '台北市中正區', '新北市板橋區', '新北市永和區', '台北市內湖區'];
+    p.home = p.home || tf.home || TPE[h % TPE.length];
+    p.birthday = p.birthday || tf.birthday || `${String(1 + (h % 12)).padStart(2, '0')}-${String(1 + (h % 28)).padStart(2, '0')}`;
     p.threads = p.threads || tf.threads || JOBS[p.job]?.threads || [];
     if (p.signature === undefined) p.signature = tf.signature || '';
     p.look = p.look || tf.look;
@@ -323,7 +330,10 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const instructions = `${BASE_RULES}\n\n${personaBlock(persona)}`;
   const input = historyInput(rel.id, imageMedia);
   const activity = j(rel.activity);
+  const world = await worldContext(persona, rel.id);
+  const arc = arcContext(rel.id);
   input.push({ role: 'developer', content: contextBlock({
+    world, arc, goals: db.prepare(`SELECT title, days, done FROM goals WHERE rel_id=? AND status='active'`).all(rel.id).map(g => `${g.title}（做到 ${j(g.done, []).length}/${g.days} 天）`),
     habits: habitsOf(rel.id), notes: db.prepare('SELECT text FROM notes WHERE rel_id=? AND done=0 ORDER BY id DESC LIMIT 10').all(rel.id).map(n => n.text), told: toldOf(rel.id), summary: rel.summary || '', lateReply, activity,
     lowEffort: !trigger && lowEffortStreak(rel.id),
     userStatus: statusLine(db.prepare('SELECT * FROM users WHERE id=?').get(rel.user_id) || user), userPosts: postsVisibleTo(rel),
@@ -431,6 +441,16 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   }
   if (out.told) addTold(rel.id, out.told);
   if (out.sticker && STICKERS[out.sticker]) addMessage(rel, 'char', 'sticker', { text: STICKERS[out.sticker], card: { id: out.sticker }, proactive: isProactive, reason: triggerKey });
+  // 出遊中的小插曲（一次出遊最多一次）
+  if (out.choice && rel.outing_active && out.choice.options?.length >= 2 && !crisis) {
+    const had = db.prepare(`SELECT 1 FROM messages WHERE rel_id=? AND kind='card' AND card LIKE '%"type":"choice"%' AND created_at>=?`).get(rel.id, rel.outing_started_at || 0);
+    if (!had) addMessage(rel, 'char', 'card', { card: { type: 'choice', prompt: out.choice.prompt.slice(0, 50), options: out.choice.options.slice(0, 3).map(o => String(o).slice(0, 16)) } });
+  }
+  // 一起完成的小目標（同時只有一個）
+  if (out.goal && !crisis && !db.prepare(`SELECT 1 FROM goals WHERE rel_id=? AND status='active'`).get(rel.id)
+      && !db.prepare(`SELECT 1 FROM messages WHERE rel_id=? AND kind='card' AND card LIKE '%"type":"goal"%' AND created_at>?`).get(rel.id, now() - 3 * 864e5)) {
+    addMessage(rel, 'char', 'card', { card: { type: 'goal', title: out.goal.title.slice(0, 20), days: Math.max(3, Math.min(14, out.goal.days || 7)) } });
+  }
   if (out.note && !crisis) {
     const t = out.note.trim().slice(0, 40);
     if (t && !db.prepare('SELECT 1 FROM notes WHERE rel_id=? AND text=?').get(rel.id, t)) {
@@ -520,4 +540,4 @@ export async function endActivity(rel, user, { reason = 'user' } = {}) {
   else if (act.type === 'watch' && reason === 'user') await runTurn({ user, relId: rel.id, trigger: `你們一起看完了${act.title ? `「${act.title}」` : ''}。用一兩句話聊聊你的感想，問對方最喜歡哪一段。`, triggerKey: 'watch_end' });
 }
 
-export { endRelationship, addStory };
+export { endRelationship, addStory, milestone };

@@ -7,6 +7,8 @@ import { runTurn, getPersona, finishOuting, endActivity } from './engine.js';
 import { logIssue } from './logger.js';
 import { generatePost, postMoment } from './feed.js';
 import { shouldHoldProactive, gapLabel as gapLabelFn } from './review.js';
+import { tickArc } from './arcs.js';
+import { anniversariesFor, anniversaryReason } from './anniv.js';
 
 const STAGE_MULT = [0.3, 0.6, 0.9, 1.2, 1.2];
 const LEVEL_MULT = { low: 0.5, normal: 1, high: 1.5 };
@@ -43,6 +45,10 @@ function candidates(rel, persona, settings, t, log = {}) {
   const shareProb = { clingy: 0.7, independent: 0.35, slow: 0.2 + rel.stage * 0.1 }[persona.proactivity] ?? 0.3;
   if (rel.stage >= 1 && free && (inWindow(m, 15 * 60, 17 * 60 + 30) || inWindow(m, 20 * 60 + 30, 21 * 60 + 40)))
     list.push({ key: 'share', prob: shareProb, reason: '分享一件你自己今天生活裡的小事（可以從「你生活中正在進行的事」延伸），具體、有畫面。說完就停，不一定要問問題；可以寫 life_post。' });
+  // 紀念日當天：早上或下班後提起（一天一次）
+  const ann = anniversariesFor(rel, persona, { within: 0 }).filter(a => a.left === 0 && (a.kind !== 'met' || rel.stage >= 1));
+  if (ann.length && (inWindow(m, 8 * 60, 10 * 60) || inWindow(m, end + 10, end + 120) || (!workday && inWindow(m, 10 * 60, 12 * 60))))
+    list.unshift({ key: 'anniversary', prob: 1, voice: ann[0].kind !== 'met', reason: anniversaryReason(ann[0], persona) });
   if (rel.stage >= 1 && rel.last_user_msg_at && now() - rel.last_user_msg_at > 2 * 864e5 && inWindow(m, 19 * 60, 21 * 60))
     list.push({ key: 'checkin', prob: 0.7, every: 2, reason: '對方好幾天沒來了。不生氣、不討拍，心疼對方：「這幾天很累吧？」' });
   return list;
@@ -83,6 +89,11 @@ async function tickRel(rel, user, t, userSentToday) {
       await generatePost(rel, persona, moment).catch(e => logIssue({ level: 'warn', source: 'scheduler', message: `發動態失敗：${e.message}`, error: e, relId: rel.id }));
     }
   }
+  // 小目標過了兩倍天數還沒完成：安靜結束，不責備
+  db.prepare(`UPDATE goals SET status='ended', ended_at=? WHERE rel_id=? AND status='active' AND created_at < ? - days * 2 * 86400000`).run(now(), rel.id, now());
+  // 他生活裡的連續劇：有空時推進一段；想跟對方說的話排成跟進（會經過發送前檢查）
+  const share = await tickArc(rel, persona);
+  if (share) db.prepare('INSERT INTO followups (rel_id,due_at,topic) VALUES (?,?,?)').run(rel.id, now() + (2 + Math.random() * 8) * 60000, `你剛發了動態，想私下跟對方分享你生活裡正在發生的事：「${share.slice(0, 60)}」（用你的說話方式說，不要照抄）`);
   // 一起做的事：時間到就結束（陪專心會來問進度）
   const act = j(rel.activity);
   if (act) {

@@ -59,3 +59,15 @@ export function topicsFor(persona) {
     activities: ACTIVITIES.map(({ id, label, desc }) => ({ id, label, desc: fix(desc) })),
   };
 }
+
+// 心情按鈕：不想打字時按一下（連按代表越強烈），他會看到並用自己的方式回應
+export const EMOTIONS = [
+  { id: 'stress', emoji: '😫', label: '壓力好大' }, { id: 'tired', emoji: '😮‍💨', label: '好累' },
+  { id: 'bored', emoji: '🥱', label: '好無聊' }, { id: 'miss', emoji: '🥺', label: '想你' },
+  { id: 'happy', emoji: '🥳', label: '好開心' }, { id: 'sad', emoji: '😢', label: '有點難過' },
+  { id: 'angry', emoji: '😤', label: '好生氣' }, { id: 'hug', emoji: '🤗', label: '想要抱抱' },
+];
+export function pokeReason(e, count) {
+  const level = count >= 15 ? '非常非常強烈' : count >= 6 ? '很強烈' : '有一點';
+  return `對方沒有打字，按了心情按鈕「${e.label}」${count > 1 ? `，連按了 ${count} 下（${level}）` : ''}。依你的個性和你們的關係回應這個情緒：先接住（壓力、累、難過、生氣就先陪伴、不要說教；無聊就陪玩或丟個好玩的話題；想你、想抱抱就依關係階段回應，還不熟時溫暖但有分寸；開心就一起開心、問發生什麼好事）。短短的、像真人看到朋友傳這個時會回的樣子；可以搭配貼圖。`;
+}
