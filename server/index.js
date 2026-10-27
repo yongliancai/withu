@@ -23,7 +23,7 @@ import { mountAdmin, cohortForCode } from './adminRoutes.js';
 import { memoirFor } from './memoir.js';
 import { userStatus, createUserPost, userPostsOut, charStories, markStorySeen, mediaOwnedBy } from './social.js';
 import { feedFor, likePost, commentPost } from './feed.js';
-import { LIB_DIR, pickPhoto, photoById, fillFromPexels, saveUpload, PHOTO_TAGS, photoCount } from './photos.js';
+import { LIB_DIR, pickPhoto, photoById, fillLibrary, generatePhotos, photoSources, saveUpload, PHOTO_TAGS, photoCount } from './photos.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -171,6 +171,10 @@ app.get('/api/me/export', auth, (req, res) => {
     messages: db.prepare('SELECT rel_id, sender, kind, text, media, created_at FROM messages WHERE user_id=? ORDER BY id').all(uid),
     memories: db.prepare('SELECT rel_id, kind, content, source, created_at FROM memories WHERE user_id=?').all(uid),
     story: db.prepare('SELECT rel_id, type, title, body, place, media, created_at FROM story WHERE user_id=?').all(uid),
+    profile: { bio: req.user.bio || '', status: req.user.status_text || null, avatar: req.user.avatar || null },
+    my_posts: db.prepare('SELECT story, text, media, audience, created_at FROM user_posts WHERE user_id=? ORDER BY id').all(uid),
+    notes: db.prepare(`SELECT n.rel_id, n.author, n.text, n.done, n.created_at FROM notes n JOIN relationships r ON r.id=n.rel_id WHERE r.user_id=?`).all(uid),
+    comments_on_their_posts: db.prepare(`SELECT c.text, c.sender, c.created_at FROM post_comments c JOIN posts p ON p.id=c.post_id JOIN relationships r ON r.id=p.rel_id WHERE r.user_id=?`).all(uid),
   };
   res.setHeader('Content-Disposition', 'attachment; filename="my-data.json"');
   res.json(dump);
@@ -180,6 +184,8 @@ app.delete('/api/me', auth, (req, res) => {
   const uid = req.user.id;
   const files = [
     ...db.prepare('SELECT media FROM messages WHERE user_id=? AND media IS NOT NULL').all(uid).map(r => r.media),
+    ...db.prepare('SELECT media FROM user_posts WHERE user_id=? AND media IS NOT NULL').all(uid).map(r => r.media),
+    ...(req.user.avatar ? [req.user.avatar] : []),
   ];
   for (const f of files) for (const dir of ['uploads', 'audio']) fs.rmSync(path.join(config.dataDir, dir, path.basename(f)), { force: true });
   db.prepare('DELETE FROM templates WHERE creator_user_id=?').run(uid);
@@ -188,6 +194,8 @@ app.delete('/api/me', auth, (req, res) => {
   db.prepare('DELETE FROM messages WHERE user_id=?').run(uid);
   db.prepare('DELETE FROM memories WHERE user_id=?').run(uid);
   db.prepare('DELETE FROM story WHERE user_id=?').run(uid);
+  db.prepare('DELETE FROM logs WHERE user_id=?').run(uid);
+  db.prepare('DELETE FROM story_views WHERE user_id=?').run(uid);
   db.prepare('DELETE FROM users WHERE id=?').run(uid); // cascades
   res.clearCookie('sid');
   res.json({ ok: true });
@@ -686,12 +694,23 @@ const adminOk = (req) => config.adminToken && (req.headers.authorization || '') 
 app.get('/api/admin/photos', (req, res) => {
   if (!adminOk(req)) return res.status(401).json({ error: 'unauthorized' });
   const rows = db.prepare('SELECT * FROM photos WHERE hidden=0 ORDER BY tag, id DESC').all();
-  res.json({ pexels: !!config.pexelsKey, tags: Object.fromEntries(Object.entries(PHOTO_TAGS).map(([k, v]) => [k, v[0]])), counts: photoCount(),
+  res.json({ pexels: !!config.pexelsKey, sources: photoSources().map(([n]) => n), canGenerate: !config.mock, tags: Object.fromEntries(Object.entries(PHOTO_TAGS).map(([k, v]) => [k, v[0]])), counts: photoCount(),
     rows: rows.map(r => ({ id: r.id, tag: r.tag, thumb: r.thumb || r.url, credit: r.credit, source: r.source })) });
 });
+app.post('/api/admin/photos/generate', wrap(async (req, res) => {
+  if (!adminOk(req)) return res.status(401).json({ error: 'unauthorized' });
+  const counts = photoCount();
+  const tags = req.body?.tag ? [String(req.body.tag)] : Object.keys(PHOTO_TAGS).filter(t => (counts[t] || 0) < 3);
+  if (!tags.length) return res.json({ ok: true, started: false, reason: '每個類別都已經有照片了' });
+  const perTag = Math.min(6, Number(req.body?.perTag) || 3);
+  // 一張要十幾秒，背景慢慢做；後台重新整理就看得到進度
+  generatePhotos({ tags, perTag }).catch(e => logIssue({ level: 'warn', source: 'photos', message: `AI 生成照片中斷：${e.message}`, error: e }));
+  res.json({ ok: true, started: true, images: tags.length * perTag });
+}));
 app.post('/api/admin/photos/fill', wrap(async (req, res) => {
   if (!adminOk(req)) return res.status(401).json({ error: 'unauthorized' });
-  res.json(await fillFromPexels({ force: !!req.body?.force }));
+  fillLibrary({ force: !!req.body?.force }).catch(() => {});
+  res.json({ ok: true, started: true });
 }));
 app.post('/api/admin/photos', upload.single('photo'), (req, res) => {
   if (!adminOk(req)) return res.status(401).json({ error: 'unauthorized' });
@@ -704,8 +723,8 @@ app.post('/api/admin/photos/:id/hide', (req, res) => {
   db.prepare('UPDATE photos SET hidden=1 WHERE id=?').run(req.params.id);
   res.json({ ok: true });
 });
-fillFromPexels().catch(() => {});
-setInterval(() => fillFromPexels().catch(() => {}), 7 * 864e5);
+setTimeout(() => fillLibrary().catch(() => {}), 15000);
+setInterval(() => fillLibrary().catch(() => {}), 7 * 864e5);
 purgeOldLogs();
 setInterval(purgeOldLogs, 864e5);
 process.on('unhandledRejection', (e) => logIssue({ source: 'server', message: `未處理的錯誤：${e?.message || e}`, error: e instanceof Error ? e : undefined }));
@@ -720,6 +739,7 @@ app.use(express.static(pub, {
   },
 }));
 app.get('/admin', (req, res) => res.sendFile(path.join(pub, 'admin.html')));
+app.get(['/privacy', '/terms'], (req, res) => res.sendFile(path.join(pub, 'privacy.html')));
 app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(pub, 'index.html')));
 
 app.listen(config.port, () => {

@@ -153,6 +153,7 @@ function renderJoin() {
       <p class="small muted">作息、喜好不用填，對方會從聊天裡慢慢認識你。</p>
       <label class="check"><input type="checkbox" name="adult" required><span>我已年滿 18 歲</span></label>
       <label class="check"><input type="checkbox" name="aiAck" required><span>我了解對方是 AI 角色，不是真人；對話會交由 AI 服務（OpenAI，美國）處理。</span></label>
+      <p class="small muted">繼續即表示你同意<a href="/privacy" target="_blank">隱私權政策與使用條款</a>。</p>
       <button class="btn block" style="margin-top:14px">繼續</button>
     </form></div>`;
   const pick = { gender: '', seeks: '' };
@@ -613,8 +614,10 @@ function cardHtml(m, rel) {
 
 // 照片來源標示（Pexels 規定要標示攝影師）
 function creditHtml(p) {
-  if (!p || !p.credit) return '';
-  return p.source === 'pexels' ? `<a class="credit" href="${esc(p.creditUrl || 'https://www.pexels.com')}" target="_blank" rel="noopener">📷 ${esc(p.credit)}・Pexels</a>` : `<span class="credit">📷 ${esc(p.credit)}</span>`;
+  if (!p || !p.credit || p.source === 'upload' && !p.credit) return '';
+  const label = { pexels: '・Pexels', pixabay: '・Pixabay', openverse: '' }[p.source] ?? '';
+  const text = `📷 ${esc(p.credit)}${label}`;
+  return p.creditUrl ? `<a class="credit" href="${esc(p.creditUrl)}" target="_blank" rel="noopener">${text}</a>` : `<span class="credit">${p.source === 'ai' ? '✨ AI 生成' : text}</span>`;
 }
 // 明信片：你拍的風景照，或他寄來的風景（寫實照片，沒有照片時用插畫）
 function postcardHtml(c, { large = false } = {}) {
@@ -1567,6 +1570,7 @@ async function renderSettings() {
       <div class="row"><span class="grow">登入碼<div class="small muted">換裝置時用它回來</div></span><code>${esc(S.me.recoveryCode)}</code></div>
       <div class="row"><span class="grow">下載我的資料</span><a class="btn ghost sm" href="/api/me/export" download>下載</a></div>
       <div class="row"><span class="grow">刪除帳號與所有資料</span><button class="btn danger sm" id="delAll">刪除</button></div>
+      <div class="row"><span class="grow">隱私權政策與使用條款</span><a class="btn ghost sm" href="/privacy" target="_blank">查看</a></div>
     </div>
     <p class="small muted">${TA()}看得到的記憶不會顯示成清單；${TA()}記錯時直接告訴${TA()}就好，請${TA()}「忘掉」某件事，${TA()}也會真的刪除。對話會傳送到 OpenAI（美國）處理以產生回覆。</p>
 

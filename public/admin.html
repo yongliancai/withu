@@ -300,9 +300,13 @@ const VIEWS = {
     const d = await api('/photos');
     const sel = VIEWS._photoTag || '';
     const rows = d.rows.filter(r => !sel || r.tag === sel);
-    out.innerHTML = `<p class="muted">明信片、動態牆、生活照頭像用的寫實照片。${d.pexels ? '已連上 Pexels，每個類別會自動補到 6 張以上（每週檢查一次）。' : '尚未設定 <code>PEXELS_API_KEY</code>：到 pexels.com/api 免費申請後貼進 .env 並重啟，就會自動補照片；也可以在這裡自己上傳。'}沒有照片的類別會改用插畫。</p>
+    const SRC = { pexels: 'Pexels', pixabay: 'Pixabay', openverse: 'Openverse（CC 授權）' };
+    const missing = Object.keys(d.tags).filter(k => (d.counts[k] || 0) < 3).length;
+    out.innerHTML = `<p class="muted">明信片、動態牆、生活照頭像用的寫實照片。App 每週會自動補照片，來源依序：${d.sources.map(x => SRC[x]).join(' → ')}。照片會下載存在主機上並標示攝影者。沒有照片的類別會改用插畫。</p>
+      <p class="small muted">想要更多來源：在 .env 填 <code>PIXABAY_API_KEY</code>（免費，pixabay.com/api/docs 登入後就有）。Pexels 目前暫停發新金鑰。</p>
       <div class="row-form">
-        ${d.pexels ? '<button id="fill">從 Pexels 補照片</button>' : ''}
+        <button id="fill">現在補照片</button>
+        ${d.canGenerate ? `<button id="gen" class="ghost">AI 生成缺少的照片（${missing} 類 × 3 張，約 NT$${Math.ceil(missing * 3 * 0.2)}）</button>` : '<span class="small muted">AI 生成需要設定 OpenAI 金鑰</span>'}
         <select id="ptag"><option value="">所有類別</option>${Object.entries(d.tags).map(([k, l]) => `<option value="${k}" ${sel === k ? 'selected' : ''}>${esc(l)}（${d.counts[k] || 0}）</option>`).join('')}</select>
       </div>
       <div class="card" style="margin:12px 0"><b>上傳照片</b>
@@ -311,8 +315,9 @@ const VIEWS = {
         <p class="small muted">只上傳你有權使用的照片（自己拍的、或免費授權的）。</p></div>
       <div class="ph-grid">${rows.map(r => `<figure><img src="${esc(r.thumb)}" loading="lazy" alt=""><figcaption>${esc(d.tags[r.tag] || r.tag)}${r.credit ? `・${esc(r.credit)}` : ''}<button class="sm ghost" data-hide="${r.id}">移除</button></figcaption></figure>`).join('') || '<p class="muted">還沒有照片</p>'}</div>`;
     document.getElementById('ptag').onchange = (e) => { VIEWS._photoTag = e.target.value; render(); };
-    const fill = document.getElementById('fill');
-    if (fill) fill.onclick = async () => { fill.disabled = true; fill.textContent = '補照片中…'; const r = await api('/photos/fill', 'POST', {}); toast(r.ok ? `新增 ${r.added} 張` : '正在補照片中'); render(); };
+    document.getElementById('fill').onclick = async () => { await api('/photos/fill', 'POST', {}); toast('開始補照片，幾分鐘後重新整理看看'); };
+    const gen = document.getElementById('gen');
+    if (gen) gen.onclick = async () => { if (!missing) return toast('每個類別都有照片了'); if (!confirm(`用 AI 生成約 ${missing * 3} 張照片？每張約 NT$0.2，需要十幾分鐘。`)) return; const r = await api('/photos/generate', 'POST', {}); toast(r.started ? `開始生成 ${r.images} 張，晚點重新整理看看` : r.reason); };
     document.getElementById('up').onclick = async () => {
       const files = document.getElementById('ufile').files; if (!files.length) return toast('選照片');
       for (const f of files) {

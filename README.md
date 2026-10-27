@@ -23,7 +23,9 @@ cd ~/htdocs/liancai.fun && ./deploy.sh
 
 **推播金鑰**：`npm run vapid`，把印出的兩把金鑰貼進 `.env` 再重啟。
 
-**寫實照片**：到 https://www.pexels.com/api/ 免費申請金鑰，貼進 `.env` 的 `PEXELS_API_KEY` 再重啟；App 會自動把每個照片類別補到 6 張以上，之後每週檢查一次。也可以在後台「照片庫」自己上傳。
+**寫實照片**：不用設定也會自動從 Openverse（免費、可商用的 CC 授權照片）補照片，照片下載存在主機上並標示攝影者。想要更多來源：到 https://pixabay.com/api/docs/ 登入後拿免費金鑰，貼進 `.env` 的 `PIXABAY_API_KEY`。Pexels 從 2026 年 10 月起暫停發新金鑰。後台「照片庫」也可以自己上傳，或按「AI 生成缺少的照片」（OpenAI 圖片模型，每張約 NT$0.2，只生成沒有人的風景與物件）。
+
+**隱私權政策**：`https://你的網域/privacy`（申請 Uber API 時需要）。個資外洩應變流程在 `docs/incident-response.md`。
 
 另有 Dockerfile／docker-compose 可用在其他主機，本專案目前沒有使用。
 
@@ -191,7 +193,7 @@ cp trends.example.json data/trends.json && nano data/trends.json
 
 - **Uber API 直接下單＋Face ID**：下單轉接層已留好（`server/ordering.js`，`ORDER_MODE`），拿到 Uber 回覆再接。
 - **親密層**：依報告書第一版不含。
-- **語音情緒線索**：目前只轉文字。
+- **語音情緒線索**：目前只轉文字（轉文字模型不提供語氣資訊，要改用能直接聽音訊的模型，成本較高，先不做）。
 - **LINE 延伸、動態島、合照生成**：後期。
 - **未來構想**（10/27 記錄）：多外送平台訂餐、購物網站連動、步數與散步、帶朋友角色一起出門、AI 實體公仔。
 

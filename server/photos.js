@@ -66,37 +66,110 @@ export function photoById(id) {
   return photoOut(db.prepare('SELECT * FROM photos WHERE id=?').get(id));
 }
 
-async function pexelsSearch(query, perPage = 12) {
-  const r = await fetch(`https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=${perPage}&orientation=landscape`, { headers: { Authorization: config.pexelsKey } });
+// ---- 照片來源 ----
+// Pexels（有金鑰才用；2026 年 10 月起暫停發新金鑰）→ Pixabay（免費金鑰）→ Openverse（不用金鑰，CC 授權）
+// 下載到自己的主機再提供，不依賴對方的網址（Pixabay、Openverse 都建議這樣做）
+const UA = { 'User-Agent': 'WithU/1.0 (companion app photo library)' };
+
+async function pexelsSearch(query) {
+  const r = await fetch(`https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=10&orientation=landscape`, { headers: { Authorization: config.pexelsKey } });
   if (!r.ok) throw Object.assign(new Error(`Pexels ${r.status}`), { status: r.status });
-  return (await r.json()).photos || [];
+  return ((await r.json()).photos || []).map(p => ({ extId: String(p.id), src: p.src.large, credit: p.photographer, creditUrl: p.photographer_url || p.url, alt: p.alt, license: 'Pexels License' }));
+}
+async function pixabaySearch(query) {
+  const r = await fetch(`https://pixabay.com/api/?key=${encodeURIComponent(config.pixabayKey)}&q=${encodeURIComponent(query)}&image_type=photo&orientation=horizontal&safesearch=true&per_page=10`);
+  if (!r.ok) throw Object.assign(new Error(`Pixabay ${r.status}`), { status: r.status });
+  return ((await r.json()).hits || []).map(p => ({ extId: String(p.id), src: p.webformatURL, credit: p.user, creditUrl: p.pageURL, alt: p.tags, license: 'Pixabay License' }));
+}
+async function openverseSearch(query) {
+  // 只拿可商用、可改作的 CC 授權；不含成人內容
+  const r = await fetch(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}&license_type=commercial,modification&mature=false&page_size=10&aspect_ratio=wide`, { headers: UA });
+  if (!r.ok) throw Object.assign(new Error(`Openverse ${r.status}`), { status: r.status });
+  return ((await r.json()).results || []).filter(p => p.url && !/\.gif$/i.test(p.url)).map(p => ({
+    extId: String(p.id), src: p.url, credit: [p.creator || '佚名', `${(p.license || '').toUpperCase()} ${p.license_version || ''}`.trim()].join('・'), creditUrl: p.foreign_landing_url, alt: p.title, license: p.license,
+  }));
+}
+
+export function photoSources() {
+  return [config.pexelsKey && ['pexels', pexelsSearch], config.pixabayKey && ['pixabay', pixabaySearch], ['openverse', openverseSearch]].filter(Boolean);
+}
+
+async function download(src) {
+  const r = await fetch(src, { headers: UA });
+  if (!r.ok) throw new Error(`download ${r.status}`);
+  const type = r.headers.get('content-type') || '';
+  if (!/image\/(jpeg|png|webp)/.test(type)) throw new Error(`not an image: ${type}`);
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (buf.length > 6 * 1024 * 1024) throw new Error('too large');
+  const file = `${crypto.randomBytes(9).toString('base64url')}.${/png/.test(type) ? 'png' : /webp/.test(type) ? 'webp' : 'jpg'}`;
+  fs.writeFileSync(path.join(LIB_DIR, file), buf);
+  return `/lib/${file}`;
 }
 
 let filling = false;
-/** Fill every tag up to MIN_PER_TAG from Pexels (about 45 requests, well under the 200/hour limit). */
-export async function fillFromPexels({ force = false } = {}) {
-  if (!config.pexelsKey || filling) return { ok: false, reason: config.pexelsKey ? 'busy' : 'no_key' };
+/** Fill every tag up to MIN_PER_TAG from the first source that works. */
+export async function fillLibrary({ force = false, only } = {}) {
+  if (filling) return { ok: false, reason: 'busy' };
   filling = true;
-  let added = 0;
+  const added = {};
   try {
     const counts = photoCount();
     const ins = db.prepare('INSERT INTO photos (tag,url,thumb,credit,credit_url,source,ext_id,alt,created_at) VALUES (?,?,?,?,?,?,?,?,?)');
-    const has = db.prepare('SELECT 1 FROM photos WHERE source=\'pexels\' AND ext_id=? AND tag=?');
-    for (const [tag, [, query]] of Object.entries(PHOTO_TAGS)) {
-      if (!force && (counts[tag] || 0) >= MIN_PER_TAG) continue;
-      try {
-        for (const p of await pexelsSearch(query)) {
-          if (has.get(String(p.id), tag)) continue;
-          ins.run(tag, p.src.large, p.src.medium, p.photographer, p.photographer_url || p.url, 'pexels', String(p.id), p.alt || null, now());
-          added++;
+    const has = db.prepare('SELECT 1 FROM photos WHERE source=? AND ext_id=? AND tag=?');
+    for (const [name, search] of photoSources().filter(([n]) => !only || n === only)) {
+      let failures = 0;
+      for (const [tag, [, query]] of Object.entries(PHOTO_TAGS)) {
+        const have = photoCount()[tag] || 0;
+        if (!force && have >= MIN_PER_TAG) continue;
+        try {
+          let n = 0;
+          for (const p of await search(query)) {
+            if (n >= MIN_PER_TAG - have && !force) break;
+            if (has.get(name, p.extId, tag)) continue;
+            let url;
+            try { url = name === 'pexels' ? p.src : await download(p.src); } catch { continue; }
+            ins.run(tag, url, url, p.credit, p.creditUrl, name, p.extId, p.alt ? String(p.alt).slice(0, 200) : null, now());
+            n++; added[name] = (added[name] || 0) + 1;
+          }
+          if (name === 'openverse') await new Promise(r => setTimeout(r, 1200)); // 匿名使用：每秒一次
+        } catch (e) {
+          failures++;
+          logIssue({ level: 'warn', source: 'photos', message: `${name} 搜尋失敗（${tag}）：${e.message}`, error: e });
+          if (e.status === 401 || e.status === 403 || e.status === 429 || failures >= 3) break;
         }
-      } catch (e) {
-        logIssue({ level: 'warn', source: 'photos', message: `Pexels 搜尋失敗（${tag}）：${e.message}`, error: e });
-        if (e.status === 401 || e.status === 403 || e.status === 429) break;
       }
     }
   } finally { filling = false; }
-  return { ok: true, added };
+  return { ok: true, added, counts: photoCount() };
+}
+export const fillFromPexels = fillLibrary; // 舊名稱
+
+// ---- AI 生成（用 OpenAI 圖片模型，每張約 NT$0.2；只生成沒有人的風景與物件）----
+export async function generatePhotos({ tags, perTag = 3, userId = null } = {}) {
+  if (config.mock) return { ok: false, reason: 'mock' };
+  const { openai } = await import('./llm.js');
+  const out = {};
+  for (const tag of tags.filter(t => PHOTO_TAGS[t])) {
+    for (let k = 0; k < perTag; k++) {
+      try {
+        const res = await openai.images.generate({
+          model: config.imageModel, size: '1536x1024', quality: 'low', output_format: 'jpeg', output_compression: 82, n: 1,
+          prompt: `A candid smartphone photo taken in Taiwan: ${PHOTO_TAGS[tag][1]}. Natural light, realistic everyday photography, slightly imperfect framing, variation ${k + 1}. No people's faces, no text, no logos, no watermarks.`,
+        });
+        const b64 = res.data?.[0]?.b64_json;
+        if (!b64) continue;
+        const file = `${crypto.randomBytes(9).toString('base64url')}.jpg`;
+        fs.writeFileSync(path.join(LIB_DIR, file), Buffer.from(b64, 'base64'));
+        db.prepare('INSERT INTO photos (tag,url,thumb,credit,source,created_at) VALUES (?,?,?,?,?,?)').run(tag, `/lib/${file}`, `/lib/${file}`, 'AI 生成', 'ai', now());
+        db.prepare('INSERT INTO usage (user_id,kind,model,units,created_at) VALUES (?,?,?,?,?)').run(userId, 'image', config.imageModel, 1, now());
+        out[tag] = (out[tag] || 0) + 1;
+      } catch (e) {
+        logIssue({ level: 'warn', source: 'photos', message: `AI 生成照片失敗（${tag}）：${e.message}`, error: e });
+        if (e.status === 400 || e.status === 401 || e.status === 403 || e.status === 404) return { ok: false, reason: e.message, added: out };
+      }
+    }
+  }
+  return { ok: true, added: out };
 }
 
 export function saveUpload(tag, buffer, mimetype, credit) {
