@@ -63,9 +63,11 @@ export function topicsFor(persona) {
 // 心情按鈕：不想打字時按一下（連按代表越強烈），他會看到並用自己的方式回應
 export const EMOTIONS = [
   { id: 'stress', emoji: '😫', label: '壓力好大' }, { id: 'tired', emoji: '😮‍💨', label: '好累' },
-  { id: 'bored', emoji: '🥱', label: '好無聊' }, { id: 'miss', emoji: '🥺', label: '想你' },
-  { id: 'happy', emoji: '🥳', label: '好開心' }, { id: 'sad', emoji: '😢', label: '有點難過' },
-  { id: 'angry', emoji: '😤', label: '好生氣' }, { id: 'hug', emoji: '🤗', label: '想要抱抱' },
+  { id: 'bored', emoji: '🥱', label: '好無聊' }, { id: 'happy', emoji: '🥳', label: '好開心' },
+  { id: 'sad', emoji: '😢', label: '有點難過' }, { id: 'angry', emoji: '😤', label: '好生氣' },
+  // 比較親暱的：關係到了才出現（曖昧、交往）
+  { id: 'miss', emoji: '🥺', label: '想你', minStage: 2 }, { id: 'hug', emoji: '🤗', label: '想要抱抱', minStage: 2 },
+  { id: 'clingy', emoji: '🥰', label: '想撒嬌', minStage: 3 }, { id: 'see', emoji: '💭', label: '想見你', minStage: 3 },
 ];
 export function pokeReason(e, count) {
   const level = count >= 15 ? '非常非常強烈' : count >= 6 ? '很強烈' : '有一點';

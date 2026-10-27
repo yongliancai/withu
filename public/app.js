@@ -1,5 +1,5 @@
 // 伴旅 WithU — PWA front end (no build step).
-import { portraitSVG, sceneSVG, LOOK_OPTIONS, setPortraitStyle, stickerSVG, STICKER_LIST } from './art.js';
+import { portraitSVG, sceneSVG, LOOK_OPTIONS, setPortraitStyle, stickerSVG, STICKER_LIST, mascotSVG, APP_THEMES } from './art.js';
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1023,22 +1023,35 @@ async function shrinkImage(file, max = 1280) {
 }
 
 // ---------- character sheet ----------
-function moodFace() {
-  return `<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M8 36 q0-24 24-24 q24 0 24 24 q0 18-24 18 q-24 0-24-18z" fill="#FFF6EC" stroke="#3B3561" stroke-width="3"/>
-    <path d="M22 34 q3-4 6 0 M36 34 q3-4 6 0" stroke="#3B3561" stroke-width="3" fill="none" stroke-linecap="round"/><path d="M28 42 q4 4 8 0" stroke="#3B3561" stroke-width="3" fill="none" stroke-linecap="round"/>
-    <ellipse cx="19" cy="41" rx="4" ry="2.5" fill="#F4A6B4"/><ellipse cx="45" cy="41" rx="4" ry="2.5" fill="#F4A6B4"/><path d="M50 14 c0-4 6-4 6 0 c0-4 6-4 6 0 c0 4-6 7-6 7 s-6-3-6-7z" fill="#E0525F"/></svg>`;
+// 系統主題與吉祥物
+function applyAppTheme(t) {
+  const theme = APP_THEMES.some(([k]) => k === t) ? t : 'milk';
+  document.documentElement.dataset.app = theme;
+  if (theme !== 'milk') document.querySelectorAll('meta[name="theme-color"]').forEach(m => { m.content = { night: '#191730', forest: '#EEF2EA' }[theme]; });
 }
+const moodFace = (face = 'idle') => mascotSVG(document.documentElement.dataset.app || 'milk', face);
 // ---------- 心情按鈕：不想打字時按一按，連按越多下代表越強烈 ----------
 async function openMoodButton(relId = null) {
   const rels = (S.rels.length ? S.rels : await api('/api/rels')).filter(r => r.status === 'active');
   if (!rels.length) return toast('先去認識一個人吧');
   let target = relId || (rels.find(r => r.pinned) || rels.slice().sort((a, b) => (b.last?.at || 0) - (a.last?.at || 0))[0]).id;
-  const emos = S.meta.emotions || [];
-  openSheet(`<h3>現在的心情是？</h3><p class="small muted">按一下就會傳給${relId ? esc(displayName(rels.find(r => r.id === relId)?.frame || {})) : '他'}；連按越多下，代表越強烈。</p>
+  const stageOf = (id) => rels.find(r => r.id === id)?.stage ?? 0;
+  const emosFor = (id) => (S.meta.emotions || []).filter(e => (e.minStage || 0) <= stageOf(id));
+  let emos = emosFor(target);
+  openSheet(`<div class="mood-head-art">${moodFace('happy')}</div><h3>現在的心情是？</h3><p class="small muted">按一下就會傳給${relId ? esc(displayName(rels.find(r => r.id === relId)?.frame || {})) : '他'}；連按越多下，代表越強烈。</p>
     ${relId ? '' : `<div class="mood-to">${rels.map(r => `<button data-to="${r.id}" aria-pressed="${r.id === target}">${avatar(r.frame, 40, { season: false })}<span>${esc(displayName(r.frame))}</span></button>`).join('')}</div>`}
     <div class="mood-grid2">${emos.map(e => `<button class="mood-btn" data-emo="${e.id}"><span class="em">${e.emoji}</span><span>${esc(e.label)}</span></button>`).join('')}</div>
     <div class="mood-press" id="mp" hidden><button class="mood-big" id="mpBtn" aria-label="再按一下"><span id="mpEmo"></span></button><div class="mood-count"><b id="mpN">1</b> 下・<span id="mpHint">繼續按，或等一下就會送出</span></div></div>`, (sh, close) => {
-    $$('[data-to]', sh).forEach(b => b.onclick = () => { target = b.dataset.to; $$('[data-to]', sh).forEach(x => x.setAttribute('aria-pressed', String(x === b))); });
+    const drawEmos = () => {
+      $('.mood-grid2', sh).innerHTML = emos.map(e => `<button class="mood-btn" data-emo="${e.id}"><span class="em">${e.emoji}</span><span>${esc(e.label)}</span></button>`).join('');
+      $$('[data-emo]', sh).forEach(b => b.onclick = (ev) => {
+        emo = emos.find(x => x.id === b.dataset.emo);
+        $('.mood-grid2', sh).hidden = true; $('.mood-to', sh) && ($('.mood-to', sh).hidden = true);
+        $('#mp', sh).hidden = false; $('#mpEmo', sh).textContent = emo.emoji;
+        press(ev);
+      });
+    };
+    $$('[data-to]', sh).forEach(b => b.onclick = () => { target = b.dataset.to; emos = emosFor(target); drawEmos(); $$('[data-to]', sh).forEach(x => x.setAttribute('aria-pressed', String(x === b))); });
     let emo = null, count = 0, timer = null;
     const burst = (x, y) => {
       for (let i = 0; i < 6; i++) {
@@ -1069,12 +1082,7 @@ async function openMoodButton(relId = null) {
       $('#mpHint', sh).textContent = count >= 15 ? '爆表了！' : count >= 6 ? '很強烈喔' : '繼續按，或等一下就會送出';
       clearTimeout(timer); timer = setTimeout(send, 1600);
     };
-    $$('[data-emo]', sh).forEach(b => b.onclick = (ev) => {
-      emo = emos.find(x => x.id === b.dataset.emo);
-      $('.mood-grid2', sh).hidden = true; $('.mood-to', sh) && ($('.mood-to', sh).hidden = true);
-      $('#mp', sh).hidden = false; $('#mpEmo', sh).textContent = emo.emoji;
-      press(ev);
-    });
+    drawEmos();
     $('#mpBtn', sh).onclick = press;
   });
 }
@@ -1403,7 +1411,7 @@ async function renderStory() {
     ${cur.anniversaries?.length ? `<h2>紀念日</h2><div class="ann-list">${cur.anniversaries.map(a => `<div class="ann ${a.left === 0 ? 'today' : ''}"><span class="ann-ic">${{ his_birthday: '🎂', your_birthday: '🎉', together: '💗', met: '🌱' }[a.kind] || '📅'}</span>
       <span class="grow"><b>${esc(a.title)}</b><span class="small muted">${a.date.replace(/-/g, '.')}</span></span><span class="ann-left">${a.left === 0 ? '今天' : a.left === 1 ? '明天' : `還有 ${a.left} 天`}</span></div>`).join('')}</div>` : ''}
     <h2>回憶錄</h2>
-    ${cur.memoir.map(ch => `<div class="mm-ch"><div class="mm-head"><b>${esc(ch.title)}</b><span class="small muted">${ch.unlocked}／${ch.total}</span></div>
+    ${cur.memoir.map(ch => ch.more ? `<p class="mm-more">還有更多回憶，等你們一起寫下去。</p>` : `<div class="mm-ch"><div class="mm-head"><b>${esc(ch.title)}</b><span class="small muted">${ch.unlocked}／${ch.total}</span></div>
       <div class="mm-grid">${ch.cards.map(c => c.unlocked
         ? `<div class="mm-card"><div class="mm-t">${esc(c.title)}</div><time>${dateStr(c.at)}</time></div>`
         : `<div class="mm-card locked" aria-label="還沒解鎖的回憶"><div class="mm-q">？？</div></div>`).join('')}</div></div>`).join('')}
@@ -1628,6 +1636,9 @@ async function renderSettings() {
       <div class="row"><span class="grow">想遇見<div class="small muted">影響探索和相遇推薦</div></span><div class="seg">${[['male', '男生'], ['female', '女生'], ['any', '都可以']].map(([v, l]) => `<button data-sk="${v}" aria-pressed="${S.me.seeks === v}">${l}</button>`).join('')}</div></div>
     </div>
 
+    <h2>系統主題</h2>
+    <div class="theme-pick">${APP_THEMES.map(([k, l, d]) => `<button data-at="${k}" aria-pressed="${(st.appTheme || 'milk') === k}"><span class="tp-art tp-${k}">${mascotSVG(k, 'happy')}</span><b>${l}</b><span class="small muted">${d}</span></button>`).join('')}</div>
+
     <h2>通知</h2>
     <div class="section">
       <div class="row"><div class="grow">有新訊息時通知我<div class="small muted">${isIOS() && !isStandalone() ? 'iPhone 需要先「加入主畫面」' : S.me.pushKey ? '' : '伺服器尚未設定推播'}</div></div>
@@ -1658,6 +1669,7 @@ async function renderSettings() {
       <div class="row"><span class="grow">登入碼<div class="small muted">換裝置時用它回來</div></span><code>${esc(S.me.recoveryCode)}</code></div>
       <div class="row"><span class="grow">下載我的資料</span><a class="btn ghost sm" href="/api/me/export" download>下載</a></div>
       <div class="row"><span class="grow">刪除帳號與所有資料</span><button class="btn danger sm" id="delAll">刪除</button></div>
+      <div class="row"><span class="grow">系統整理的相處偏好<div class="small muted">${S.me.prefs?.likes?.length || S.me.prefs?.dislikes?.length ? [...(S.me.prefs.likes || []).map(x => '喜歡' + x.replace(/^喜歡/, '')), ...(S.me.prefs.dislikes || []).map(x => x.startsWith('不喜歡') ? x : '不喜歡' + x)].map(esc).join('・') : '還沒有。聊久一點，系統會整理你喜歡的聊天方式，讓新認識的人也懂你。'}<br>只記說話方式，不記你的私事。</div></span>${S.me.prefs ? '<button class="btn ghost sm" id="clrPrefs">清除</button>' : ''}</div>
       <div class="row"><span class="grow">隱私權政策與使用條款</span><a class="btn ghost sm" href="/privacy" target="_blank">查看</a></div>
     </div>
     <p class="small muted">${TA()}看得到的記憶不會顯示成清單；${TA()}記錯時直接告訴${TA()}就好，請${TA()}「忘掉」某件事，${TA()}也會真的刪除。對話會傳送到 OpenAI（美國）處理以產生回覆。</p>
@@ -1687,6 +1699,8 @@ async function renderSettings() {
   $$('[data-np]').forEach(b => b.onclick = () => { $$('[data-np]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); saveSettings({ notifyPreview: b.dataset.np }); });
   $('#sugg').onchange = (e) => saveSettings({ showSuggestions: e.target.checked });
   $('#rdelay').onchange = (e) => saveSettings({ realisticDelay: e.target.checked });
+  $('#clrPrefs') && ($('#clrPrefs').onclick = async () => { await api('/api/me/prefs', { method: 'DELETE' }); toast('已清除'); renderSettings(); });
+  $$('[data-at]').forEach(b => b.onclick = () => { $$('[data-at]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); applyAppTheme(b.dataset.at); saveSettings({ appTheme: b.dataset.at }); });
   $$('[data-ps]').forEach(b => b.onclick = () => { $$('[data-ps]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); setPortraitStyle(b.dataset.ps); saveSettings({ portraitStyle: b.dataset.ps }); });
   $$('[data-lv]').forEach(b => b.onclick = () => { $$('[data-lv]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); saveSettings({ proactiveLevel: b.dataset.lv }); });
   $('#discreet').onchange = (e) => { saveSettings({ discreetNames: e.target.checked }); setManifest(e.target.checked); };
@@ -1760,17 +1774,46 @@ function reportClientError(message, stack) {
   if (sentErrors.has(key) || sentErrors.size > 20 || /unauth|Failed to fetch|Load failed|NetworkError/.test(key)) return;
   sentErrors.add(key);
   fetch('/api/client-log', { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'same-origin',
-    body: JSON.stringify({ message: key, stack: String(stack || '').slice(0, 2000), url: location.hash, v: 'v10' }) }).catch(() => {});
+    body: JSON.stringify({ message: key, stack: String(stack || '').slice(0, 2000), url: location.hash, v: appVer || '' }) }).catch(() => {});
 }
 window.addEventListener('error', (e) => reportClientError(e.message, e.error?.stack));
 window.addEventListener('unhandledrejection', (e) => reportClientError(e.reason?.message || String(e.reason), e.reason?.stack));
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+
+// ---------- 檢查新版本：打開 App、回到 App、登入後、每 5 分鐘 ----------
+let appVer = null, hiddenAt = 0, verBanner = false;
+async function checkVersion({ quiet = false } = {}) {
+  try {
+    const { v } = await fetch('/api/version', { cache: 'no-store' }).then(r => r.json());
+    if (!appVer) { appVer = v; return; }
+    if (v === appVer || verBanner) return;
+    const busy = !!$('#sheet-root').innerHTML || (document.activeElement && /TEXTAREA|INPUT/.test(document.activeElement.tagName) && document.activeElement.value);
+    if (quiet && !busy) return applyUpdate();
+    verBanner = true;
+    const bar = document.createElement('div');
+    bar.className = 'update-bar';
+    bar.innerHTML = '<span>伴旅有新版本了</span><button>更新</button>';
+    bar.querySelector('button').onclick = applyUpdate;
+    document.body.appendChild(bar);
+  } catch { /* offline */ }
+}
+async function applyUpdate() {
+  try { const reg = await navigator.serviceWorker?.getRegistration(); await reg?.update(); } catch {}
+  location.reload();
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+  // 離開超過 10 分鐘再回來：有新版就直接更新（沒有在打字的話）
+  checkVersion({ quiet: hiddenAt && Date.now() - hiddenAt > 10 * 60000 });
+});
+setInterval(() => document.visibilityState === 'visible' && checkVersion(), 5 * 60000);
+checkVersion();
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.me) track('app_open', {}); });
 
 (async () => {
   try { S.me = await api('/api/me'); } catch { S.me = null; }
-  if (S.me) { setManifest(!!S.me.settings?.discreetNames); setPortraitStyle(S.me.settings?.portraitStyle); track('app_open', {}); }
+  if (S.me) { setManifest(!!S.me.settings?.discreetNames); setPortraitStyle(S.me.settings?.portraitStyle); applyAppTheme(S.me.settings?.appTheme); track('app_open', {}); }
   if (!S.me && !/^#\/(welcome|join|recover)$/.test(location.hash)) { location.hash = '#/welcome'; return; }
   if (S.me && (!location.hash || location.hash === '#/welcome')) {
     const rels = await api('/api/rels').catch(() => []);

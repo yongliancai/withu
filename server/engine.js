@@ -20,6 +20,7 @@ import { reviewOutgoing, gapLabel } from './review.js';
 import { statusLine, postsVisibleTo } from './social.js';
 import { worldContext } from './world.js';
 import { arcContext } from './arcs.js';
+import { updateUserPrefs, prefsLines } from './prefs.js';
 
 export const id = (p = '') => p + crypto.randomBytes(9).toString('base64url');
 
@@ -269,6 +270,8 @@ async function maybeShapePersona(rel, persona) {
   if (!c.persona_locked) p.emergent = res.emergent.slice(0, 400);
   p.tuning = { more: res.more.slice(0, 4).map(s => s.slice(0, 30)), less: res.less.slice(0, 4).map(s => s.slice(0, 30)), at: now() };
   db.prepare('UPDATE characters SET persona=? WHERE id=?').run(JSON.stringify(p), c.id);
+  // 也更新「這個人喜歡的相處方式」，之後認識的人會照著用
+  await updateUserPrefs(rel.user_id);
 }
 
 const SHORT = /^(嗯+|喔+|哦+|好+|ok|OK|是喔|還好|對啊|對|哈+|哈哈+|笑死|XD+|xd+|😂+|🤣+|👍|真的|是哦|好喔|沒事)[。.!！~～]*$/;
@@ -333,6 +336,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const world = await worldContext(persona, rel.id);
   const arc = arcContext(rel.id);
   input.push({ role: 'developer', content: contextBlock({
+    prefs: prefsLines(rel.user_id),
     world, arc, goals: db.prepare(`SELECT title, days, done FROM goals WHERE rel_id=? AND status='active'`).all(rel.id).map(g => `${g.title}（做到 ${j(g.done, []).length}/${g.days} 天）`),
     habits: habitsOf(rel.id), notes: db.prepare('SELECT text FROM notes WHERE rel_id=? AND done=0 ORDER BY id DESC LIMIT 10').all(rel.id).map(n => n.text), told: toldOf(rel.id), summary: rel.summary || '', lateReply, activity,
     lowEffort: !trigger && lowEffortStreak(rel.id),

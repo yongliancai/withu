@@ -528,3 +528,67 @@ a { color: inherit; }
 .ann .grow { display:flex; flex-direction:column; }
 .ann-left { font-size:13px; font-weight:600; color:#C2477F; white-space:nowrap; }
 .ann-banner { display:block; margin:6px 0 12px; padding:10px 14px; border-radius:14px; background:linear-gradient(135deg,#FBE3EA,#EFE7FB); color:#3B3561; text-decoration:none; font-weight:600; }
+
+/* ---- 新版本提示 ---- */
+.update-bar { position:fixed; left:50%; transform:translateX(-50%); top:calc(env(safe-area-inset-top) + 10px); z-index:90; display:flex; align-items:center; gap:12px; background:var(--ink); color:var(--paper); padding:10px 10px 10px 16px; border-radius:999px; box-shadow:0 8px 24px rgba(0,0,0,.2); font-size:14px; animation:dropin .35s ease-out; }
+.update-bar button { border:0; background:var(--rose); color:#fff; border-radius:999px; padding:6px 14px; font:inherit; font-weight:600; }
+@keyframes dropin { from { transform:translate(-50%,-20px); opacity:0 } to { transform:translate(-50%,0); opacity:1 } }
+
+/* ================= 系統主題 ================= */
+:root[data-app="night"] {
+  --paper:#191730; --surface:#24213F; --ink:#EEEAFB; --muted:#A7A1C8; --line:#34305A;
+  --me:#7C6BD6; --me-ink:#fff; --him:#2B2750; --rose:#F2A6C8; --rose-soft:#3A2C4F; --amber:#F6D28B; --sage:#9BC7A6;
+  color-scheme: dark;
+}
+:root[data-app="forest"] {
+  --paper:#EEF2EA; --surface:#FFFFFF; --ink:#24332A; --muted:#6F806F; --line:#D6E0D2;
+  --me:#3F6B4E; --me-ink:#fff; --him:#FFFFFF; --rose:#D9746B; --rose-soft:#F6E4DF; --amber:#D9A441; --sage:#5E8C6A;
+  color-scheme: light;
+}
+.theme-pick { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:8px; }
+.theme-pick button { border:1px solid var(--line); background:var(--surface); border-radius:16px; padding:12px 8px; display:flex; flex-direction:column; align-items:center; gap:4px; font:inherit; color:var(--ink); text-align:center; }
+.theme-pick button[aria-pressed="true"] { box-shadow:0 0 0 2px var(--ink); }
+.theme-pick .small { font-size:11px; line-height:1.4; }
+.tp-art { width:58px; height:58px; border-radius:50%; display:grid; place-items:center; padding:6px; }
+.tp-milk { background:#F6E3EC; } .tp-night { background:#2B2750; } .tp-forest { background:#DDEBD6; }
+.tp-art svg { width:100%; height:100%; }
+.mood-head-art { width:64px; height:64px; margin:0 auto 4px; animation:bob 2.6s ease-in-out infinite; }
+.mood-head-art svg { width:100%; height:100%; }
+@keyframes bob { 0%,100% { transform:translateY(0) } 50% { transform:translateY(-5px) } }
+
+/* ================= 互動動畫 ================= */
+@media (prefers-reduced-motion: no-preference) {
+  .btn, .chip, .choice, .tile, .person, .conv, .lover-card, .fpost, .tb-item, .mood-btn, .rm-grid button, .scene-card, .cat, .st-circle, .me-tile, .ann, .mm-card:not(.locked), .theme-pick button, .icon-btn {
+    transition: transform .18s cubic-bezier(.2,.8,.3,1.2), box-shadow .18s ease, background-color .18s ease, opacity .18s ease;
+  }
+  @media (hover: hover) {
+    .btn:hover, .chip:hover, .cat:hover { transform: translateY(-1px); }
+    .choice:hover, .tile:hover, .person:hover, .lover-card:hover, .tb-item:hover, .mood-btn:hover, .scene-card:hover, .ann:hover, .mm-card:not(.locked):hover, .theme-pick button:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(38,34,58,.12); }
+    .conv:hover { background: color-mix(in srgb, var(--surface) 70%, transparent); }
+    .st-circle:hover .ring, .rm-grid button:hover span { transform: scale(1.06); }
+    .icon-btn:hover { transform: scale(1.08); }
+    .me-tile:hover img { transform: scale(1.05); }
+    .mood-fab:hover { animation-play-state: paused; transform: scale(1.08) rotate(-4deg); }
+  }
+  .btn:active, .chip:active, .choice:active, .tile:active, .person:active, .conv:active, .tb-item:active, .mood-btn:active, .rm-grid button:active, .cat:active, .icon-btn:active, .st-circle:active, .theme-pick button:active { transform: scale(.96); }
+  .me-tile img, .st-circle .ring, .rm-grid button span { transition: transform .25s ease; }
+  /* 換頁淡入、訊息浮上來 */
+  .page, .room, .profile { animation: pagein .28s ease-out; }
+  @keyframes pagein { from { opacity:0; transform: translateY(6px); } to { opacity:1; transform:none; } }
+  .reveal { animation: msgin .3s cubic-bezier(.2,.8,.3,1.2); }
+  @keyframes msgin { from { opacity:0; transform: translateY(8px) scale(.98); } to { opacity:1; transform:none; } }
+  /* 分頁圖示：點到的那個跳一下 */
+  .tabs a[aria-current="page"] svg { animation: tabpop .35s cubic-bezier(.2,.8,.3,1.4); }
+  @keyframes tabpop { 0% { transform: scale(.85) } 60% { transform: scale(1.15) } 100% { transform: scale(1) } }
+  /* 打字中的三個點 */
+  .msg.typing .bubble i { animation: blink 1.2s infinite ease-in-out; }
+  .msg.typing .bubble i:nth-child(2) { animation-delay: .15s; } .msg.typing .bubble i:nth-child(3) { animation-delay: .3s; }
+  @keyframes blink { 0%,80%,100% { opacity:.25; transform: translateY(0) } 40% { opacity:1; transform: translateY(-3px) } }
+  /* 底部面板 */
+  .sheet-backdrop { animation: fadein .2s ease-out; }
+  @keyframes fadein { from { opacity:0 } to { opacity:1 } }
+  .badge, .tab-badge { animation: badgepop .4s cubic-bezier(.2,.8,.3,1.6); }
+  @keyframes badgepop { from { transform: scale(0) } to { transform: scale(1) } }
+}
+
+.mm-more { text-align:center; color:var(--muted); font-size:14px; padding:14px 0 4px; }

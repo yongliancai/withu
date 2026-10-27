@@ -22,6 +22,7 @@ import { logIssue, purgeOldLogs } from './logger.js';
 import { mountAdmin, cohortForCode } from './adminRoutes.js';
 import { memoirFor } from './memoir.js';
 import { anniversariesFor } from './anniv.js';
+import { prefsOf } from './prefs.js';
 import { userStatus, createUserPost, userPostsOut, charStories, markStorySeen, mediaOwnedBy } from './social.js';
 import { feedFor, likePost, commentPost } from './feed.js';
 import { LIB_DIR, pickPhoto, photoById, fillLibrary, generatePhotos, photoSources, saveUpload, PHOTO_TAGS, photoCount } from './photos.js';
@@ -109,7 +110,7 @@ app.post('/api/auth/logout', auth, (req, res) => {
 app.get('/api/me', auth, (req, res) => {
   const u = req.user;
   res.json({ id: u.id, nickname: u.nickname, callName: u.call_name, recoveryCode: u.recovery_code, settings: j(u.settings, {}),
-    cohort: u.cohort, gender: u.gender, seeks: u.seeks, bio: u.bio || '', avatar: u.avatar ? `/api/media/${u.avatar}` : null, status: userStatus(u),
+    cohort: u.cohort, gender: u.gender, seeks: u.seeks, bio: u.bio || '', prefs: prefsOf(u.id), avatar: u.avatar ? `/api/media/${u.avatar}` : null, status: userStatus(u),
     counts: { rels: db.prepare(`SELECT COUNT(*) n FROM relationships WHERE user_id=? AND status='active'`).get(u.id).n, posts: db.prepare('SELECT COUNT(*) n FROM user_posts WHERE user_id=? AND story=0').get(u.id).n },
     pushKey: pushEnabled() ? config.vapidPublic : null, mock: config.mock, orderMode: config.orderMode });
 });
@@ -117,7 +118,7 @@ app.get('/api/me', auth, (req, res) => {
 app.patch('/api/me', auth, (req, res) => {
   const b = req.body || {};
   const settings = { ...j(req.user.settings, {}), ...(b.settings || {}) };
-  const allowed = ['dailyCap', 'proactiveLevel', 'dndStart', 'dndEnd', 'notifyPreview', 'lunchAt', 'dinnerAt', 'discreetNames', 'portraitStyle', 'showSuggestions', 'realisticDelay', 'notifyAsked'];
+  const allowed = ['dailyCap', 'proactiveLevel', 'dndStart', 'dndEnd', 'notifyPreview', 'lunchAt', 'dinnerAt', 'discreetNames', 'portraitStyle', 'showSuggestions', 'realisticDelay', 'notifyAsked', 'appTheme'];
   for (const k of Object.keys(settings)) if (!allowed.includes(k)) delete settings[k];
   const seeks = ['male', 'female', 'any'].includes(b.seeks) ? b.seeks : req.user.seeks;
   const gender = ['female', 'male', 'other'].includes(b.gender) ? b.gender : req.user.gender;
@@ -135,6 +136,7 @@ app.post('/api/me/avatar', auth, upload.single('photo'), (req, res) => {
   db.prepare('UPDATE users SET avatar=? WHERE id=?').run(f, req.user.id);
   res.json({ avatar: `/api/media/${f}` });
 });
+app.delete('/api/me/prefs', auth, (req, res) => { db.prepare('UPDATE users SET prefs=NULL WHERE id=?').run(req.user.id); res.json({ ok: true }); });
 app.post('/api/me/status', auth, (req, res) => {
   const text = String(req.body?.text || '').trim().slice(0, 30);
   db.prepare('UPDATE users SET status_text=?, status_emoji=?, status_at=? WHERE id=?').run(text || null, text ? String(req.body?.emoji || '').slice(0, 4) : null, text ? now() : null, req.user.id);
@@ -172,7 +174,7 @@ app.get('/api/me/export', auth, (req, res) => {
     messages: db.prepare('SELECT rel_id, sender, kind, text, media, created_at FROM messages WHERE user_id=? ORDER BY id').all(uid),
     memories: db.prepare('SELECT rel_id, kind, content, source, created_at FROM memories WHERE user_id=?').all(uid),
     story: db.prepare('SELECT rel_id, type, title, body, place, media, created_at FROM story WHERE user_id=?').all(uid),
-    profile: { bio: req.user.bio || '', status: req.user.status_text || null, avatar: req.user.avatar || null },
+    profile: { bio: req.user.bio || '', status: req.user.status_text || null, avatar: req.user.avatar || null, chat_preferences: j(req.user.prefs, null) },
     my_posts: db.prepare('SELECT story, text, media, audience, created_at FROM user_posts WHERE user_id=? ORDER BY id').all(uid),
     notes: db.prepare(`SELECT n.rel_id, n.author, n.text, n.done, n.created_at FROM notes n JOIN relationships r ON r.id=n.rel_id WHERE r.user_id=?`).all(uid),
     comments_on_their_posts: db.prepare(`SELECT c.text, c.sender, c.created_at FROM post_comments c JOIN posts p ON p.id=c.post_id JOIN relationships r ON r.id=p.rel_id WHERE r.user_id=?`).all(uid),
@@ -203,6 +205,11 @@ app.delete('/api/me', auth, (req, res) => {
 });
 
 // ---------- meta, square, meeting ----------
+// 版本：git commit（部署後就會變），沒有 git 時用啟動時間
+import { execSync } from 'node:child_process';
+const APP_VERSION = (() => { try { return execSync('git rev-parse --short HEAD', { cwd: path.join(__dirname, '..'), stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { return String(Date.now()); } })();
+app.get('/api/version', (req, res) => { res.setHeader('Cache-Control', 'no-store'); res.json({ v: APP_VERSION }); });
+
 app.get('/api/meta', (req, res) => res.json({ jobs: JOBS, archetypes: ARCHETYPES, proactivity: PROACTIVITY, voices: VOICES, scenarios: SCENARIOS, hues: AVATAR_HUES, stages: STAGES, moods: MOODS, categories: CATEGORIES, emotions: EMOTIONS }));
 
 const publicFrame = (f) => ({ name: f.name, gender: f.gender, age: f.age, nationality: f.nationality, jobLabel: f.jobLabel, job: f.job,
@@ -536,7 +543,7 @@ app.post('/api/rels/:id/poke', auth, wrap(async (req, res) => {
   const rel = ownRel(req, res); if (!rel) return;
   if (rel.status !== 'active') return res.status(400).json({ error: '這段關係已經結束了' });
   const e = EMOTIONS.find(x => x.id === req.body?.emotion);
-  if (!e) return res.status(400).json({ error: '沒有這個心情' });
+  if (!e || (e.minStage || 0) > rel.stage) return res.status(400).json({ error: '沒有這個心情' });
   if (busyRels.has(rel.id)) return res.status(429).json({ error: `${ta(getPersona(rel))}還在回上一則` });
   const count = Math.max(1, Math.min(99, Number(req.body?.count) || 1));
   busyRels.add(rel.id);

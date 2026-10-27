@@ -40,8 +40,11 @@ export function memoirFor(rel, persona) {
   const known = new Set(chapters.flatMap(c => c.cards.map(x => x.title)));
   const extra = db.prepare(`SELECT title, created_at at FROM story WHERE rel_id=? AND type='milestone' ORDER BY created_at`).all(rel.id)
     .filter(m => !known.has(m.title) && !/第一次幫你點餐|第一次一起/.test(m.title));
-  const out = chapters.map(c => ({ title: c.title, total: c.cards.length, unlocked: c.cards.filter(x => x.at).length,
+  // 只顯示已經開始的章節：還沒走到的章節（例如「心動」「在一起」）連名字都不出現，不劇透你們之後會怎樣
+  const started = chapters.filter(c => c.cards.some(x => x.at));
+  const out = started.map(c => ({ title: c.title, total: c.cards.length, unlocked: c.cards.filter(x => x.at).length,
     cards: c.cards.map(x => x.at ? { id: x.id, title: x.title, at: x.at, unlocked: true } : { id: x.id, unlocked: false }) }));
-  if (extra.length) out.push({ title: '只屬於你們的', total: extra.length, unlocked: extra.length, cards: extra.map((m, i) => ({ id: `x${i}`, title: m.title, at: m.at, unlocked: true })) });
+  if (started.length < chapters.length) out.push({ title: '', more: true, cards: [] });
+  if (extra.length) out.splice(started.length, 0, { title: '只屬於你們的', total: extra.length, unlocked: extra.length, cards: extra.map((m, i) => ({ id: `x${i}`, title: m.title, at: m.at, unlocked: true })) });
   return out;
 }

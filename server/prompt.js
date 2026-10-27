@@ -138,7 +138,7 @@ function meetLine(rel) {
   return `你們的相遇：${sc.label || '（未記錄）'}${rel.start_type === 'friend' ? '（本來就認識）' : ''}，${days === 0 ? '就是今天' : `${days} 天前`}${sad}`;
 }
 
-export function contextBlock({ goals = [], world = [], arc = null, lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
+export function contextBlock({ prefs = null, goals = [], world = [], arc = null, lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
   const st = charStatus(persona);
   const stageText = `${STAGES[rel.stage]}——${STAGE_GUIDE[rel.stage]}`;
   const modeText = rel.mode === 'real'
@@ -167,6 +167,7 @@ export function contextBlock({ goals = [], world = [], arc = null, lastTimes = {
     lowEffort ? '對方最近幾次都回得很短，可能不知道怎麼接話。這次不要再問問題，換你帶話題：分享一件具體的小事、提起之前聊過的事的後續、或提議一個二選一或小遊戲。' : '',
     rel.user_busy_until && rel.user_busy_until > Date.now() ? '對方現在在忙（例如開會），先別打擾。' : '',
     habits.length ? `## 你們之間的相處習慣（對方明確要求過，一定要遵守）\n${habits.map(h => `[${h.id}] ${h.content}`).join('\n')}` : '',
+    prefs ? `## 這個人喜歡的聊天與相處方式（系統從他平常的相處整理）\n${prefs}\n照這個方式跟對方相處，但這只是說話方式，不是你知道的事；也不代表你們很熟，關係照現在的階段慢慢來。和你自己的個性衝突時，用符合你個性的方式做到。` : '',
     persona.tuning?.more?.length ? `## 對方比較喜歡你這樣（多一點）\n${persona.tuning.more.map(x => '- ' + x).join('\n')}` : '',
     persona.tuning?.less?.length ? `## 對方反應比較冷淡的（少一點）\n${persona.tuning.less.map(x => '- ' + x).join('\n')}` : '',
     `## 你記得的事\n${mem}`,

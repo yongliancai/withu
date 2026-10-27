@@ -310,3 +310,35 @@ export function stickerSVG(id, size = 120) {
     <text x="60" y="116" text-anchor="middle" font-size="15" font-weight="700" fill="${ink}" font-family="'jf-openhuninn','Noto Sans TC',sans-serif">${label}</text>
   </svg>`;
 }
+
+// ---------------------------------------------------------------- mascots
+// 系統吉祥物（原創）：三種系統主題各一隻。face: idle | happy | wow
+export const APP_THEMES = [
+  ['milk', '奶茶', '小糰：軟軟的麻糬，頭上冒著愛心'],
+  ['night', '夜空', '小月：抱著月亮睡覺的夜貓子'],
+  ['forest', '森林', '小芽：頭上長出嫩葉的種子'],
+];
+export function mascotSVG(theme = 'milk', face = 'idle') {
+  const ink = theme === 'night' ? '#2A2550' : theme === 'forest' ? '#2F3B2A' : '#3B3561';
+  const eyes = face === 'happy' ? `<path d="M22 34 q3-4 6 0 M36 34 q3-4 6 0" stroke="${ink}" stroke-width="3" fill="none" stroke-linecap="round"/>`
+    : face === 'wow' ? `<circle cx="25" cy="33" r="2.6" fill="${ink}"/><circle cx="39" cy="33" r="2.6" fill="${ink}"/>`
+    : theme === 'night' ? `<path d="M22 34 q3 3 6 0 M36 34 q3 3 6 0" stroke="${ink}" stroke-width="3" fill="none" stroke-linecap="round"/>`
+    : `<circle cx="25" cy="33" r="2.4" fill="${ink}"/><circle cx="39" cy="33" r="2.4" fill="${ink}"/>`;
+  const mouth = face === 'wow' ? `<ellipse cx="32" cy="43" rx="3" ry="3.6" fill="#E07A86"/>` : `<path d="M28 41 q4 4 8 0" stroke="${ink}" stroke-width="3" fill="none" stroke-linecap="round"/>`;
+  if (theme === 'night') return `<svg viewBox="0 0 64 64" aria-hidden="true">
+    <path d="M8 38 q0-24 24-24 q24 0 24 24 q0 16-24 16 q-24 0-24-16z" fill="#C9C2F2" stroke="${ink}" stroke-width="3"/>
+    <path d="M40 4 a12 12 0 1 0 14 16 a9 9 0 1 1 -14 -16z" fill="#F6D28B" stroke="${ink}" stroke-width="2.4"/>
+    <path d="M12 12 l1.6 3.4 3.4 1.6 -3.4 1.6 -1.6 3.4 -1.6 -3.4 -3.4 -1.6 3.4 -1.6z" fill="#F6D28B"/>
+    ${eyes}${mouth}<ellipse cx="18" cy="41" rx="4" ry="2.4" fill="#F4A6C8" opacity=".8"/><ellipse cx="46" cy="41" rx="4" ry="2.4" fill="#F4A6C8" opacity=".8"/></svg>`;
+  if (theme === 'forest') return `<svg viewBox="0 0 64 64" aria-hidden="true">
+    <path d="M32 16 q-2-8 -10-10 q2 9 10 10z M32 16 q3-9 12-9 q-3 9 -12 9z" fill="#8CC08A" stroke="${ink}" stroke-width="2.4" stroke-linejoin="round"/>
+    <path d="M32 16 v4" stroke="${ink}" stroke-width="2.4"/>
+    <path d="M10 40 q0-20 22-20 q22 0 22 20 q0 16-22 16 q-22 0-22-16z" fill="#E9D3A8" stroke="${ink}" stroke-width="3"/>
+    <circle cx="20" cy="46" r="1.2" fill="#B98A52"/><circle cx="44" cy="47" r="1.2" fill="#B98A52"/><circle cx="47" cy="44" r="1" fill="#B98A52"/>
+    ${eyes}${mouth}<ellipse cx="19" cy="40" rx="4" ry="2.4" fill="#F0A58E" opacity=".8"/><ellipse cx="45" cy="40" rx="4" ry="2.4" fill="#F0A58E" opacity=".8"/></svg>`;
+  return `<svg viewBox="0 0 64 64" aria-hidden="true">
+    <path d="M20 18 q-3-8 4-8 M44 18 q3-8 -4-8" stroke="${ink}" stroke-width="3" fill="#FFF6EC" stroke-linecap="round"/>
+    <path d="M8 38 q0-24 24-24 q24 0 24 24 q0 16-24 16 q-24 0-24-16z" fill="#FFF6EC" stroke="${ink}" stroke-width="3"/>
+    <path d="M27 9 c0-4 5-4 5 0 c0-4 5-4 5 0 c0 4-5 7-5 7 s-5-3-5-7z" fill="#E0525F"/>
+    ${eyes}${mouth}<ellipse cx="18" cy="40" rx="4" ry="2.5" fill="#F4A6B4"/><ellipse cx="46" cy="40" rx="4" ry="2.5" fill="#F4A6B4"/></svg>`;
+}
