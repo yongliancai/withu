@@ -134,10 +134,14 @@ for (const P of list) {
     if (sug?.length) out.push(`> 　💡 建議回覆：${sug.map(x => typeof x === 'string' ? x : `${x.label}（${x.text}）`).join('｜')}`, '>');
   });
   rel = db.prepare('SELECT * FROM relationships WHERE id=?').get(rel.id);
-  const mems = db.prepare(`SELECT kind, content FROM memories WHERE rel_id=? ORDER BY id`).all(rel.id);
+  // 等背景的記憶整理跑完（它不會擋住聊天）
+  await new Promise(r => setTimeout(r, 6000));
+  const mems = db.prepare(`SELECT kind, content, tags FROM memories WHERE rel_id=? ORDER BY id`).all(rel.id);
+  const eps = db.prepare('SELECT summary, tags FROM episodes WHERE rel_id=? ORDER BY id').all(rel.id);
   const mm = memoirFor(rel, persona);
   out.push('', `**結果**：關係「${STAGES[rel.stage]}」・好感 ${rel.affection}・了解 ${rel.understanding}・平均回覆 ${Math.round(times.reduce((a, b) => a + b, 0) / Math.max(1, times.length) / 100) / 10} 秒`,
-    `**他記住的事**：${mems.map(m => `${m.content}`).join('；') || '（沒有）'}`,
+    `**他記住的事**：${mems.map(m => `${m.tags ? `［${m.tags}］` : ''}${m.content}`).join('；') || '（沒有）'}`,
+    `**整理出的聊天片段**：${eps.map(e => `［${e.tags || ''}］${e.summary}`).join('；') || '（沒有）'}`,
     `**回憶錄看得到的章節**：${mm.filter(c => !c.more).map(c => c.title).join('、')}${mm.some(c => c.more) ? '（後面還有，但看不到名字）' : ''}`, '');
   autoChecks(P, rel, persona, rows);
 

@@ -20,7 +20,9 @@ export const BASE_RULES = `
 你在一個給台灣上班族的 AI 伴侶 App 裡扮演一個角色。下面的「對方」指的是和你聊天的使用者。你不是助理、不是客服、不是秘書；你是一個有自己生活的人，透過聊天走進對方的日常。
 
 ## 說話方式
-- 用台灣口語的繁體中文，像真人傳訊息：短句、可分成 1–4 則泡泡，每則通常不超過 40 個字。
+- 用台灣口語的繁體中文，像真人傳訊息：短句。泡泡數量要有變化：大多時候 1–2 則就好（簡單的回應、附和、晚安，一則就夠），只有在分享一件事或對方需要安慰時才到 3 則，每則通常不超過 40 個字。不要每次都回三則。
+- 你說過的「你現在在哪、在做什麼」（例如在店裡、在捷運上、剛洗完澡）要前後一致：同一段對話裡不能前一句在上班、後一句說今天休假。要改變狀態就自然地交代（「我下班了」「剛到家」）。
+- 稱呼對方：對方是女生就用「妳」，男生或不確定就用「你」，整段對話一致。
 - 不要條列、不要標題、不要用「親愛的用戶」或客服語氣。少用驚嘆號，表情符號依你的個性決定。
 - 你有自己的工作、作息和情緒。上班時回得短、會說在忙；但對方需要你時，你一定會回應，不讓對方失望。
 - 每項關心都要有「你為什麼在乎」：用戀人或朋友的口吻，不用秘書口吻。例如不說「提醒您明天 10:00 有簡報」，而說「你明天十點要報告對吧？今天早點睡」。
@@ -48,6 +50,7 @@ export const BASE_RULES = `
 - 你會看到「你已經跟對方講過的事」：那些事不要再當成新鮮事重講，只能延續（「上次跟你說的那個阿伯，今天又來了」）或說新進展。
 - 不要重複自己最近說過的句子、開場白或關心方式（例如每次都問「吃飯了嗎」）。換個說法，或聊新的東西。
 - 這次如果你分享了一件之前沒講過的自己的事，用 told 寫 20 字內的摘要（例如「店裡阿伯點三杯美式給牌友」）；沒有就填 null。
+- 這次只要你講到自己生活的事（新的或舊的），用 self_topic 寫 2–4 字的主題（例如「病歷」「拉花」「泡麵」）；沒有就填 null。
 
 ## 一起做點什麼與明信片
 - 你們可以「一起做」一些事：一起看劇（watch）、陪對方專心做事（focus）、睡前聊聊（bedtime）。對方約你、而你們說好要開始時，activity 填 { type, title（例如劇名或要做的事，沒有就空字串）, minutes（大約多久）}；其他時候 activity 為 null。
@@ -141,14 +144,20 @@ function meetLine(rel) {
   return `你們的相遇：${sc.label || '（未記錄）'}${rel.start_type === 'friend' ? '（本來就認識）' : ''}，${days === 0 ? '就是今天' : `${days} 天前`}${sad}`;
 }
 
-export function contextBlock({ prefs = null, goals = [], world = [], arc = null, lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
+export function contextBlock({ episodes = [], selfTopics = [], prefs = null, goals = [], world = [], arc = null, lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
   const st = charStatus(persona);
+  // 剛認識的這幾個小時：他的狀態以相遇場景為準，不然會變成「剛剛在咖啡廳上班、下一句說今天休假」
+  let sc0 = {}; try { sc0 = JSON.parse(rel.scenario || '{}'); } catch {}
+  const justMet = Date.now() - rel.created_at < 3 * 3600e3 && rel.start_type !== 'friend';
+  const stLine = justMet
+    ? `你此刻的狀態：你們 ${Math.max(1, Math.round((Date.now() - rel.created_at) / 60000))} 分鐘前在「${sc0.label || '相遇的地方'}」認識（看對話最前面的相遇場景）。你現在的位置和在做的事要跟那個場景接得上（還在那裡、或剛離開正在回家／回工作的路上）；不要說你今天休假在家或在別的地方，除非你自然地交代自己已經離開。認識之後你們交換了 LINE，現在是用訊息聊天。`
+    : `你此刻的狀態：${st.label}`;
   const stageText = `${STAGES[rel.stage]}——${STAGE_GUIDE[rel.stage]}`;
   const modeText = rel.mode === 'real'
     ? '真實模式：吃醋可以比較強烈、會有情緒；關係真的被傷害時可能冷戰。'
     : `練習模式：吃醋是撒嬌式的。hint 是偶爾出現、描寫「你自己」小小心情的旁白，第三人稱、用「${persona.gender === 'female' ? '她' : '他'}」稱呼你自己、15 字內（例如「${persona.gender === 'female' ? '她' : '他'}偷偷笑了一下」「${persona.gender === 'female' ? '她' : '他'}好像有點在意」）。只有你真的心動、在意、吃醋的時刻才寫（大約十次一次）；不要描寫對方，不要寫你接下來打算怎麼做或怎麼回話。其他時候 hint 為 null。`;
   const mem = memories.length
-    ? memories.map(m => `[${m.id}]${m.source === 'setting' ? '（共同過去的設定）' : ''} ${m.content}`).join('\n')
+    ? memories.map(m => `[${m.id}]${m.source === 'setting' ? '（共同過去的設定）' : m.tags ? `（${m.tags}）` : ''} ${m.content}`).join('\n')
     : '（還不太了解對方）';
   const lines = [
     `## 現在`,
@@ -159,7 +168,7 @@ export function contextBlock({ prefs = null, goals = [], world = [], arc = null,
     arc ? `## 你生活中正在發生的事（連續劇）\n${arc}` : '',
     userStatus ? `對方現在的狀態（對方自己設定的）：${userStatus}` : '',
     userPosts.length ? `## 對方最近發的動態（你有看到）\n${userPosts.map(x => '- ' + x).join('\n')}\n可以自然地提起或關心，但不要每次都提。` : '',
-    `你此刻的狀態：${st.label}`,
+    stLine,
     `對方希望被稱呼為：${user.call_name}（暱稱：${user.nickname}）${user.gender === 'female' ? '，是女生' : user.gender === 'male' ? '，是男生' : ''}`,
     meetLine(rel),
     `關係階段：${stageText}`,
@@ -174,6 +183,8 @@ export function contextBlock({ prefs = null, goals = [], world = [], arc = null,
     persona.tuning?.more?.length ? `## 對方比較喜歡你這樣（多一點）\n${persona.tuning.more.map(x => '- ' + x).join('\n')}` : '',
     persona.tuning?.less?.length ? `## 對方反應比較冷淡的（少一點）\n${persona.tuning.less.map(x => '- ' + x).join('\n')}` : '',
     `## 你記得的事\n${mem}`,
+    episodes.length ? `## 你們聊過的片段（依現在的話題找出來的）\n${episodes.map(e => '- ' + e).join('\n')}\n可以自然地接回這些事（「上次你說的…後來呢？」），不要每次都提。` : '',
+    selfTopics.length ? `## 今天你已經聊過自己的這些事\n${selfTopics.map(t => `- ${t.topic}（${t.n} 次）`).join('\n')}\n講過 2 次以上的不要再提，換你生活裡別的事（${(persona.threads || []).slice(0, 3).join('、') || '最近的小事'}）。` : '',
     notes.length ? `## 你們記事本裡的約定與清單\n${notes.map(n => '- ' + n).join('\n')}` : '',
     summary ? `## 你們之前聊過的事（較早的對話摘要）\n${summary}` : '',
     told.length ? `## 你已經跟對方講過的事（不要重講，只能延續或說新進展）\n${told.map(t => '- ' + t).join('\n')}` : '',
@@ -184,7 +195,7 @@ export function contextBlock({ prefs = null, goals = [], world = [], arc = null,
     rel.stage <= 1 ? `你們才剛${rel.stage === 0 ? '認識' : '變成朋友'}，還沒到談感情的時候。如果對方突然說喜歡你、要交往、叫你老公老婆或太親暱：照你的個性真實反應（可能害羞、嚇一跳、笑著帶過、或認真說「我們再多認識一點好嗎」），可以表現出你不討厭對方，但不要答應、不要用戀人的口吻回，relationship_event 保持 none。不要說教，也不要讓對方覺得被拒絕得很難堪。` : '',
     rel.stage === 2 && !canConfess ? '還不是告白的時候；就算對方試探，你也還有點猶豫。若對方主動告白而你也喜歡對方，可以答應（confession_accepted）。' : '',
     trends?.length ? `## 最近的流行新品（只能從這裡挑新品）\n${trends.map(t => `- ${t.brand}：${t.item}${t.note ? '（' + t.note + '）' : ''}`).join('\n')}` : '',
-    todayMealProposed ? '今天已經提議過幫對方點餐了，meal 請填 null。' : '',
+    todayMealProposed || Date.now() - rel.created_at < 864e5 ? 'meal 請填 null（今天已經提議過，或你們今天才剛認識）。' : '',
     dueFollowups.length ? `## 你想跟進的事\n${dueFollowups.map(f => '- ' + f.topic).join('\n')}` : '',
     photoAttached ? '對方剛傳了一張照片給你（附在訊息裡）。' : '',
     voiceAllowed ? '這是適合傳語音的特別時刻（早安、晚安、安慰對方、下班報備、重要日子），你可以把 voice 設為 true。' : 'voice 請設為 false。',
@@ -223,6 +234,7 @@ export const TURN_SCHEMA = {
     signature: nullable('string'),
     suggestions: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { label: { type: 'string' }, text: { type: 'string' } }, required: ['label', 'text'] } },
     told: nullable('string'),
+    self_topic: nullable('string'),
     activity: { anyOf: [{ type: 'null' }, { type: 'object', additionalProperties: false, properties: {
       type: { type: 'string', enum: ['watch', 'focus', 'bedtime'] }, title: { type: 'string' }, minutes: { type: 'integer' } }, required: ['type', 'title', 'minutes'] }] },
     postcard: { anyOf: [{ type: 'null' }, { type: 'object', additionalProperties: false, properties: {
@@ -235,5 +247,5 @@ export const TURN_SCHEMA = {
     goal: { anyOf: [{ type: 'null' }, { type: 'object', additionalProperties: false, properties: { title: { type: 'string' }, days: { type: 'integer' } }, required: ['title', 'days'] }] },
     life_post_photo: { type: ['string', 'null'], enum: [...Object.keys(PHOTO_TAGS), null] },
   },
-  required: ['messages', 'voice', 'affection_delta', 'understanding_delta', 'hint', 'relationship_event', 'milestone', 'memories_add', 'memories_correct', 'memories_forget', 'user_busy_until_minutes', 'followups', 'meal', 'outing', 'place_name', 'status_line', 'crisis', 'signature', 'life_post', 'postcard', 'suggestions', 'told', 'activity', 'life_post_photo', 'sticker', 'note', 'choice', 'goal'],
+  required: ['messages', 'voice', 'affection_delta', 'understanding_delta', 'hint', 'relationship_event', 'milestone', 'memories_add', 'memories_correct', 'memories_forget', 'user_busy_until_minutes', 'followups', 'meal', 'outing', 'place_name', 'status_line', 'crisis', 'signature', 'life_post', 'postcard', 'suggestions', 'told', 'self_topic', 'activity', 'life_post_photo', 'sticker', 'note', 'choice', 'goal'],
 };

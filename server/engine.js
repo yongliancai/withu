@@ -7,7 +7,7 @@ import { db, now, j, logEvent } from './db.js';
 import { config } from './config.js';
 import { jsonCall, tts } from './llm.js';
 import { BASE_RULES, personaBlock, contextBlock, TURN_SCHEMA, STAGES } from './prompt.js';
-import { selectMemories, addMemory, correctMemory, forgetMemory, habitsOf, addTold, toldOf, similarity } from './memory.js';
+import { selectMemories, addMemory, correctMemory, forgetMemory, habitsOf, addTold, toldOf, similarity, consolidateMemories, episodesFor } from './memory.js';
 import { buildMealCard, loadTrends } from './ordering.js';
 import { crisisSignal, HELP_CARD } from './safety.js';
 import { taipeiParts, JOBS } from './characters.js';
@@ -308,6 +308,20 @@ async function maybeSummarize(rel) {
 function recentCharTexts(relId) {
   return db.prepare(`SELECT text FROM messages WHERE rel_id=? AND sender='char' AND kind IN ('text','voice') AND text IS NOT NULL ORDER BY id DESC LIMIT 40`).all(relId).map(r => r.text);
 }
+const STYLE_ASK = /(不要|別|少|不用)(再|一直|老是|每次都|那麼常)?(問|叫我|說|講|傳|提|用)|換你(說|講|聊|分享)|回(短|長|快|慢)一點|(可以|能不能|拜託)(溫柔|簡短|直接|多說|少問|多分享)|(太|好)(油|肉麻|囉嗦|官方|客套)了/;
+
+// 他今天聊過自己的哪些事：同一件事一天講太多次就換話題
+db.exec(`CREATE TABLE IF NOT EXISTS self_topics (rel_id TEXT NOT NULL, day TEXT NOT NULL, topic TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (rel_id, day, topic))`);
+const tpeDay = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei' }).format(new Date());
+function selfTopicsToday(relId) {
+  return db.prepare('SELECT topic, n FROM self_topics WHERE rel_id=? AND day=? ORDER BY n DESC').all(relId, tpeDay());
+}
+function addSelfTopic(relId, topic) {
+  topic = String(topic || '').trim().slice(0, 8);
+  if (!topic) return;
+  db.prepare('INSERT INTO self_topics (rel_id,day,topic,n) VALUES (?,?,?,1) ON CONFLICT(rel_id,day,topic) DO UPDATE SET n=n+1').run(relId, tpeDay(), topic);
+}
+
 function findRepeat(texts, recent) {
   for (const t of texts) for (const r of recent) if (t.length >= 10 && similarity(t, r) >= 0.6) return { now: t, before: r };
   // 換句話說但講同一件事（例如連三次「被學長抓去改病歷」）：最近的話裡出現同一段 7 個字以上
@@ -337,6 +351,11 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const t = taipeiParts();
   const crisis = !trigger && crisisSignal(userText);
   const dueFollowups = db.prepare('SELECT * FROM followups WHERE rel_id=? AND done=0 AND due_at<=? ORDER BY due_at LIMIT 3').all(rel.id, now());
+  // 對方明確說了希望怎麼聊（「不要一直問我問題」「換你說」）：不靠模型，系統直接記成相處習慣，並馬上告訴其他角色
+  if (userText && !trigger && STYLE_ASK.test(userText)) {
+    addMemory(rel, 'style', `對方希望：${userText.replace(/\s+/g, ' ').slice(0, 40)}`, 5);
+    updateUserPrefs(rel.user_id, { force: true }).catch(e => logIssue({ level: 'warn', source: 'llm', message: `相處偏好整理失敗：${e.message}`, error: e, userId: rel.user_id, relId: rel.id }));
+  }
   const memories = selectMemories(rel.id, userText);
   const worldEvents = db.prepare('SELECT text FROM world_events WHERE user_id=? ORDER BY id DESC LIMIT 6').all(rel.user_id);
   const lover = loverOf(rel.user_id, rel.id);
@@ -355,6 +374,8 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   input.push({ role: 'developer', content: contextBlock({
     prefs: prefsLines(rel.user_id),
     world, arc, goals: db.prepare(`SELECT title, days, done FROM goals WHERE rel_id=? AND status='active'`).all(rel.id).map(g => `${g.title}（做到 ${j(g.done, []).length}/${g.days} 天）`),
+    episodes: episodesFor(rel.id, userText).map(e => `${new Date(e.created_at).toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric' })}${e.tags ? `（${e.tags}）` : ''} ${e.summary}`),
+    selfTopics: selfTopicsToday(rel.id),
     habits: habitsOf(rel.id), notes: db.prepare('SELECT text FROM notes WHERE rel_id=? AND done=0 ORDER BY id DESC LIMIT 10').all(rel.id).map(n => n.text), told: toldOf(rel.id), summary: rel.summary || '', lateReply, activity,
     lowEffort: !trigger && lowEffortStreak(rel.id),
     userStatus: statusLine(db.prepare('SELECT * FROM users WHERE id=?').get(rel.user_id) || user), userPosts: postsVisibleTo(rel),
@@ -395,7 +416,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const isProactive = trigger && !lateReply && !String(triggerKey || '').startsWith('nudge') ? 1 : 0;
   if (!trigger || lateReply) db.prepare(`UPDATE relationships SET char_read_id=(SELECT COALESCE(MAX(id),0) FROM messages WHERE rel_id=? AND sender='user'), pending_reply_at=NULL WHERE id=?`).run(rel.id, rel.id);
   // 一則泡泡裡有換行就拆成兩則（像真人分開傳）
-  const texts = (out.messages || []).flatMap(m => String(m.text || '').split(/\n+/)).map(x => x.trim()).filter(Boolean).slice(0, 5);
+  const texts = (out.messages || []).flatMap(m => String(m.text || '').split(/\n+/)).map(x => x.trim()).filter(Boolean).slice(0, 4);
   if (!texts.length && !out.meal && !out.postcard) logIssue({ level: 'warn', source: 'llm', message: '角色這一輪沒有回任何話', detail: { trigger: triggerKey, tier, userText: userText ? userText.slice(0, 200) : null }, userId: rel.user_id, relId: rel.id });
   if (out.voice && voiceAllowed && texts.length) {
     const joined = texts.join(' ');
@@ -470,9 +491,14 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     if (n < 3) addPost(rel, out.life_post.slice(0, 100), out.life_post_photo);
   }
   if (out.told) addTold(rel.id, out.told);
+  if (out.self_topic) addSelfTopic(rel.id, out.self_topic);
   // 貼圖不洗版：最近 8 則裡他已經傳過貼圖就不傳
-  const recentSticker = db.prepare(`SELECT 1 FROM (SELECT sender, kind FROM messages WHERE rel_id=? ORDER BY id DESC LIMIT 8) WHERE sender='char' AND kind='sticker'`).get(rel.id);
-  if (out.sticker && STICKERS[out.sticker] && !recentSticker) addMessage(rel, 'char', 'sticker', { text: STICKERS[out.sticker], card: { id: out.sticker }, proactive: isProactive, reason: triggerKey });
+  // 貼圖不洗版：最近 5 輪（對方的 5 則訊息）內傳過就不傳；同一張一天一次；晚安貼圖只在對方要睡時
+  const fifthUser = db.prepare(`SELECT id FROM messages WHERE rel_id=? AND sender='user' ORDER BY id DESC LIMIT 1 OFFSET 4`).get(rel.id)?.id || 0;
+  const recentSticker = db.prepare(`SELECT 1 FROM messages WHERE rel_id=? AND sender='char' AND kind='sticker' AND id>?`).get(rel.id, fifthUser);
+  const sameToday = out.sticker && db.prepare(`SELECT 1 FROM messages WHERE rel_id=? AND sender='char' AND kind='sticker' AND card LIKE ? AND created_at>?`).get(rel.id, `%"id":"${out.sticker}"%`, now() - 864e5);
+  const badNight = out.sticker === 'night' && !/晚安|睡了|去睡|要睡|睡覺|先睡/.test(userText || '');
+  if (out.sticker && STICKERS[out.sticker] && !recentSticker && !sameToday && !badNight) addMessage(rel, 'char', 'sticker', { text: STICKERS[out.sticker], card: { id: out.sticker }, proactive: isProactive, reason: triggerKey });
   // 出遊中的小插曲（一次出遊最多一次）
   if (out.choice && rel.outing_active && out.choice.options?.length >= 2 && !crisis) {
     const had = db.prepare(`SELECT 1 FROM messages WHERE rel_id=? AND kind='card' AND card LIKE '%"type":"choice"%' AND created_at>=?`).get(rel.id, rel.outing_started_at || 0);
@@ -502,7 +528,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     if (h && h.length <= 18 && !meta && !recentHint) addMessage(rel, 'system', 'card', { card: { type: 'hint', text: h } });
   }
 
-  if (out.meal && out.meal.options?.length >= 2 && !todayMealProposed && !crisis) {
+  if (out.meal && out.meal.options?.length >= 2 && !todayMealProposed && !crisis && now() - rel.created_at > 864e5) {
     addMessage(rel, 'char', 'card', { card: buildMealCard(out.meal.options) });
     db.prepare('UPDATE relationships SET meal_proposed_date=? WHERE id=?').run(t.date, rel.id);
     logEvent(rel.user_id, 'meal_propose', { rel: rel.id });
@@ -537,13 +563,22 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
 
   // 建議回覆：掛在這一輪他最後一則文字／語音訊息上
   const sugg = (out.suggestions || []).map(x => typeof x === 'string' ? { label: x.slice(0, 12), text: x } : { label: String(x.label || '').trim().slice(0, 10), text: String(x.text || '').trim().slice(0, 40) })
-    .filter(x => x.label && x.text).slice(0, 3);
-  if (sugg.length && !crisis && !out.crisis) {
+    .filter(x => x.label && x.text)
+    // 站錯邊的建議（跟他自己說的話太像、或講到他自己的工作）拿掉
+    .filter(x => {
+      const mine = [...texts, ...recentCharTexts(rel.id).slice(0, 6)];
+      if (mine.some(c => similarity(x.text, c) >= 0.45)) return false;
+      const own = [persona.jobLabel, persona.workplace].filter(Boolean).map(w => String(w).replace(/[（(].*$/, ''));
+      if (own.some(w => w.length >= 2 && x.text.includes(w) && !(userText || '').includes(w))) return false;
+      return true;
+    }).slice(0, 3);
+  if (sugg.length >= 2 && !crisis && !out.crisis) {
     const last = db.prepare(`SELECT id FROM messages WHERE rel_id=? AND id>? AND sender='char' AND kind IN ('text','voice') ORDER BY id DESC LIMIT 1`).get(rel.id, before);
     if (last) db.prepare('UPDATE messages SET suggest=? WHERE id=?').run(JSON.stringify(sugg), last.id);
   }
 
   maybeSummarize(refreshRel(rel.id)).catch(err => logIssue({ level: 'warn', source: 'llm', message: `對話摘要失敗：${err.message}`, error: err, userId: rel.user_id, relId: rel.id }));
+  if (!trigger || lateReply) consolidateMemories(refreshRel(rel.id), persona, user);
   maybeShapePersona(refreshRel(rel.id), persona).catch(err => logIssue({ level: 'warn', source: 'llm', message: `個性整理失敗：${err.message}`, error: err, userId: rel.user_id, relId: rel.id }));
 
   const fresh = db.prepare('SELECT * FROM messages WHERE rel_id=? AND id>? ORDER BY id').all(rel.id, before);

@@ -405,6 +405,8 @@ a { color: inherit; }
 .nrow { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--line); }
 .nrow.done .grow { text-decoration:line-through; opacity:.55; }
 .sres { padding:10px 0; border-bottom:1px solid var(--line); }
+.sres.ep { display:block; width:100%; text-align:left; background:none; border:0; border-bottom:1px solid var(--line); font:inherit; color:inherit; }
+.ep-msgs { padding:8px 12px; margin:0 0 8px; background:var(--surface); border-radius:12px; display:grid; gap:4px; }
 .sres mark { background:#F6D28B; color:inherit; border-radius:3px; }
 /* ---- 聊天室主題 ---- */
 .theme-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }

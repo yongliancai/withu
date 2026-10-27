@@ -179,8 +179,8 @@ export async function meet(user, { templateId, custom, scenarioId, scenarioText,
   // Opening scene narration
   const narration = await jsonCall({
     userId: user.id, kind: 'scene', tier: 'good',
-    instructions: `${personaBlock(frame)}\n\n寫一段 2–3 句的相遇場景旁白（第二人稱「你」指用戶），台灣日常、具體、有畫面，最後停在角色注意到你的那一刻（角色是${frame.gender === 'female' ? '女生，用「她」' : '男生，用「他」'}）。不要寫角色的台詞。只輸出 JSON。`,
-    input: [{ role: 'user', content: `情境：${label}\n${roles ? '身份：' + roles + '\n' : ''}地點：${scene.place}｜時間：${scene.time}｜氣氛：${scene.mood}\n起始關係：${startFriend ? '本來就認識的朋友' : '陌生人'}${scene.implied_lover ? '（用戶原本寫的是戀人，但你們目前只是朋友）' : ''}` }],
+    instructions: `${personaBlock(frame)}\n\n寫一段 2–3 句的相遇場景旁白（第二人稱「你」指用戶），台灣日常、具體、有畫面。場景的時間要符合「現在的真實時間」：情境名稱裡的時間（例如「深夜」「下班」）跟現在不符時，改成現在的時段來寫（例如下午就寫下午的便利商店），最後停在角色注意到你的那一刻（角色是${frame.gender === 'female' ? '女生，用「她」' : '男生，用「他」'}）。不要寫角色的台詞。只輸出 JSON。`,
+    input: [{ role: 'user', content: `現在的真實時間：${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', weekday: 'long', hour: 'numeric', minute: '2-digit' })}\n情境：${label}\n${roles ? '身份：' + roles + '\n' : ''}地點：${scene.place}｜時間：${scene.time}｜氣氛：${scene.mood}\n起始關係：${startFriend ? '本來就認識的朋友' : '陌生人'}${scene.implied_lover ? '（用戶原本寫的是戀人，但你們目前只是朋友）' : ''}` }],
     schema: { type: 'object', additionalProperties: false, properties: { narration: { type: 'string' } }, required: ['narration'] },
     schemaName: 'scene_text',
     mock: { narration: `${label}。你抬起頭的時候，剛好對上一雙有點驚訝的眼睛。` },

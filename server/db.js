@@ -177,6 +177,10 @@ CREATE TABLE IF NOT EXISTS push_subs (
 );
 `);
 
+// 聊天片段：每幾輪整理一次「這段在聊什麼」，加上主題標籤，方便角色和使用者之後找回來
+db.exec(`CREATE TABLE IF NOT EXISTS episodes (id INTEGER PRIMARY KEY AUTOINCREMENT, rel_id TEXT NOT NULL REFERENCES relationships(id) ON DELETE CASCADE, from_id INTEGER NOT NULL, to_id INTEGER NOT NULL, summary TEXT NOT NULL, tags TEXT, created_at INTEGER NOT NULL)`);
+db.exec(`CREATE INDEX IF NOT EXISTS episodes_rel ON episodes(rel_id, id)`);
+
 // 每人每日用量（控制費用）
 db.exec(`CREATE TABLE IF NOT EXISTS daily_use (user_id TEXT NOT NULL, day TEXT NOT NULL, replies INTEGER NOT NULL DEFAULT 0, photos INTEGER NOT NULL DEFAULT 0, capped INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, day))`);
 
@@ -195,6 +199,8 @@ for (const [table, col, def] of [
   ['story', 'photo_id', 'INTEGER'],
   ['relationships', 'theme', 'TEXT'],                 // 聊天室主題                  // 他寄的明信片用的寫實照片
   ['relationships', 'char_read_id', 'INTEGER NOT NULL DEFAULT 0'], // 他讀到哪一則（已讀）
+  ['memories', 'tags', 'TEXT'],                       // 記憶的主題標籤（逗號分隔，例如「工作,心情」）
+  ['relationships', 'mem_upto', 'INTEGER NOT NULL DEFAULT 0'], // 記憶整理做到哪一則訊息
   ['relationships', 'aff_day', 'TEXT'],                // 好感每日上限：哪一天
   ['relationships', 'aff_gain', 'INTEGER NOT NULL DEFAULT 0'], // 那一天已經加了多少好感
 ]) {

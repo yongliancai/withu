@@ -13,6 +13,7 @@ import { STAGES } from './prompt.js';
 import { id, runTurn, addMessage, getPersona, endRelationship, addStory, ta, startActivity, endActivity, STICKERS, milestone } from './engine.js';
 import { presenceOf, replyDelayMs } from './presence.js';
 import { crisisSignal } from './safety.js';
+import { episodesList } from './memory.js';
 import { topicsFor, GAMES, ACTIVITIES, LEAD_REASON, EMOTIONS, pokeReason } from './topics.js';
 import { seedOfficial, meet, sharePreview, publishShare, cleanupOrphans } from './meet.js';
 import { startScheduler, tick } from './scheduler.js';
@@ -172,7 +173,8 @@ app.get('/api/me/export', auth, (req, res) => {
     characters: db.prepare('SELECT id, origin, persona, created_at FROM characters WHERE user_id=?').all(uid).map(c => ({ ...c, persona: j(c.persona) })),
     relationships: db.prepare('SELECT id, character_id, status, stage, mode, start_type, created_at, ended_at FROM relationships WHERE user_id=?').all(uid),
     messages: db.prepare('SELECT rel_id, sender, kind, text, media, created_at FROM messages WHERE user_id=? ORDER BY id').all(uid),
-    memories: db.prepare('SELECT rel_id, kind, content, source, created_at FROM memories WHERE user_id=?').all(uid),
+    memories: db.prepare('SELECT rel_id, kind, content, tags, source, created_at FROM memories WHERE user_id=?').all(uid),
+    chat_episodes: db.prepare('SELECT e.rel_id, e.summary, e.tags, e.created_at FROM episodes e JOIN relationships r ON r.id=e.rel_id WHERE r.user_id=?').all(uid),
     story: db.prepare('SELECT rel_id, type, title, body, place, media, created_at FROM story WHERE user_id=?').all(uid),
     profile: { bio: req.user.bio || '', status: req.user.status_text || null, avatar: req.user.avatar || null, chat_preferences: j(req.user.prefs, null) },
     my_posts: db.prepare('SELECT story, text, media, audience, created_at FROM user_posts WHERE user_id=? ORDER BY id').all(uid),
@@ -199,6 +201,8 @@ app.delete('/api/me', auth, (req, res) => {
   db.prepare('DELETE FROM story WHERE user_id=?').run(uid);
   db.prepare('DELETE FROM logs WHERE user_id=?').run(uid);
   db.prepare('DELETE FROM story_views WHERE user_id=?').run(uid);
+  db.prepare('DELETE FROM self_topics WHERE rel_id IN (SELECT id FROM relationships WHERE user_id=?)').run(uid);
+  db.prepare('DELETE FROM daily_use WHERE user_id=?').run(uid);
   db.prepare('DELETE FROM users WHERE id=?').run(uid); // cascades
   res.clearCookie('sid');
   res.json({ ok: true });
@@ -484,6 +488,17 @@ app.get('/api/rels/:id/search', auth, (req, res) => {
   if (!q) return res.json([]);
   res.json(db.prepare(`SELECT id, sender, text, created_at at FROM messages WHERE rel_id=? AND kind IN ('text','voice') AND text LIKE ? ORDER BY id DESC LIMIT 50`)
     .all(rel.id, `%${q.replace(/[%_]/g, '')}%`));
+});
+// 依主題找聊天片段：每幾輪整理出來、有標籤的對話摘要
+app.get('/api/rels/:id/episodes', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  res.json(episodesList(rel.id));
+});
+app.get('/api/rels/:id/episodes/:eid', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const e = db.prepare('SELECT * FROM episodes WHERE id=? AND rel_id=?').get(req.params.eid, rel.id);
+  if (!e) return res.status(404).json({ error: '找不到' });
+  res.json(db.prepare(`SELECT * FROM messages WHERE rel_id=? AND id BETWEEN ? AND ? AND sender IN ('user','char') ORDER BY id LIMIT 80`).all(rel.id, e.from_id, e.to_id).map(msgOut));
 });
 // 相簿：這段關係裡的照片和明信片
 app.get('/api/rels/:id/album', auth, (req, res) => {

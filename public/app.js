@@ -1189,14 +1189,31 @@ async function openNotes(rel) {
 }
 
 function openSearch(rel) {
-  openSheet(`<h3>搜尋聊天紀錄</h3><input class="input" id="sq" placeholder="輸入關鍵字" autocomplete="off"><div id="sres" style="margin-top:12px"></div>`, (sh) => {
-    let t;
-    $('#sq', sh).focus();
+  const P = displayName(rel.frame);
+  openSheet(`<h3>搜尋聊天紀錄</h3><input class="input" id="sq" placeholder="輸入關鍵字" autocomplete="off">
+    <div class="small muted" style="margin:14px 0 6px">或依主題找你們聊過的事</div><div class="cat-row" id="stags"></div><div id="sres" style="margin-top:4px"></div>`, async (sh) => {
+    let t, eps = [];
+    const epText = (x) => esc(x.replaceAll('對方', '你'));
+    const showEps = (tag) => {
+      $$('[data-tag]', sh).forEach(b => b.classList.toggle('on', b.dataset.tag === tag));
+      const list = eps.filter(e => e.tags.includes(tag));
+      $('#sres', sh).innerHTML = list.map(e => `<button class="sres ep" data-ep="${e.id}"><div class="small muted">${dateStr(e.created_at)}・${e.tags.map(esc).join('、')}</div><div>${epText(e.summary)}</div></button>`).join('') || '<p class="muted small">這個主題還沒有</p>';
+      $$('[data-ep]', sh).forEach(b => b.onclick = async () => {
+        const rows = await api(`/api/rels/${rel.id}/episodes/${b.dataset.ep}`);
+        b.insertAdjacentHTML('afterend', `<div class="ep-msgs">${rows.map(r => `<div class="small"><b>${r.sender === 'user' ? '你' : esc(P)}</b>：${esc(r.text || '')}</div>`).join('')}</div>`);
+        b.onclick = null;
+      });
+    };
+    try { eps = await api(`/api/rels/${rel.id}/episodes`); } catch {}
+    const tags = [...new Set(eps.flatMap(e => e.tags))];
+    $('#stags', sh).innerHTML = tags.length ? tags.map(x => `<button class="cat" data-tag="${esc(x)}">${esc(x)}</button>`).join('') : '<span class="small muted">多聊幾句之後，系統會把你們聊過的事依主題整理在這裡。</span>';
+    $$('[data-tag]', sh).forEach(b => b.onclick = () => { $('#sq', sh).value = ''; showEps(b.dataset.tag); });
     $('#sq', sh).oninput = () => { clearTimeout(t); t = setTimeout(async () => {
       const q = $('#sq', sh).value.trim();
+      $$('[data-tag]', sh).forEach(b => b.classList.remove('on'));
       const rows = q ? await api(`/api/rels/${rel.id}/search?q=${encodeURIComponent(q)}`) : [];
       const hl = (x) => esc(x).replaceAll(esc(q), `<mark>${esc(q)}</mark>`);
-      $('#sres', sh).innerHTML = q ? (rows.length ? rows.map(r => `<div class="sres"><div class="small muted">${dateStr(r.at)} ${hhmm(r.at)}・${r.sender === 'user' ? '你' : esc(displayName(rel.frame))}</div><div>${hl(r.text || '')}</div></div>`).join('') : '<p class="muted small">找不到</p>') : '';
+      $('#sres', sh).innerHTML = q ? (rows.length ? rows.map(r => `<div class="sres"><div class="small muted">${dateStr(r.at)} ${hhmm(r.at)}・${r.sender === 'user' ? '你' : esc(P)}</div><div>${hl(r.text || '')}</div></div>`).join('') : '<p class="muted small">找不到</p>') : '';
     }, 250); };
   });
 }
