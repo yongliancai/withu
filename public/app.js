@@ -16,7 +16,7 @@ async function api(path, { method = 'GET', body, form } = {}) {
   });
   const data = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
   if (res.status === 401) { S.me = null; if (!/^#\/(welcome|join|recover)$/.test(location.hash)) location.hash = '#/welcome'; throw new Error('unauth'); }
-  if (!res.ok) { const err = new Error(data?.error || '連線有點問題，再試一次'); err.data = data; throw err; }
+  if (!res.ok) { const err = new Error(data?.error || '連線有點問題，再試一次'); err.data = data; err.status = res.status; throw err; }
   return data;
 }
 const track = (name, data) => api('/api/events', { method: 'POST', body: { name, data } }).catch(() => {});
@@ -72,13 +72,18 @@ function sceneCards(list, picked) {
 // 代名詞：ta(frame) 依角色性別；TA() 依使用者想遇見的人
 const ta = (f) => (f?.gender === 'female' ? '她' : '他');
 const TA = () => (S.me?.seeks === 'female' ? '她' : S.me?.seeks === 'any' ? 'TA' : '他');
-const displayName = (frame) => S.me?.settings?.discreetNames ? (frame.name || '').slice(0, 1) + '先生' : frame.name;
+const displayName = (frame) => S.me?.settings?.discreetNames ? (frame.name || '').slice(0, 1) + (frame.gender === 'female' ? '小姐' : '先生') : frame.name;
 
 // ---------- sheet ----------
+// 非同步打開的視窗：等資料回來時，如果使用者已經開了別的視窗，就不要蓋掉它
+let sheetGen = 0;
+const sheetGuard = () => { const g = sheetGen; return () => g === sheetGen; };
 function openSheet(html, mount) {
+  sheetGen++;
   const root = $('#sheet-root');
   root.innerHTML = `<div class="sheet-backdrop"></div><div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div>`;
-  const close = () => { root.innerHTML = ''; };
+  const myGen = sheetGen;
+  const close = () => { if (myGen === sheetGen) { root.innerHTML = ''; sheetGen++; } };
   $('.sheet-backdrop', root).onclick = close;
   mount?.($('.sheet', root), close);
   return close;
@@ -101,7 +106,7 @@ const routes = [
 ];
 async function route() {
   clearTimers();
-  $('#sheet-root').innerHTML = '';
+  $('#sheet-root').innerHTML = ''; sheetGen++;
   let hash = location.hash || '#/chat';
   if (!S.me && !/^#\/(welcome|join|recover)$/.test(hash)) {
     try { S.me = await api('/api/me'); } catch { return; }
@@ -403,7 +408,7 @@ async function renderWho() {
   app.innerHTML = `<div class="page" style="padding-bottom:32px"><a class="icon-btn back" href="#/meet/scene" aria-label="返回">${icon('back')}</a>
     <h1>可能在這裡出現的人</h1>
     ${r.reunion ? `<button class="choice" id="reunion"><b>……是${esc(r.reunion.frame.name)}？</b><span>你們曾經在一起過。${ta(r.reunion.frame)}好像也看見你了。</span></button>` : ''}
-    ${r.picks.length ? `<div class="people">${r.picks.map(t => personCard(t)).join('')}</div>` : (r.reunion ? '' : '<p class="muted">今天這裡好像沒有新面孔。換個情境，或到「我想認識他」自己捏一個。</p>')}</div>`;
+    ${r.picks.length ? `<div class="people">${r.picks.map(t => personCard(t)).join('')}</div>` : (r.reunion ? '' : '<p class="muted">今天這裡好像沒有新面孔。換個情境，或到「我想認識${TA()}」自己捏一個。</p>')}</div>`;
   $$('.person').forEach(b => b.onclick = () => {
     const t = r.picks.find(x => x.id === b.dataset.id);
     M.templateId = t.id; M.frame = t.frame; doMeet();
@@ -508,6 +513,7 @@ async function refreshBadge(rels) {
 function maybeAskNotify(rel) {
   try {
     if (S.askedNotify) return;
+    if ($('#sheet-root').innerHTML || !S.room || S.room.rel?.id !== rel.id) return; // 使用者正在看別的東西：下次再問，不要蓋掉
     if (isIOS() && !isStandalone()) {
       if (localStorage.getItem('a2hsShown')) return;
       S.askedNotify = true; localStorage.setItem('a2hsShown', '1');
@@ -601,6 +607,7 @@ function cardHtml(m, rel) {
     case 'postcard': return `<div class="msg him" data-id="${id}">${postcardHtml({ ...c, name: rel.frame.name })}</div>`;
     case 'travelogue': return `<div class="note" data-id="${id}">${ta(rel.frame)}整理好了今天的遊記「${esc(c.title)}」，收在<a href="#/story">我們的故事</a></div>`;
     case 'ended': return `<div class="note" data-id="${id}">${esc(c.text)}</div>`;
+    case 'info': return `<div class="note" data-id="${id}">${esc(c.text)}</div>`;
     case 'help': return `<div class="card help-card" data-id="${id}"><h4>${esc(c.title)}</h4>
       ${c.lines.map(l => `<a href="tel:${l.phone}"><span>${esc(l.name)}${l.note ? `<span class="muted small">・${esc(l.note)}</span>` : ''}</span><b>${l.phone}</b></a>`).join('')}
       <p class="small muted" style="margin:8px 0 0">${esc(c.footer)}</p></div>`;
@@ -689,7 +696,7 @@ async function renderRoom(relId) {
   if (rel.status !== 'active') return;
   const txt = $('#txt'), sendBtn = $('#sendBtn'), micBtn = $('#micBtn');
   const sync = () => { const has = !!txt.value.trim(); sendBtn.hidden = !has; micBtn.hidden = has; txt.style.height = 'auto'; txt.style.height = Math.min(120, txt.scrollHeight) + 'px'; };
-  txt.oninput = sync;
+  txt.oninput = () => { sync(); if (queue.length) armFlush(); };
   txt.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && matchMedia('(pointer:fine)').matches) { e.preventDefault(); send(); } };
   sendBtn.onclick = () => send();
   // 回覆建議：他最後一則訊息附的 2–3 個好接的回覆
@@ -721,10 +728,8 @@ async function renderRoom(relId) {
   $('#topicBtn').onclick = () => openTopicBag();
   $('#stkBtn').onclick = () => { const p = $('#stkPanel'); p.hidden = !p.hidden; if (!p.hidden) stream.scrollTop = stream.scrollHeight; };
   $$('[data-stk]').forEach(b => b.onclick = () => { $('#stkPanel').hidden = true; sendSticker(b.dataset.stk); });
-  async function sendSticker(sid) {
-    if (S.room.sending) return toast(`等${ta(rel.frame)}回完這一則`);
-    appendLocal({ sender: 'user', kind: 'sticker', card: { id: sid }, text: '' });
-    await exchange(() => api(`/api/rels/${relId}/messages`, { method: 'POST', body: { sticker: sid } }), 4);
+  function sendSticker(sid) {
+    queueSend({ sender: 'user', kind: 'sticker', card: { id: sid }, text: '' }, () => api(`/api/rels/${relId}/messages`, { method: 'POST', body: { sticker: sid, quiet: true } }), 4);
   }
   $('#actEnd') && ($('#actEnd').onclick = async () => {
     if (S.room.sending) return toast(`等${ta(rel.frame)}回完這一則`);
@@ -767,6 +772,7 @@ async function renderRoom(relId) {
   }
 
   async function nudge(body) {
+    if (queue.length) { clearTimeout(flushT); await flush(); }
     if (S.room.sending) return toast(`等${ta(rel.frame)}回完這一則`);
     track('topic_bag', { kind: body.kind, id: body.id || null });
     await exchange(() => api(`/api/rels/${relId}/nudge`, { method: 'POST', body }), 8);
@@ -774,21 +780,25 @@ async function renderRoom(relId) {
   }
 
   // 送出後的節奏：已讀 → 打字 → 一則一則出現；他在忙就先顯示「可能晚點回」
-  async function exchange(call, len) {
+  // nodes：這一批要被正式訊息取代的本地泡泡（連傳時只換掉這一批）
+  async function exchange(call, len, nodes = null) {
+    const locals = () => nodes || $$('.local', stream);
     S.room.sending = true;
     $('#suggest')?.remove();
     const t0 = Date.now();
     const quick = S.me?.settings?.realisticDelay === false || S.room.presence?.code === 'online' || /偷空/.test(S.room.presence?.label || '');
     const rd = readMs(len);
     let typing = null, typingAt = 0;
-    const readTimer = quick ? setTimeout(() => { markLocalRead(); typing = showTyping(); typingAt = Date.now(); }, rd) : null;
+    const readTimer = quick ? setTimeout(() => { markLocalRead(nodes); typing = showTyping(); typingAt = Date.now(); }, rd) : null;
+    let ok = true;
     try {
       const r = await call();
       const res = Array.isArray(r) ? { messages: r } : r;
+      if (res.capped && !(res.messages || []).some(m => m.sender === 'char')) toast(`${ta(rel.frame)}今天先休息了，明天再聊`);
       clearTimeout(readTimer);
       if (res.pending) {
         typing?.remove();
-        $$('.local', stream).forEach(n => n.remove());
+        locals().forEach(n => n.remove());
         await revealSequential(res.messages || [], {});
         S.room.presence = res.pending.presence;
         $('#sub').innerHTML = sub();
@@ -796,15 +806,16 @@ async function renderRoom(relId) {
         return;
       }
       await sleep(t0 + rd - Date.now());
-      if (!typing) { markLocalRead(); typing = showTyping(); typingAt = Date.now(); }
-      $$('.local', stream).forEach(n => n.remove());
+      if (!typing) { markLocalRead(nodes); typing = showTyping(); typingAt = Date.now(); }
+      locals().forEach(n => n.remove());
       await revealSequential(res.messages || [], { typing, typingAt });
     } catch (e) {
-      clearTimeout(readTimer); typing?.remove(); toast(e.message);
+      clearTimeout(readTimer); typing?.remove(); ok = e.status === 429 ? 'busy' : false; if (ok !== 'busy') toast(e.message);
     } finally { S.room.sending = false; }
+    return ok;
   }
-  function markLocalRead() {
-    $$('.local .msg.me .time', stream).forEach(t => { if (!$('.read', t)) t.insertAdjacentHTML('afterbegin', '<span class="read">已讀</span>'); });
+  function markLocalRead(nodes) {
+    (nodes ? nodes.flatMap(n => $$('.msg.me .time', n)) : $$('.local .msg.me .time', stream)).forEach(t => { if (!$('.read', t)) t.insertAdjacentHTML('afterbegin', '<span class="read">已讀</span>'); });
   }
   function refreshReads() {
     $$('.msg.me[data-id]', stream).forEach(m => {
@@ -822,19 +833,52 @@ async function renderRoom(relId) {
   }
   if (rel.pendingReplyAt) showPendingNote({ presence: rel.presence });
 
-  async function send(form, previewUrl) {
-    if (S.room.sending) return toast(`等${ta(rel.frame)}回完這一則`);
-    let body;
+  // 像 LINE：可以一直傳，每則先存起來；停下來約 3.5 秒（或打字中最久 20 秒）後，他一次讀完再回
+  const queue = S.room.queue = [];
+  let flushT = null, chain = Promise.resolve(), batchSince = null, lastSendAt = 0;
+  const lastKnownId = () => S.room.messages.filter(m => typeof m.id === 'number').at(-1)?.id || 0;
+  function armFlush(ms = 3500) { clearTimeout(flushT); flushT = setTimeout(flush, ms); }
+  function queueSend(local, req, len) {
+    const node = appendLocal(local);
+    if (batchSince == null) batchSince = lastKnownId();
+    const item = { node, len, id: null };
+    queue.push(item);
+    lastSendAt = Date.now();
+    chain = chain.then(async () => {
+      try { item.id = (await req()).id; }
+      catch (e) { node.remove(); { const i = queue.indexOf(item); if (i >= 0) queue.splice(i, 1); } toast(e.message); }
+    });
+    armFlush();
+  }
+  async function flush() {
+    if (!queue.length) return;
+    if (S.room.rel?.id !== relId) { // 已經離開聊天室：在背景請他回，回覆會出現在聊天列表
+      await chain; const ids = queue.splice(0).map(b => b.id).filter(Boolean);
+      if (ids.length) api(`/api/rels/${relId}/reply`, { method: 'POST', body: { since: 0, upto: Math.max(...ids) } }).catch(() => {});
+      return;
+    }
+    if (S.room.sending) return armFlush(1500);
+    if (txt.value.trim() && Date.now() - lastSendAt < 20000) return armFlush(2000);
+    await chain;
+    const batch = queue.splice(0);
+    const since = batchSince ?? lastKnownId(); batchSince = null;
+    const ids = batch.map(b => b.id).filter(Boolean);
+    if (!ids.length) return;
+    const len = batch.reduce((a, b) => a + b.len, 0);
+    const ok = await exchange(() => api(`/api/rels/${relId}/reply`, { method: 'POST', body: { since, upto: Math.max(...ids) } }), len, batch.map(b => b.node));
+    if (ok === 'busy') { queue.unshift(...batch); batchSince = since; armFlush(4000); return; }
+    if (queue.length) armFlush(1500);
+  }
+  function send(form, previewUrl) {
     if (!form) {
       const text = txt.value.trim(); if (!text) return;
       txt.value = ''; sync();
-      body = { text };
-      appendLocal({ sender: 'user', kind: 'text', text });
-    } else {
-      appendLocal(previewUrl ? { sender: 'user', kind: 'photo', media: previewUrl, text: form.get('text') } : { sender: 'user', kind: 'voice', media: null, text: '（語音傳送中）' });
+      queueSend({ sender: 'user', kind: 'text', text }, () => api(`/api/rels/${relId}/messages`, { method: 'POST', body: { text, quiet: true } }), text.length);
+      return;
     }
-    const len = form ? 10 : body.text.length;
-    await exchange(() => form ? api(`/api/rels/${relId}/messages`, { method: 'POST', form }) : api(`/api/rels/${relId}/messages`, { method: 'POST', body }), len);
+    form.append('quiet', '1');
+    queueSend(previewUrl ? { sender: 'user', kind: 'photo', media: previewUrl, text: form.get('text') } : { sender: 'user', kind: 'voice', media: null, text: '（語音訊息）' },
+      () => api(`/api/rels/${relId}/messages`, { method: 'POST', form }), 10);
   }
 
   function appendLocal(m) {
@@ -843,6 +887,7 @@ async function renderRoom(relId) {
     div.innerHTML = messageHtml({ ...m, id: 'local', at: Date.now() }, rel, S.room.messages.at(-1));
     stream.appendChild(div);
     stream.scrollTop = stream.scrollHeight;
+    return div;
   }
   function showTyping() {
     const d = document.createElement('div');
@@ -914,7 +959,7 @@ async function renderRoom(relId) {
 
   // poll for proactive messages while the room is open
   S.timers.push(setInterval(async () => {
-    if (document.visibilityState !== 'visible' || S.room.sending) return;
+    if (document.visibilityState !== 'visible' || S.room.sending || queue.length) return;
     const lastId = S.room.messages.filter(m => typeof m.id === 'number').at(-1)?.id || 0;
     try { const fresh = await api(`/api/rels/${relId}/messages?after=${lastId}`); if (fresh.length) await revealSequential(fresh); } catch {}
   }, 8000));
@@ -1032,13 +1077,15 @@ function applyAppTheme(t) {
 const moodFace = (face = 'idle') => mascotSVG(document.documentElement.dataset.app || 'milk', face);
 // ---------- 心情按鈕：不想打字時按一按，連按越多下代表越強烈 ----------
 async function openMoodButton(relId = null) {
+  const ok = sheetGuard();
   const rels = (S.rels.length ? S.rels : await api('/api/rels')).filter(r => r.status === 'active');
+  if (!ok()) return;
   if (!rels.length) return toast('先去認識一個人吧');
   let target = relId || (rels.find(r => r.pinned) || rels.slice().sort((a, b) => (b.last?.at || 0) - (a.last?.at || 0))[0]).id;
   const stageOf = (id) => rels.find(r => r.id === id)?.stage ?? 0;
   const emosFor = (id) => (S.meta.emotions || []).filter(e => (e.minStage || 0) <= stageOf(id));
   let emos = emosFor(target);
-  openSheet(`<div class="mood-head-art">${moodFace('happy')}</div><h3>現在的心情是？</h3><p class="small muted">按一下就會傳給${relId ? esc(displayName(rels.find(r => r.id === relId)?.frame || {})) : '他'}；連按越多下，代表越強烈。</p>
+  openSheet(`<div class="mood-head-art">${moodFace('happy')}</div><h3>現在的心情是？</h3><p class="small muted">按一下就會傳給${relId ? esc(displayName(rels.find(r => r.id === relId)?.frame || {})) : 'TA'}；連按越多下，代表越強烈。</p>
     ${relId ? '' : `<div class="mood-to">${rels.map(r => `<button data-to="${r.id}" aria-pressed="${r.id === target}">${avatar(r.frame, 40, { season: false })}<span>${esc(displayName(r.frame))}</span></button>`).join('')}</div>`}
     <div class="mood-grid2">${emos.map(e => `<button class="mood-btn" data-emo="${e.id}"><span class="em">${e.emoji}</span><span>${esc(e.label)}</span></button>`).join('')}</div>
     <div class="mood-press" id="mp" hidden><button class="mood-big" id="mpBtn" aria-label="再按一下"><span id="mpEmo"></span></button><div class="mood-count"><b id="mpN">1</b> 下・<span id="mpHint">繼續按，或等一下就會送出</span></div></div>`, (sh, close) => {
@@ -1103,7 +1150,9 @@ function openRoomMenu(rel) {
 }
 
 async function openAlbum(rel) {
+  const ok = sheetGuard();
   const items = await api(`/api/rels/${rel.id}/album`);
+  if (!ok()) return;
   openSheet(`<h3>相簿</h3>${items.length ? `<div class="album">${items.map(p => {
     const src = p.media[0] || p.photo?.url;
     return src ? `<button data-a="${p.id}"><img src="${esc(src)}" alt="${esc(p.place || '')}" loading="lazy"></button>` : '';
@@ -1243,7 +1292,9 @@ function openReportSheet(rel) {
 async function openShareSheet(rel) {
   const close = openSheet(`<p class="hand">正在整理${ta(rel.frame)}的樣子……</p>`);
   let d;
+  const ok = sheetGuard();
   try { d = await api(`/api/rels/${rel.id}/share-preview`, { method: 'POST' }); } catch (e) { close(); return toast(e.message); }
+  if (!ok()) return;
   close();
   openSheet(`<h3>分享前，確認一下${ta(rel.frame)}的人設</h3>
     <p class="small muted">其他人拿到的是一份複本，會從朋友期重新認識${ta(rel.frame)}。</p>
@@ -1416,12 +1467,12 @@ async function renderStory() {
         ? `<div class="mm-card"><div class="mm-t">${esc(c.title)}</div><time>${dateStr(c.at)}</time></div>`
         : `<div class="mm-card locked" aria-label="還沒解鎖的回憶"><div class="mm-q">？？</div></div>`).join('')}</div></div>`).join('')}
     <h2>回憶地圖</h2>
-    ${Object.keys(places).length ? `<div class="places">${Object.entries(places).map(([name, ps]) => `<div class="place"><span class="pin"><b>${ps.length}</b></span><span class="grow"><div class="nm">${esc(name)}</div><div class="small muted">${dateStr(ps.at(-1).at)} 第一次一起看</div></span></div>`).join('')}</div>` : '<p class="muted small">傳景色給他，告訴他是哪裡，就會記在這裡。</p>'}
+    ${Object.keys(places).length ? `<div class="places">${Object.entries(places).map(([name, ps]) => `<div class="place"><span class="pin"><b>${ps.length}</b></span><span class="grow"><div class="nm">${esc(name)}</div><div class="small muted">${dateStr(ps.at(-1).at)} 第一次一起看</div></span></div>`).join('')}</div>` : `<p class="muted small">傳景色給${ta(cur.rel.frame)}，告訴${ta(cur.rel.frame)}是哪裡，就會記在這裡。</p>`}
     <h2>明信片</h2>
     ${postcards.length ? `<div class="pc-grid">${postcards.map(p => `<button class="pc-thumb" data-pc="${p.id}">${postcardHtml({ media: p.media[0], photo: p.photo, scene: p.scene, message: p.body, place: p.place, at: p.at, name: p.scene ? cur.rel.frame.name : '', from: p.scene ? 'him' : 'you' })}</button>`).join('')}</div>`
       : `<p class="muted small">你傳很美的風景照時，${ta(cur.rel.frame)}偶爾會做成明信片；${ta(cur.rel.frame)}休假時也會寄明信片給你。</p>`}
     <h2>相簿</h2>
-    ${photos.length ? `<div class="album">${photos.map(p => `<button data-photo="${p.id}"><img src="${p.media[0]}" alt="${esc(p.place || '你分享的照片')}" loading="lazy"></button>`).join('')}</div>` : '<p class="muted small">你分享給他的照片會在這裡。</p>'}
+    ${photos.length ? `<div class="album">${photos.map(p => `<button data-photo="${p.id}"><img src="${p.media[0]}" alt="${esc(p.place || '你分享的照片')}" loading="lazy"></button>`).join('')}</div>` : `<p class="muted small">你分享給${ta(cur.rel.frame)}的照片會在這裡。</p>`}
     <h2>遊記</h2>
     ${trips.length ? trips.map(t => `<div class="trip">${t.media[0] ? `<img src="${t.media[0]}" alt="">` : ''}<div class="body"><div class="t">${esc(t.title)}</div>
       <div class="small muted">${dateStr(t.at)}${t.place ? `・${esc(t.place)}` : ''}</div><p>${esc(t.body)}</p>
@@ -1552,7 +1603,9 @@ function openStatusSheet(onDone) {
 }
 
 async function openPostComposer({ story = false, onDone } = {}) {
+  const ok = sheetGuard();
   const rels = (S.rels.length ? S.rels : await api('/api/rels')).filter(r => r.status === 'active');
+  if (!ok()) return;
   let file = null;
   openSheet(`<h3>發${story ? '限時動態' : '動態'}</h3>
     <div class="seg" style="margin-bottom:12px"><button data-kind="0" aria-pressed="${!story}">動態</button><button data-kind="1" aria-pressed="${story}">限時動態（24 小時）</button></div>
@@ -1644,6 +1697,7 @@ async function renderSettings() {
       <div class="row"><div class="grow">有新訊息時通知我<div class="small muted">${isIOS() && !isStandalone() ? 'iPhone 需要先「加入主畫面」' : S.me.pushKey ? '' : '伺服器尚未設定推播'}</div></div>
         <button class="btn sm ${pushOn ? 'ghost' : ''}" id="push" ${!S.me.pushKey ? 'disabled' : ''}>${pushOn ? '已開啟' : '開啟'}</button></div>
       <div class="row"><label for="sugg" class="grow">顯示回覆方向<div class="small muted">不知道怎麼回的時候，點一下幫你寫好一句</div></label><input type="checkbox" id="sugg" ${st.showSuggestions !== false ? 'checked' : ''}></div>
+      <div class="row"><label for="owl" class="grow">我是夜貓／輪班<div class="small muted">打開後角色會比較晚睡、半夜比較常醒著陪你；勿擾時段會改到白天（可以再自己調）</div></label><input type="checkbox" id="owl" ${st.nightOwl ? 'checked' : ''}></div>
       <div class="row"><label for="rdelay" class="grow">忙的時候晚點回<div class="small muted">上班、睡覺時會晚一點才回你，比較像真人</div></label><input type="checkbox" id="rdelay" ${st.realisticDelay !== false ? 'checked' : ''}></div>
       <div class="row"><span class="grow">頭像畫風</span><div class="seg">${[['auto', '依角色'], ['real', '寫實'], ['anime', '二次元'], ['photo', '生活照']].map(([v, l]) => `<button data-ps="${v}" aria-pressed="${(st.portraitStyle || 'auto') === v}">${l}</button>`).join('')}</div></div>
       <div class="row"><span class="grow">通知預覽</span><div class="seg"><button data-np="full" aria-pressed="${st.notifyPreview !== 'discreet'}">顯示內容</button><button data-np="discreet" aria-pressed="${st.notifyPreview === 'discreet'}">只顯示有新訊息</button></div></div>
@@ -1699,6 +1753,13 @@ async function renderSettings() {
   $$('[data-np]').forEach(b => b.onclick = () => { $$('[data-np]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); saveSettings({ notifyPreview: b.dataset.np }); });
   $('#sugg').onchange = (e) => saveSettings({ showSuggestions: e.target.checked });
   $('#rdelay').onchange = (e) => saveSettings({ realisticDelay: e.target.checked });
+  $('#owl').onchange = (e) => {
+    const on = e.target.checked;
+    const dnd = on ? { dndStart: '09:00', dndEnd: '16:00' } : { dndStart: '23:30', dndEnd: '07:30' };
+    $('#dndS').value = dnd.dndStart; $('#dndE').value = dnd.dndEnd;
+    saveSettings({ nightOwl: on, ...dnd });
+    toast(on ? '好，大家會晚一點睡。到「探索 → 夜貓」可以認識晚上工作的人' : '已改回一般作息');
+  };
   $('#clrPrefs') && ($('#clrPrefs').onclick = async () => { await api('/api/me/prefs', { method: 'DELETE' }); toast('已清除'); renderSettings(); });
   $$('[data-at]').forEach(b => b.onclick = () => { $$('[data-at]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); applyAppTheme(b.dataset.at); saveSettings({ appTheme: b.dataset.at }); });
   $$('[data-ps]').forEach(b => b.onclick = () => { $$('[data-ps]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); setPortraitStyle(b.dataset.ps); saveSettings({ portraitStyle: b.dataset.ps }); });

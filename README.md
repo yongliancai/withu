@@ -25,6 +25,15 @@ cd ~/htdocs/liancai.fun && ./deploy.sh
 
 **寫實照片**：不用設定也會自動從 Openverse（免費、可商用的 CC 授權照片）補照片，照片下載存在主機上並標示攝影者。想要更多來源：到 https://pixabay.com/api/docs/ 登入後拿免費金鑰，貼進 `.env` 的 `PIXABAY_API_KEY`。Pexels 從 2026 年 10 月起暫停發新金鑰。後台「照片庫」也可以自己上傳，或按「AI 生成缺少的照片」（OpenAI 圖片模型，每張約 NT$0.2，只生成沒有人的風景與物件）。
 
+**十人試聊報告**（用主機的金鑰讓 10 位測試使用者自動聊天，金鑰不會離開主機；用暫時的資料夾跑，不會動到正式資料；一次約 NT$20–60）：
+```bash
+cd ~/htdocs/liancai.fun && node scripts/persona-test.js        # 全部 10 位
+node scripts/persona-test.js F1 M4                              # 只跑其中幾位
+```
+報告會存在 `reports/persona-日期.md`（不會進 GitHub），把檔案傳給 Claude 看。
+
+**費用上限**：每人每天角色最多回 150 次、看 20 張照片（`.env` 的 `DAILY_REPLY_CAP`、`DAILY_PHOTO_CAP` 可調）。超過時角色會自然地說要休息、明天再聊；危機訊息不受限制。
+
 **隱私權政策**：`https://你的網域/privacy`（申請 Uber API 時需要）。個資外洩應變流程在 `docs/incident-response.md`。
 
 另有 Dockerfile／docker-compose 可用在其他主機，本專案目前沒有使用。

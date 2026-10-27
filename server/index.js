@@ -118,7 +118,7 @@ app.get('/api/me', auth, (req, res) => {
 app.patch('/api/me', auth, (req, res) => {
   const b = req.body || {};
   const settings = { ...j(req.user.settings, {}), ...(b.settings || {}) };
-  const allowed = ['dailyCap', 'proactiveLevel', 'dndStart', 'dndEnd', 'notifyPreview', 'lunchAt', 'dinnerAt', 'discreetNames', 'portraitStyle', 'showSuggestions', 'realisticDelay', 'notifyAsked', 'appTheme'];
+  const allowed = ['dailyCap', 'proactiveLevel', 'dndStart', 'dndEnd', 'notifyPreview', 'lunchAt', 'dinnerAt', 'discreetNames', 'portraitStyle', 'showSuggestions', 'realisticDelay', 'notifyAsked', 'appTheme', 'nightOwl'];
   for (const k of Object.keys(settings)) if (!allowed.includes(k)) delete settings[k];
   const seeks = ['male', 'female', 'any'].includes(b.seeks) ? b.seeks : req.user.seeks;
   const gender = ['female', 'male', 'other'].includes(b.gender) ? b.gender : req.user.gender;
@@ -342,8 +342,9 @@ const busyRels = new Set();
 app.post('/api/rels/:id/messages', auth, upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'voice', maxCount: 1 }]), wrap(async (req, res) => {
   const rel = ownRel(req, res); if (!rel) return;
   if (rel.status !== 'active') return res.status(400).json({ error: '這段關係已經結束了' });
-  if (busyRels.has(rel.id)) return res.status(429).json({ error: `${ta(getPersona(rel))}還在回上一則` });
-  busyRels.add(rel.id);
+  const quiet = req.body?.quiet === true || req.body?.quiet === '1';
+  if (!quiet && busyRels.has(rel.id)) return res.status(429).json({ error: `${ta(getPersona(rel))}還在回上一則` });
+  if (!quiet) busyRels.add(rel.id);
   try {
     const before = db.prepare('SELECT MAX(id) m FROM messages WHERE rel_id=?').get(rel.id).m || 0;
     let text = String(req.body?.text || '').slice(0, 2000).trim();
@@ -374,8 +375,35 @@ app.post('/api/rels/:id/messages', auth, upload.fields([{ name: 'photo', maxCoun
       addMessage(rel, 'user', 'text', { text, card: sr ? { storyReply: (sr.text || '').slice(0, 30) } : null });
     }
     db.prepare('UPDATE relationships SET user_msg_count=user_msg_count+1, last_user_msg_at=?, unanswered=0, user_busy_until=NULL WHERE id=?').run(now(), rel.id);
+    // 像 LINE 一樣可以連傳好幾則：quiet=先存起來，等使用者停下來再由 /reply 一次回
+    if (quiet) {
+      const row = db.prepare('SELECT MAX(id) m FROM messages WHERE rel_id=?').get(rel.id);
+      return res.json({ id: row.m, text: voice ? text : undefined });
+    }
     const out = await replyOrDefer(req.user, rel, { userText: text, imageMedia });
     const rows = db.prepare('SELECT * FROM messages WHERE rel_id=? AND id>? ORDER BY id').all(rel.id, before);
+    res.json({ messages: rows.map(msgOut), ...out });
+  } finally {
+    if (!quiet) busyRels.delete(rel.id);
+  }
+}));
+
+// 連傳的訊息一次回：讀取上一次他回話之後、使用者傳的所有訊息
+app.post('/api/rels/:id/reply', auth, wrap(async (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  if (rel.status !== 'active') return res.status(400).json({ error: '這段關係已經結束了' });
+  if (busyRels.has(rel.id)) return res.status(429).json({ error: `${ta(getPersona(rel))}還在回上一則` });
+  const since = Number(req.body?.since) || 0;
+  const upto = Number(req.body?.upto) || Number.MAX_SAFE_INTEGER;
+  const lastChar = db.prepare(`SELECT MAX(id) m FROM messages WHERE rel_id=? AND sender='char'`).get(rel.id).m || 0;
+  const pend = db.prepare(`SELECT * FROM messages WHERE rel_id=? AND sender='user' AND id>? AND id<=? ORDER BY id`).all(rel.id, lastChar, upto);
+  if (!pend.length) return res.json({ messages: [] });
+  busyRels.add(rel.id);
+  try {
+    const userText = pend.map(m => m.text).filter(Boolean).join('\n').slice(0, 4000);
+    const imageMedia = pend.filter(m => m.kind === 'photo' && m.media).at(-1)?.media || null;
+    const out = await replyOrDefer(req.user, rel, { userText, imageMedia });
+    const rows = db.prepare(`SELECT * FROM messages WHERE rel_id=? AND id>? AND (sender!='user' OR id<=?) ORDER BY id`).all(rel.id, since, upto);
     res.json({ messages: rows.map(msgOut), ...out });
   } finally {
     busyRels.delete(rel.id);
@@ -383,10 +411,42 @@ app.post('/api/rels/:id/messages', auth, upload.fields([{ name: 'photo', maxCoun
 }));
 
 // 他現在有空就馬上回；在忙或睡覺就排到之後（由排程送出，並推播通知）
+// 每日上限：超過時不再呼叫模型；第一次超過由角色自然地說要休息（危機訊息永遠會回）
+const taipeiDay = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei' }).format(new Date());
+function dailyUse(userId) {
+  const day = taipeiDay();
+  db.prepare('INSERT OR IGNORE INTO daily_use (user_id, day) VALUES (?, ?)').run(userId, day);
+  return { day, ...db.prepare('SELECT replies, photos, capped FROM daily_use WHERE user_id=? AND day=?').get(userId, day) };
+}
+const TIRED = [
+  ['今天跟你聊了好多，好開心', '不過我有點累了……我們明天再繼續聊好不好？'],
+  ['欸我發現我們今天聊超久', '我先去休息一下，明天換我先找你'],
+  ['今天的電量快用完了', '明天再跟你說，好好休息喔'],
+];
+
 async function replyOrDefer(user, rel, { userText = '', imageMedia = null, trigger = null, triggerKey = null }) {
   const fresh = db.prepare('SELECT * FROM relationships WHERE id=?').get(rel.id);
   const persona = getPersona(fresh);
   const settings = j(user.settings, {});
+  const crisis = crisisSignal(userText);
+  if (!crisis) {
+    const use = dailyUse(user.id);
+    if (use.replies >= config.dailyReplyCap) {
+      if (use.capped) return { capped: true };
+      db.prepare('UPDATE daily_use SET capped=1 WHERE user_id=? AND day=?').run(user.id, use.day);
+      TIRED[Math.floor(Math.random() * TIRED.length)].forEach(t => addMessage(fresh, 'char', 'text', { text: t }));
+      addMessage(fresh, 'system', 'card', { card: { type: 'info', text: '今天的聊天次數用完了，明天會恢復。' } });
+      logEvent(user.id, 'daily_cap', {});
+      return { capped: true };
+    }
+    db.prepare('UPDATE daily_use SET replies=replies+1 WHERE user_id=? AND day=?').run(user.id, use.day);
+    if (imageMedia) {
+      if (use.photos >= config.dailyPhotoCap) {
+        imageMedia = null; // 不再看照片內容，請他自然地說明天再看
+        userText = `${userText}\n（系統：對方傳了一張照片，但你今天已經看了很多照片、現在看不清楚。自然地說等明天再好好看，不要假裝知道照片內容。）`;
+      } else db.prepare('UPDATE daily_use SET photos=photos+1 WHERE user_id=? AND day=?').run(user.id, use.day);
+    }
+  }
   if (fresh.pending_reply_at && !crisisSignal(userText)) return { pending: { at: fresh.pending_reply_at, presence: presenceOf(fresh, persona) } };
   const delay = replyDelayMs(fresh, persona, { crisis: crisisSignal(userText), settings });
   if (delay > 50000) {

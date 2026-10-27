@@ -177,6 +177,9 @@ CREATE TABLE IF NOT EXISTS push_subs (
 );
 `);
 
+// 每人每日用量（控制費用）
+db.exec(`CREATE TABLE IF NOT EXISTS daily_use (user_id TEXT NOT NULL, day TEXT NOT NULL, replies INTEGER NOT NULL DEFAULT 0, photos INTEGER NOT NULL DEFAULT 0, capped INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, day))`);
+
 // Migrations for databases created by earlier versions (safe to run repeatedly).
 for (const [table, col, def] of [
   ['users', 'cohort', "TEXT NOT NULL DEFAULT 'f'"],   // f = 女性向測試群, m = 男性向測試群
@@ -192,6 +195,8 @@ for (const [table, col, def] of [
   ['story', 'photo_id', 'INTEGER'],
   ['relationships', 'theme', 'TEXT'],                 // 聊天室主題                  // 他寄的明信片用的寫實照片
   ['relationships', 'char_read_id', 'INTEGER NOT NULL DEFAULT 0'], // 他讀到哪一則（已讀）
+  ['relationships', 'aff_day', 'TEXT'],                // 好感每日上限：哪一天
+  ['relationships', 'aff_gain', 'INTEGER NOT NULL DEFAULT 0'], // 那一天已經加了多少好感
 ]) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
   if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);

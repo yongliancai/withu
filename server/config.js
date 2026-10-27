@@ -37,6 +37,9 @@ export const config = {
     sttPerMin: num(env.PRICE_STT_PER_MIN, 0.003),
     usdToTwd: num(env.USD_TWD, 32),
   },
+  // 每人每天的上限（控制費用）：他回你的次數、他看照片的張數
+  dailyReplyCap: num(env.DAILY_REPLY_CAP, 150),
+  dailyPhotoCap: num(env.DAILY_PHOTO_CAP, 20),
   pexelsKey: env.PEXELS_API_KEY || '',      // 照片庫來源一（2026/10 起暫停發新金鑰）
   pixabayKey: env.PIXABAY_API_KEY || '',    // 照片庫來源二（免費金鑰）
   imageModel: env.IMAGE_MODEL || 'gpt-image-2', // AI 生成照片用

@@ -1,6 +1,6 @@
 // 上線狀態：依角色自己的作息決定「現在在不在線上」以及「多久會回」。
 // online 上線中 | away 離線（最後上線…）| busy 忙碌（上班中）| dnd 勿擾（睡覺）
-import { charStatus, taipeiParts, toMin } from './characters.js';
+import { charStatus, taipeiParts, toMin, sleepWindow } from './characters.js';
 
 // 用時段當種子的固定亂數：同一個半小時內，狀態不會一直跳
 function slotRand(seed, slot) {
@@ -55,7 +55,9 @@ function wakeTime(persona, ts) {
   const t = taipeiParts(ts);
   const s = persona.schedule || { start: '09:00', days: [1, 2, 3, 4, 5] };
   const workday = s.days.includes(t.weekday);
-  const wakeMin = workday ? Math.min(9 * 60, Math.max(6 * 60 + 30, toMin(s.start) - 60)) : 8 * 60 + 30;
+  const [, sleepEnd] = sleepWindow(persona);
+  const nightType = sleepEnd > 9 * 60; // 晚上工作的人：睡到自然醒
+  const wakeMin = nightType ? sleepEnd : workday ? Math.min(9 * 60, Math.max(6 * 60 + 30, toMin(s.start) - 60)) : Math.max(8 * 60 + 30, sleepEnd);
   let mins = wakeMin - t.minutes;
   if (mins < 0) mins += 24 * 60;
   return ts + (mins + Math.round(slotRand(persona.name, t.date) * 20)) * MIN;

@@ -20,6 +20,9 @@ export function seedOfficial() {
     const cur = j(row.data, {});
     let changed = false;
     for (const [k, v] of Object.entries(fresh)) if (cur[k] === undefined) { cur[k] = v; changed = true; }
+    // 分類是加法：新版多了分類（例如「夜貓」）就補上
+    const cats = [...new Set([...(cur.cats || []), ...(fresh.cats || [])])];
+    if (cats.length !== (cur.cats || []).length) { cur.cats = cats; changed = true; }
     if (changed) upd.run(JSON.stringify(cur), o.id);
   }
 }

@@ -45,7 +45,9 @@ export function getPersona(rel) {
     if (p.signature === undefined) p.signature = tf.signature || '';
     p.look = p.look || tf.look;
   }
-  return { ...p, _char: c };
+  // 對方是夜貓／輪班：一般角色也會晚一點睡
+  const owl = !!j(db.prepare('SELECT settings FROM users WHERE id=?').get(rel.user_id)?.settings, {}).nightOwl;
+  return { ...p, _owl: owl, _char: c };
 }
 
 export function addMessage(rel, sender, kind, { text = null, media = null, card = null, proactive = 0, reason = null } = {}) {
@@ -157,15 +159,19 @@ function setStage(rel, persona, user, stage) {
   logEvent(rel.user_id, 'stage_change', { rel: rel.id, stage });
 }
 
+// 關係進度的最短天數（從認識那天算）：再常聊也不會一天就變曖昧
+export const AFF_DAILY_CAP = 15;
+export const MIN_DAYS = { friend: 2, flirt: 7 };
 function evaluateStage(rel, persona, user, out) {
   const sp = config.stageSpeed;
   const a = rel.affection, u = rel.understanding;
+  const days = (now() - rel.created_at) / 864e5 * sp;
   const loverElsewhere = loverOf(rel.user_id, rel.id);
-  if (rel.stage === 0 && a >= 18 / sp && u >= 6 / sp && rel.user_msg_count >= Math.ceil(8 / sp)) return setStage(rel, persona, user, 1);
+  if (rel.stage === 0 && days >= MIN_DAYS.friend && a >= 18 / sp && u >= 6 / sp && rel.user_msg_count >= Math.ceil(8 / sp)) return setStage(rel, persona, user, 1);
   if (loverElsewhere) return; // only one lover at a time; others stay friends
   // 心情低落時認識的人：至少三天後才可能變曖昧
   if (rel.stage === 1 && j(rel.scenario, {}).friend_first && now() - rel.created_at < 3 * 864e5) return;
-  if (rel.stage === 1 && a >= 45 / sp && u >= 18 / sp && lifeEventCount(rel.id) >= 1) return setStage(rel, persona, user, 2);
+  if (rel.stage === 1 && days >= MIN_DAYS.flirt && a >= 45 / sp && u >= 18 / sp && lifeEventCount(rel.id) >= 1) return setStage(rel, persona, user, 2);
   if (rel.stage === 2 && out.relationship_event === 'confession_accepted' && a >= 55) return setStage(rel, persona, user, 3);
   if (rel.stage === 3) {
     const days = (now() - (rel.stage_changed_at || now())) / 864e5;
@@ -393,9 +399,14 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     texts.forEach(tx => addMessage(rel, 'char', 'text', { text: tx, proactive: isProactive, reason: triggerKey }));
   }
 
-  const aff = Math.max(0, Math.min(100, rel.affection + Math.max(-10, Math.min(5, out.affection_delta || 0))));
+  // 好感一天最多加 AFF_DAILY_CAP：聊再多，感情也要靠時間慢慢累積
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei' }).format(new Date());
+  const gainedToday = rel.aff_day === today ? rel.aff_gain || 0 : 0;
+  let delta = Math.max(-10, Math.min(5, out.affection_delta || 0));
+  if (delta > 0) delta = Math.max(0, Math.min(delta, Math.round(AFF_DAILY_CAP * config.stageSpeed) - gainedToday));
+  const aff = Math.max(0, Math.min(100, rel.affection + delta));
   const und = Math.max(0, Math.min(100, rel.understanding + Math.max(0, Math.min(3, out.understanding_delta || 0))));
-  db.prepare('UPDATE relationships SET affection=?, understanding=? WHERE id=?').run(aff, und, rel.id);
+  db.prepare('UPDATE relationships SET affection=?, understanding=?, aff_day=?, aff_gain=? WHERE id=?').run(aff, und, today, gainedToday + Math.max(0, delta), rel.id);
   rel.affection = aff; rel.understanding = und;
 
   for (const m of out.memories_add || []) addMemory(rel, m.kind, m.content, m.weight);
