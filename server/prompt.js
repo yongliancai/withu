@@ -1,5 +1,7 @@
 import { JOBS, ARCHETYPES, PROACTIVITY, charStatus, describeNow } from './characters.js';
 import { styleBlock } from './styles.js';
+import { dayPeriod, gapLabel } from './review.js';
+import { taipeiParts as tp } from './characters.js';
 import { PHOTO_TAGS } from './photos.js';
 
 export const STAGES = ['認識', '朋友', '曖昧', '交往', '長期伴侶'];
@@ -52,6 +54,12 @@ export const BASE_RULES = `
 - 對方傳了一張很美的風景照、而且是在分享心情時，你可以把它做成明信片：postcard 填 { scene: "photo", place: 對方說出的地點（沒說就空字串）, message: 寫在明信片背面給對方的話（20–40 字，手寫感、有溫度）}。一天最多一次，不要每張照片都做。
 - 只有主動訊息的理由要你「寄明信片」時，postcard 才填你自己看到的風景：scene 從 river、mountain、beach、nightmarket、park、city、cafe、bookstore、rain 挑一個，place 寫台灣真實存在的地點（例如大稻埕碼頭、象山步道、淡水沙崙），message 寫給對方的話。
 - 其他時候 postcard 一律為 null。
+
+## 時間感
+- 你看得到現在的時間和時段。問候、吃飯、上下班、睡覺的說法都要符合現在（下午不說早安，晚上十點不問午餐吃了沒），也要符合你自己的作息。
+- 看「距離上一則訊息」：隔了好幾個小時或隔天才繼續時，不要直接接著上一句講，像真人一樣先帶一句（「早～昨晚有睡好嗎」「剛剛在忙，現在才看到」）。
+- 對話裡標著「［隔了…］」的地方代表中間過了一段時間。
+- 主動傳訊息前先看最近的對話：你上一個問題對方還沒回，就不要再開新話題；對方剛說在忙、要睡了，就不要打擾。
 
 ## 貼圖與記事本
 - 你可以像真人用 LINE 一樣偶爾傳貼圖（不是每次；大約十次一次，在氣氛對的時候）：sticker 從 hi、ok、love、thanks、sorry、night、hungry、cry、laugh、hmph、shy、cheer、hug、what、busy、miss 挑一個，沒有就 null。對方傳貼圖時，你會看到「（對方傳了貼圖：…）」，自然回應。
@@ -123,7 +131,7 @@ function meetLine(rel) {
   return `你們的相遇：${sc.label || '（未記錄）'}${rel.start_type === 'friend' ? '（本來就認識）' : ''}，${days === 0 ? '就是今天' : `${days} 天前`}${sad}`;
 }
 
-export function contextBlock({ habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
+export function contextBlock({ lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
   const st = charStatus(persona);
   const stageText = `${STAGES[rel.stage]}——${STAGE_GUIDE[rel.stage]}`;
   const modeText = rel.mode === 'real'
@@ -134,7 +142,10 @@ export function contextBlock({ habits = [], notes = [], told = [], summary = '',
     : '（還不太了解對方）';
   const lines = [
     `## 現在`,
-    `時間：${describeNow()}（台灣）`,
+    `時間：${describeNow()}（台灣・${dayPeriod(tp().hour)}）`,
+    lastTimes?.u || lastTimes?.c ? `距離上一則訊息：對方最後一句是 ${lastTimes.u ? gapLabel(Date.now() - lastTimes.u) + '前' : '（還沒說過話）'}，你最後一句是 ${lastTimes.c ? gapLabel(Date.now() - lastTimes.c) + '前' : '（還沒說過話）'}。` : '',
+    userStatus ? `對方現在的狀態（對方自己設定的）：${userStatus}` : '',
+    userPosts.length ? `## 對方最近發的動態（你有看到）\n${userPosts.map(x => '- ' + x).join('\n')}\n可以自然地提起或關心，但不要每次都提。` : '',
     `你此刻的狀態：${st.label}`,
     `對方希望被稱呼為：${user.call_name}（暱稱：${user.nickname}）${user.gender === 'female' ? '，是女生' : user.gender === 'male' ? '，是男生' : ''}`,
     meetLine(rel),

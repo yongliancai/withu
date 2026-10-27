@@ -97,6 +97,7 @@ const routes = [
   [/^#\/explore$/, renderExplore],
   [/^#\/story$/, renderStory],
   [/^#\/me$/, renderMe],
+  [/^#\/settings$/, renderSettings],
 ];
 async function route() {
   clearTimers();
@@ -110,11 +111,11 @@ async function route() {
     const m = hash.match(re);
     if (m) {
       const tab = hash.split('/')[1];
-      const showTabs = ['chat', 'feed', 'explore', 'story', 'me'].includes(tab) && !/^#\/chat\//.test(hash);
+      const showTabs = ['chat', 'feed', 'explore', 'story', 'me', 'settings'].includes(tab) && !/^#\/chat\//.test(hash);
       tabs.hidden = !showTabs;
       if (showTabs && tab !== 'chat') refreshBadge();
       if (showTabs && tab !== 'feed') refreshFeedDot();
-      $$('a', tabs).forEach(a => a.setAttribute('aria-current', a.dataset.tab === tab ? 'page' : 'false'));
+      $$('a', tabs).forEach(a => a.setAttribute('aria-current', a.dataset.tab === (tab === 'settings' ? 'me' : tab) ? 'page' : 'false'));
       window.scrollTo(0, 0);
       return fn(...m.slice(1));
     }
@@ -569,7 +570,8 @@ function messageHtml(m, rel, prev) {
       ${side === 'him' ? `<span class="time">${hhmm(m.at)}</span>` : ''}</div>`;
   }
   const readMark = side === 'me' && typeof m.id === 'number' && m.id <= (S.room?.charReadId || 0) ? '<span class="read">已讀</span>' : '';
-  return out + `<div class="msg ${side}${glow}" data-id="${m.id}">${side === 'me' ? `<span class="time">${readMark}${hhmm(m.at)}</span>` : ''}<div class="bubble">${esc(m.text)}</div>${side === 'him' ? `<span class="time">${hhmm(m.at)}</span>` : ''}</div>`;
+  const quote = m.card?.storyReply ? `<div class="sq">回覆限時動態：${esc(m.card.storyReply)}</div>` : '';
+  return out + `<div class="msg ${side}${glow}" data-id="${m.id}">${side === 'me' ? `<span class="time">${readMark}${hhmm(m.at)}</span>` : ''}<div class="bubble">${quote}${esc(m.text)}</div>${side === 'him' ? `<span class="time">${hhmm(m.at)}</span>` : ''}</div>`;
 }
 
 function cardHtml(m, rel) {
@@ -1183,13 +1185,31 @@ function feedCard(p) {
   </article>`;
 }
 
+function myFeedCard(p) {
+  return `<article class="fpost mine"><header><span class="fp-who">${meAvatar(40)}<span><b>你</b><time>${ago(p.at)}・${AUD[p.audience]}</time></span></span></header>
+    ${p.text ? `<p class="fp-text">${esc(p.text)}</p>` : ''}${p.media ? `<div class="fp-photo"><img src="${esc(p.media)}" alt="" loading="lazy"></div>` : ''}
+    <div class="fp-actions"><span class="small muted">${p.likes.length ? `♥ ${p.likes.map(esc).join('、')}` : '還沒有人按讚'}</span><button class="fp-cbtn" data-mp="${p.id}">查看</button></div>
+    ${p.comments.length ? `<div class="fp-comments">${p.comments.map(c => `<div class="fp-c"><b>${esc(c.name)}</b> ${esc(c.text)}</div>`).join('')}</div>` : ''}</article>`;
+}
+
 async function renderFeed() {
   const draw = async () => {
-    const posts = await api('/api/feed');
+    const [posts, stories, mine] = await Promise.all([api('/api/feed'), api('/api/stories'), api('/api/me/posts')]);
+    if (S.me.counts === undefined) S.me = await api('/api/me');
     try { localStorage.setItem('feedSeen', String(posts[0]?.id || 0)); } catch {}
     $('a[data-tab="feed"] .tab-dot', tabs)?.remove();
-    app.innerHTML = `<div class="page"><h1>動態</h1>
-      ${posts.length ? posts.map(feedCard).join('') : `<div class="empty"><div class="empty-art">${sceneSVG('city', { label: '城市' })}</div><p class="muted">你認識的人發的生活動態會出現在這裡。${TA()}們會在午休、下班後、休假時分享自己的日常。</p></div>`}</div>`;
+    const groups = [...(stories.mine.length ? [{ mine: true, items: stories.mine }] : []), ...stories.chars];
+    const all = [...posts.map(p => ({ ...p, _t: p.at })), ...mine.map(p => ({ ...p, _mine: true, _t: p.at }))].sort((a, b) => b._t - a._t);
+    app.innerHTML = `<div class="page"><div class="me-top"><h1>動態</h1><button class="btn sm" id="fNew">＋ 發動態</button></div>
+      <div class="st-row">
+        <button class="st-circle mine" id="myStory"><span class="ring${stories.mine.length ? ' seen' : ' add'}">${meAvatar(58)}</span><span>${stories.mine.length ? '你的限動' : '新增限動'}</span></button>
+        ${stories.chars.map((g, k) => `<button class="st-circle" data-sg="${k}"><span class="ring${g.items.every(i => i.seen) ? ' seen' : ''}">${avatar(g.frame, 58, { season: false })}</span><span>${esc(displayName(g.frame))}</span></button>`).join('')}
+      </div>
+      ${all.length ? all.map(p => p._mine ? myFeedCard(p) : feedCard(p)).join('') : `<div class="empty"><div class="empty-art">${sceneSVG('city', { label: '城市' })}</div><p class="muted">你認識的人發的生活動態會出現在這裡。${TA()}們會在午休、下班後、休假時分享自己的日常。</p></div>`}</div>`;
+    $('#fNew').onclick = () => openPostComposer({ onDone: draw });
+    $('#myStory').onclick = () => stories.mine.length ? openStoryViewer(groups, 0, draw) : openPostComposer({ story: true, onDone: draw });
+    $$('[data-sg]').forEach(b => b.onclick = () => openStoryViewer(groups, Number(b.dataset.sg) + (stories.mine.length ? 1 : 0), draw));
+    $$('[data-mp]').forEach(b => b.onclick = () => openMyPost(mine.find(x => x.id === Number(b.dataset.mp)), draw));
     $$('[data-like]').forEach(b => b.onclick = async () => {
       const r = await api(`/api/feed/${b.dataset.like}/like`, { method: 'POST' });
       b.classList.toggle('on', r.liked); b.textContent = r.liked ? '♥' : '♡'; b.setAttribute('aria-pressed', r.liked);
@@ -1232,13 +1252,16 @@ async function renderExplore() {
     <span class="nm">${esc(t.frame.name)}</span><span class="info">${esc(t.frame.jobLabel)}・${esc(t.frame.archetypeLabel || '')}</span>
     <span class="intro">${esc(t.frame.intro || '')}</span><span class="by">${t.kind === 'official' ? '官方角色' : `${esc(t.creator)} 塑造`}</span></button>`;
   const catInfo = (S.meta.categories || []).find(c => c.id === cat);
-  app.innerHTML = `<div class="page"><h1>探索</h1>${catChips(list, cat)}
+  app.innerHTML = `<div class="page"><h1>探索</h1>
+    <button class="choice create-card" id="exCustom"><b>✏️ 自己捏一個</b><span>點選${TA()}的外型、職業和個性，聊天中會慢慢長成你喜歡的樣子</span></button>
+    ${catChips(list, cat)}
     <h2 style="margin-top:0">${catInfo ? esc(catInfo.desc) : '住在這座城市裡的人'}</h2>
     ${official.length ? `<div class="grid">${official.map(tile).join('')}</div>` : `<div class="empty" style="padding:8px 0 16px"><div class="empty-art">${sceneSVG('city', { label: '城市' })}</div><p class="muted">這座城市裡的人，你都認識了。</p></div>`}
     <h2>大家塑造的人</h2>
     ${shared.length ? `<div class="grid">${shared.map(tile).join('')}</div>` : `<p class="muted">${cat ? '這個分類還沒有人分享。' : `還沒有人分享。你和${TA()}聊得夠熟之後，可以讓其他人也認識${TA()}。`}</p>`}
   </div>`;
   $$('[data-cat]').forEach(b => b.onclick = () => { cat = S.exploreCat = b.dataset.cat; draw(); });
+  $('#exCustom').onclick = () => { Object.assign(M, { templateId: null, custom: null, frame: null, scenarioId: null, scenarioText: '', reunionRelId: null, mood: null }); location.hash = '#/meet/custom'; };
   $$('.tile').forEach(b => b.onclick = () => {
     const t = list.find(x => x.id === b.dataset.id);
     const f = t.frame;
@@ -1380,11 +1403,133 @@ const COMING = [
   { key: 'theme', name: '聊天室主題', desc: '換一個屬於你們的聊天背景' },
 ];
 
+// ======================================================================
+// 我的主頁（像 IG）
+// ======================================================================
+const STATUS_PRESETS = [['😴', '好累'], ['💼', '忙碌中'], ['🍜', '想吃宵夜'], ['🎉', '心情很好'], ['🌧', '有點低落'], ['📚', '專心中'], ['🏃', '出門中'], ['🤒', '不太舒服']];
+function meAvatar(size = 86) {
+  return S.me.avatar ? `<span class="avatar me-av" style="--s:${size}px"><img src="${esc(S.me.avatar)}" alt=""></span>`
+    : `<span class="avatar me-av initial" style="--s:${size}px"><b>${esc((S.me.nickname || '我').slice(0, 1))}</b></span>`;
+}
+const AUD = { all: '所有人', lover: '只給戀人', some: '指定的人' };
+
 async function renderMe() {
+  S.me = await api('/api/me');
+  const posts = await api('/api/me/posts');
+  const st = S.me.status;
+  app.innerHTML = `<div class="page">
+    <div class="me-top"><h1>${esc(S.me.nickname)}</h1><a class="icon-btn" href="#/settings" aria-label="設定"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M4.2 7.4l2 1.2M17.8 15.4l2 1.2M4.2 16.6l2-1.2M17.8 8.6l2-1.2"/></svg></a></div>
+    <div class="me-head"><button class="me-avbtn" id="avBtn" aria-label="換大頭貼">${meAvatar()}</button><input type="file" id="avIn" accept="image/*" hidden>
+      <div class="me-stats"><div><b>${S.me.counts.posts}</b><span>動態</span></div><div><b>${S.me.counts.rels}</b><span>認識的人</span></div></div></div>
+    <div class="me-bio"><b>${esc(S.me.callName)}</b>${S.me.bio ? `<p>${esc(S.me.bio)}</p>` : ''}</div>
+    <button class="me-status" id="stBtn">${st ? `<span>${esc(st.emoji)} ${esc(st.text)}</span><time>${ago(st.at)}</time>` : '<span class="muted">＋ 設定你現在的狀態</span>'}</button>
+    <p class="small muted" style="margin:6px 2px 0">狀態 24 小時後自動消失；你認識的人看得到，會依你的狀態關心你。</p>
+    <div class="me-actions"><button class="btn ghost sm" id="editBtn">編輯個人檔案</button><button class="btn sm" id="newPost">＋ 發動態</button></div>
+    <div class="me-grid">${posts.length ? posts.map(p => `<button class="me-tile" data-p="${p.id}">${p.media ? `<img src="${esc(p.media)}" alt="" loading="lazy">` : `<span>${esc((p.text || '').slice(0, 40))}</span>`}${p.likes.length ? `<i>♥ ${p.likes.length}</i>` : ''}</button>`).join('') : '<p class="muted small" style="grid-column:1/-1;text-align:center;padding:20px 0">還沒有動態。發一則，讓他們知道你最近過得怎樣。</p>'}</div>
+  </div>`;
+  $('#avBtn').onclick = () => $('#avIn').click();
+  $('#avIn').onchange = async (e) => { const f = e.target.files[0]; if (!f) return; const fd = new FormData(); fd.append('photo', await shrinkImage(f, 512), 'av.jpg'); await api('/api/me/avatar', { method: 'POST', form: fd }); renderMe(); };
+  $('#stBtn').onclick = () => openStatusSheet();
+  $('#editBtn').onclick = () => openSheet(`<h3>編輯個人檔案</h3>
+    <label class="field"><span>暱稱</span><input class="input" id="eNick" maxlength="16" value="${esc(S.me.nickname)}"></label>
+    <label class="field"><span>希望怎麼被稱呼</span><input class="input" id="eCall" maxlength="16" value="${esc(S.me.callName)}"></label>
+    <label class="field"><span>簡介</span><textarea class="input" id="eBio" rows="2" maxlength="80" placeholder="例如：愛喝拿鐵的社畜，週末想去海邊">${esc(S.me.bio)}</textarea></label>
+    <button class="btn block" id="eSave">儲存</button>`, (sh, close) => {
+    $('#eSave', sh).onclick = async () => { await api('/api/me', { method: 'PATCH', body: { nickname: $('#eNick', sh).value, callName: $('#eCall', sh).value, bio: $('#eBio', sh).value } }); close(); renderMe(); };
+  });
+  $('#newPost').onclick = () => openPostComposer({ onDone: renderMe });
+  $$('[data-p]').forEach(b => b.onclick = () => openMyPost(posts.find(x => x.id === Number(b.dataset.p)), renderMe));
+}
+
+function openStatusSheet(onDone) {
+  openSheet(`<h3>你現在的狀態</h3><div class="st-grid">${STATUS_PRESETS.map(([e, t]) => `<button data-st="${t}" data-em="${e}">${e} ${t}</button>`).join('')}</div>
+    <div class="row-form" style="margin-top:12px"><input class="input" id="stTxt" maxlength="30" placeholder="或自己寫，例如：在趕報告"><button class="btn sm" id="stGo">設定</button></div>
+    ${S.me.status ? '<button class="linkbtn small" id="stClear" style="margin-top:12px">清除狀態</button>' : ''}`, (sh, close) => {
+    const set = async (emoji, text) => { await api('/api/me/status', { method: 'POST', body: { emoji, text } }); close(); toast(text ? '狀態更新了' : '已清除'); (onDone || renderMe)(); };
+    $$('[data-st]', sh).forEach(b => b.onclick = () => set(b.dataset.em, b.dataset.st));
+    $('#stGo', sh).onclick = () => { const t = $('#stTxt', sh).value.trim(); if (t) set('💬', t); };
+    $('#stClear', sh) && ($('#stClear', sh).onclick = () => set('', ''));
+  });
+}
+
+async function openPostComposer({ story = false, onDone } = {}) {
+  const rels = (S.rels.length ? S.rels : await api('/api/rels')).filter(r => r.status === 'active');
+  let file = null;
+  openSheet(`<h3>發${story ? '限時動態' : '動態'}</h3>
+    <div class="seg" style="margin-bottom:12px"><button data-kind="0" aria-pressed="${!story}">動態</button><button data-kind="1" aria-pressed="${story}">限時動態（24 小時）</button></div>
+    <textarea class="input" id="pTxt" rows="3" maxlength="300" placeholder="最近在幹嘛？"></textarea>
+    <div class="row-form" style="margin-top:8px"><button class="btn ghost sm" id="pPhoto">📷 加照片</button><span class="small muted" id="pPhotoName"></span><input type="file" id="pIn" accept="image/*" hidden></div>
+    <label class="field" style="margin-top:12px"><span>誰看得到</span><select class="input" id="pAud"><option value="all">你認識的所有人</option><option value="lover">只給戀人</option><option value="some">指定的人…</option></select></label>
+    <div id="pSome" hidden>${rels.map(r => `<label class="row"><span class="grow">${esc(displayName(r.frame))}</span><input type="checkbox" value="${r.id}"></label>`).join('')}</div>
+    <button class="btn block" id="pGo" style="margin-top:12px">發布</button>`, (sh, close) => {
+    $$('[data-kind]', sh).forEach(b => b.onclick = () => { story = b.dataset.kind === '1'; $$('[data-kind]', sh).forEach(x => x.setAttribute('aria-pressed', String(x === b))); });
+    $('#pPhoto', sh).onclick = () => $('#pIn', sh).click();
+    $('#pIn', sh).onchange = (e) => { file = e.target.files[0] || null; $('#pPhotoName', sh).textContent = file ? '已選一張照片' : ''; };
+    $('#pAud', sh).onchange = (e) => { $('#pSome', sh).hidden = e.target.value !== 'some'; };
+    $('#pGo', sh).onclick = async () => {
+      const text = $('#pTxt', sh).value.trim();
+      if (!text && !file) return toast('寫點什麼，或放一張照片');
+      const fd = new FormData();
+      fd.append('text', text); fd.append('story', story ? '1' : '0');
+      const aud = $('#pAud', sh).value;
+      fd.append('audience', aud === 'some' ? JSON.stringify($$('#pSome input:checked', sh).map(i => i.value)) : aud);
+      if (file) fd.append('photo', await shrinkImage(file), 'post.jpg');
+      $('#pGo', sh).disabled = true;
+      try { await api('/api/me/posts', { method: 'POST', form: fd }); close(); toast('發布了'); track('user_post', { story }); onDone?.(); } catch (e) { toast(e.message); $('#pGo', sh).disabled = false; }
+    };
+  });
+}
+
+function openMyPost(p, onDone) {
+  openSheet(`${p.media ? `<img src="${esc(p.media)}" alt="" style="width:100%;border-radius:14px">` : ''}
+    ${p.text ? `<p class="fp-text">${esc(p.text)}</p>` : ''}<p class="small muted">${dateStr(p.at)} ${hhmm(p.at)}・${AUD[p.audience]}</p>
+    ${p.likes.length ? `<p class="small">♥ ${p.likes.map(esc).join('、')}</p>` : ''}
+    ${p.comments.map(c => `<div class="fp-c"><b>${esc(c.name)}</b> ${esc(c.text)}</div>`).join('')}
+    <button class="linkbtn small" id="pDel" style="margin-top:14px">刪除這則</button>`, (sh, close) => {
+    $('#pDel', sh).onclick = async () => { if (!confirm('刪除這則動態？')) return; await api(`/api/me/posts/${p.id}`, { method: 'DELETE' }); close(); onDone?.(); };
+  });
+}
+
+// 限時動態檢視：點右邊下一則、左邊上一則；他的限動可以直接回覆（會傳到聊天室）
+function openStoryViewer(groups, start = 0, onClose) {
+  let gi = start, ii = 0, timer = null;
+  const root = document.createElement('div');
+  root.className = 'story-view';
+  document.body.appendChild(root);
+  const close = () => { clearTimeout(timer); root.remove(); onClose?.(); };
+  const show = () => {
+    const g = groups[gi]; if (!g) return close();
+    const it = g.items[ii]; if (!it) { gi++; ii = 0; return show(); }
+    clearTimeout(timer);
+    if (g.relId && it.id) api(`/api/stories/${it.id}/seen`, { method: 'POST' }).catch(() => {});
+    const bg = it.photo?.url || it.media;
+    root.innerHTML = `<div class="sv-bars">${g.items.map((_, k) => `<i class="${k < ii ? 'done' : k === ii ? 'now' : ''}"></i>`).join('')}</div>
+      <header class="sv-head">${g.mine ? meAvatar(32) : avatar(g.frame, 32, { season: false })}<b>${esc(g.mine ? '你的限時動態' : displayName(g.frame))}</b><time>${ago(it.at)}</time><button class="sv-x" aria-label="關閉">✕</button></header>
+      <div class="sv-body${bg ? '' : ' text-only'}">${bg ? `<img src="${esc(bg)}" alt="">${it.photo ? creditHtml(it.photo) : ''}` : ''}${it.text ? `<p class="sv-text">${esc(it.text)}</p>` : ''}</div>
+      <button class="sv-nav prev" aria-label="上一則"></button><button class="sv-nav next" aria-label="下一則"></button>
+      ${g.mine ? `<footer class="sv-foot small">${it.viewers?.length ? `${it.viewers.length} 人看過` : '還沒有人看過'}</footer>`
+        : `<form class="sv-reply"><input placeholder="回覆${esc(displayName(g.frame))}…" maxlength="200"><button>送出</button></form>`}`;
+    $('.sv-x', root).onclick = close;
+    $('.sv-nav.next', root).onclick = () => { ii++; show(); };
+    $('.sv-nav.prev', root).onclick = () => { if (ii > 0) ii--; else if (gi > 0) { gi--; ii = 0; } show(); };
+    const form = $('.sv-reply', root);
+    if (form) {
+      $('input', form).onfocus = () => clearTimeout(timer);
+      form.onsubmit = async (e) => {
+        e.preventDefault(); const text = $('input', form).value.trim(); if (!text) return;
+        try { await api(`/api/rels/${g.relId}/messages`, { method: 'POST', body: { text, storyRef: it.id } }); toast(`已傳給${ta(g.frame)}`); track('story_reply', {}); onClose = null; close(); location.hash = `#/chat/${g.relId}`; } catch (err) { toast(err.message); }
+      };
+    }
+    timer = setTimeout(() => { ii++; show(); }, 6000);
+  };
+  show();
+}
+
+async function renderSettings() {
   S.me = await api('/api/me');
   const st = S.me.settings || {};
   const pushOn = 'Notification' in window && Notification.permission === 'granted';
-  app.innerHTML = `<div class="page"><h1>我</h1>
+  app.innerHTML = `<div class="page"><a class="icon-btn back" href="#/me" aria-label="回到我的主頁">${icon('back')}</a><h1>設定</h1>
     <div class="section">
       <div class="row"><span class="grow">暱稱</span><input class="input" id="nick" style="max-width:55%" value="${esc(S.me.nickname)}"></div>
       <div class="row"><span class="grow">對方怎麼稱呼你</span><input class="input" id="call" style="max-width:55%" value="${esc(S.me.callName)}"></div>
@@ -1446,7 +1591,7 @@ async function renderMe() {
   $('#nick').onchange = (e) => save({ nickname: e.target.value });
   $('#call').onchange = (e) => save({ callName: e.target.value });
   $$('[data-gd]').forEach(b => b.onclick = () => { $$('[data-gd]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); save({ gender: b.dataset.gd }); });
-  $$('[data-sk]').forEach(b => b.onclick = () => { $$('[data-sk]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); save({ seeks: b.dataset.sk }).then(() => renderMe()); });
+  $$('[data-sk]').forEach(b => b.onclick = () => { $$('[data-sk]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); save({ seeks: b.dataset.sk }).then(() => renderSettings()); });
   $$('[data-np]').forEach(b => b.onclick = () => { $$('[data-np]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); saveSettings({ notifyPreview: b.dataset.np }); });
   $('#sugg').onchange = (e) => saveSettings({ showSuggestions: e.target.checked });
   $('#rdelay').onchange = (e) => saveSettings({ realisticDelay: e.target.checked });
@@ -1457,7 +1602,7 @@ async function renderMe() {
   $('#dndS').onchange = $('#dndE').onchange = () => saveSettings({ dndStart: $('#dndS').value, dndEnd: $('#dndE').value });
   $('#lunch').onchange = (e) => saveSettings({ lunchAt: e.target.value });
   $('#dinner').onchange = (e) => saveSettings({ dinnerAt: e.target.value });
-  $('#push').onclick = () => enablePush().then(ok => { if (ok) renderMe(); });
+  $('#push').onclick = () => enablePush().then(ok => { if (ok) renderSettings(); });
   $$('[data-coming]').forEach(b => b.onclick = () => {
     const item = COMING.find(c => c.key === b.dataset.coming);
     track('coming_soon_click', { item: item.key });
@@ -1523,7 +1668,7 @@ function reportClientError(message, stack) {
   if (sentErrors.has(key) || sentErrors.size > 20 || /unauth|Failed to fetch|Load failed|NetworkError/.test(key)) return;
   sentErrors.add(key);
   fetch('/api/client-log', { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'same-origin',
-    body: JSON.stringify({ message: key, stack: String(stack || '').slice(0, 2000), url: location.hash, v: 'v9' }) }).catch(() => {});
+    body: JSON.stringify({ message: key, stack: String(stack || '').slice(0, 2000), url: location.hash, v: 'v10' }) }).catch(() => {});
 }
 window.addEventListener('error', (e) => reportClientError(e.message, e.error?.stack));
 window.addEventListener('unhandledrejection', (e) => reportClientError(e.reason?.message || String(e.reason), e.reason?.stack));

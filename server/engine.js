@@ -16,6 +16,8 @@ import { mockTurn } from './mock.js';
 import { logIssue } from './logger.js';
 import { pickPhoto } from './photos.js';
 import { addPost } from './feed.js';
+import { reviewOutgoing, gapLabel } from './review.js';
+import { statusLine, postsVisibleTo } from './social.js';
 
 export const id = (p = '') => p + crypto.randomBytes(9).toString('base64url');
 
@@ -50,7 +52,11 @@ const refreshRel = (relId) => db.prepare('SELECT * FROM relationships WHERE id=?
 function historyInput(relId, latestImage) {
   const rows = db.prepare(`SELECT * FROM messages WHERE rel_id=? AND sender != 'system' ORDER BY id DESC LIMIT 30`).all(relId).reverse();
   const items = [];
+  let prevAt = 0;
   for (const m of rows) {
+    // 隔了很久的訊息標上時間，讓他知道中間過了多久
+    const stamp = prevAt && m.created_at - prevAt > 90 * 60000 ? `［隔了 ${gapLabel(m.created_at - prevAt)}・${new Date(m.created_at).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}］` : '';
+    prevAt = m.created_at;
     if (m.sender === 'char') {
       if (m.kind === 'card') continue;
       if (m.kind === 'sticker') { items.push({ role: 'assistant', content: `（傳了貼圖：${m.text}）` }); continue; }
@@ -59,9 +65,10 @@ function historyInput(relId, latestImage) {
       let t = m.text || '';
       if (m.kind === 'voice') t = `（對方傳了語音）${t}`;
       if (m.kind === 'sticker') t = `（對方傳了貼圖：${t}）`;
+      if (m.card && j(m.card)?.storyReply) t = `（回覆你的限時動態「${j(m.card).storyReply}」）${t}`;
       if (m.kind === 'photo' && !(latestImage && m.media === latestImage)) t = `（對方傳了一張照片）${t}`;
       if (m.kind === 'card') continue;
-      items.push({ role: 'user', content: t || '（照片）' });
+      items.push({ role: 'user', content: stamp + (t || '（照片）') });
     }
   }
   // Merge consecutive messages from the same side so the model sees clean turns.
@@ -319,6 +326,8 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   input.push({ role: 'developer', content: contextBlock({
     habits: habitsOf(rel.id), notes: db.prepare('SELECT text FROM notes WHERE rel_id=? AND done=0 ORDER BY id DESC LIMIT 10').all(rel.id).map(n => n.text), told: toldOf(rel.id), summary: rel.summary || '', lateReply, activity,
     lowEffort: !trigger && lowEffortStreak(rel.id),
+    userStatus: statusLine(db.prepare('SELECT * FROM users WHERE id=?').get(rel.user_id) || user), userPosts: postsVisibleTo(rel),
+    lastTimes: db.prepare(`SELECT MAX(CASE WHEN sender='user' THEN created_at END) u, MAX(CASE WHEN sender='char' THEN created_at END) c FROM messages WHERE rel_id=? AND id<=?`).get(rel.id, before),
     rel, persona, user, memories, worldEvents, otherChars: otherCharsFor(rel), trends: loadTrends(),
     dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere: lover, photoAttached: !!imageMedia,
   }) });
@@ -335,6 +344,19 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     logIssue({ level: 'warn', source: 'llm', message: '角色重複說了類似的話，已自動重寫', detail: { now: rep.now, before: rep.before, trigger: triggerKey }, userId: rel.user_id, relId: rel.id });
     input.push({ role: 'developer', content: `你剛剛想說「${rep.now}」，但這跟你之前說過的「${rep.before}」太像了。換一個說法，或聊新的東西、說新的進展。` });
     try { out = await call(); } catch { /* keep the first answer */ }
+  }
+  // 發送前檢查：主動訊息、晚回的訊息要對得上現在的時間和最近的對話
+  if ((trigger || lateReply) && !['FIRST', 'reunion'].includes(triggerKey) && !String(triggerKey || '').startsWith('nudge')) {
+    const draft = (out.messages || []).map(m => String(m.text || '').trim()).filter(Boolean);
+    if (draft.length) {
+      const rv = await reviewOutgoing({ rel, persona, user, texts: draft, triggerKey, lateReply });
+      if (rv.action === 'skip') {
+        // 這次不傳：要跟進的事延後兩小時再看
+        for (const f of dueFollowups) db.prepare('UPDATE followups SET due_at=? WHERE id=?').run(now() + 2 * 3600e3, f.id);
+        return [];
+      }
+      if (rv.action === 'rewrite') { out.messages = rv.messages.slice(0, 3).map(text => ({ text })); out.sticker = null; }
+    }
   }
 
   // ---------- apply ----------

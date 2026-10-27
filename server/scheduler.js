@@ -6,6 +6,7 @@ import { PROACTIVITY, taipeiParts, toMin, charStatus } from './characters.js';
 import { runTurn, getPersona, finishOuting, endActivity } from './engine.js';
 import { logIssue } from './logger.js';
 import { generatePost, postMoment } from './feed.js';
+import { shouldHoldProactive, gapLabel as gapLabelFn } from './review.js';
 
 const STAGE_MULT = [0.3, 0.6, 0.9, 1.2, 1.2];
 const LEVEL_MULT = { low: 0.5, normal: 1, high: 1.5 };
@@ -101,8 +102,10 @@ async function tickRel(rel, user, t, userSentToday) {
   const capped = today.count >= Math.max(1, Math.round(budget));
 
   let pick = null;
-  if (due) pick = { key: 'followup', reason: `跟進對方之前提過的事：${due.topic}` };
-  else if (!capped && rel.unanswered < 4) {
+  const holdFollowup = due && shouldHoldProactive(rel, persona, 'followup');
+  const holdOther = shouldHoldProactive(rel, persona, 'other');
+  if (due && !holdFollowup) pick = { key: 'followup', reason: `跟進對方之前提過的事：${due.topic}${now() - due.due_at > 3 * 3600e3 ? `（原本想在 ${gapLabelFn(now() - due.due_at)}前問，現在已經晚了，說法要自然）` : ''}` };
+  else if (!due && !holdOther && !capped && rel.unanswered < 4) {
     for (const c of candidates(rel, persona, settings, t, log)) {
       if (today.sent[c.key]) continue;
       if (c.every && log.lastCheckin && now() - log.lastCheckin < c.every * 864e5) continue;
@@ -118,7 +121,12 @@ async function tickRel(rel, user, t, userSentToday) {
   const newLog = { ...today, lastCheckin: pick.key === 'checkin' ? now() : log.lastCheckin, lastPostcard: pick.key === 'postcard' ? now() : log.lastPostcard };
   db.prepare('UPDATE relationships SET proactive_log=?, unanswered=unanswered+1 WHERE id=?').run(JSON.stringify(newLog), rel.id);
   userSentToday.count++;
-  await runTurn({ user, relId: rel.id, trigger: `${pick.reason}（如果和「你們之間的相處習慣」衝突，以相處習慣為準，改用其他自然的話。）`, triggerKey: pick.key, voiceMoment: !!pick.voice });
+  const sentMsgs = await runTurn({ user, relId: rel.id, trigger: `${pick.reason}（如果和「你們之間的相處習慣」衝突，以相處習慣為準，改用其他自然的話。）`, triggerKey: pick.key, voiceMoment: !!pick.voice });
+  // 發送前檢查取消了：不算一次主動、也不算對方沒回
+  if (!sentMsgs.length) {
+    db.prepare('UPDATE relationships SET unanswered=MAX(unanswered-1,0) WHERE id=?').run(rel.id);
+    userSentToday.count--;
+  }
 }
 
 let running = false;

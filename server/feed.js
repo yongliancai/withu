@@ -22,10 +22,10 @@ db.exec(`CREATE TABLE IF NOT EXISTS post_comments (
 
 const TAG_LIST = Object.keys(PHOTO_TAGS);
 
-export function addPost(rel, text, tag) {
+export function addPost(rel, text, tag, { story = false } = {}) {
   const photo = tag && PHOTO_TAGS[tag] ? pickPhoto(tag) : null;
-  return db.prepare('INSERT INTO posts (rel_id,text,photo_id,photo_tag,created_at) VALUES (?,?,?,?,?)')
-    .run(rel.id, String(text).slice(0, 120), photo?.id || null, tag || null, now()).lastInsertRowid;
+  return db.prepare('INSERT INTO posts (rel_id,text,photo_id,photo_tag,story,expires_at,created_at) VALUES (?,?,?,?,?,?,?)')
+    .run(rel.id, String(text).slice(0, 120), photo?.id || null, tag || null, story ? 1 : 0, story ? now() + 24 * 3600e3 : null, now()).lastInsertRowid;
 }
 
 /** He posts something on his own (no message to the user). */
@@ -55,7 +55,8 @@ export async function generatePost(rel, persona, moment) {
   });
   if (!res.text) return null;
   addTold(rel.id, res.told);
-  const id = addPost(rel, res.text, res.photo_tag);
+  // 有照片的有時候發成限時動態（24 小時後消失）
+  const id = addPost(rel, res.text, res.photo_tag, { story: !!res.photo_tag && Math.random() < 0.45 });
   logEvent(rel.user_id, 'post', { rel: rel.id });
   return id;
 }
@@ -74,7 +75,7 @@ export function postMoment(persona, rel, t) {
 
 export function feedFor(userId) {
   const rows = db.prepare(`SELECT p.*, r.id rel_id2, c.persona FROM posts p JOIN relationships r ON r.id=p.rel_id JOIN characters c ON c.id=r.character_id
-    WHERE r.user_id=? AND r.status='active' AND r.blocked=0 ORDER BY p.id DESC LIMIT 60`).all(userId);
+    WHERE r.user_id=? AND r.status='active' AND r.blocked=0 AND COALESCE(p.story,0)=0 ORDER BY p.id DESC LIMIT 60`).all(userId);
   const com = db.prepare('SELECT id, sender, text, created_at FROM post_comments WHERE post_id=? AND created_at<=? ORDER BY id');
   return rows.map(p => ({
     id: p.id, relId: p.rel_id, text: p.text, at: p.created_at, liked: !!p.liked,

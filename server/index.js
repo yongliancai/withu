@@ -21,6 +21,7 @@ import { adminStats } from './admin.js';
 import { logIssue, purgeOldLogs } from './logger.js';
 import { mountAdmin, cohortForCode } from './adminRoutes.js';
 import { memoirFor } from './memoir.js';
+import { userStatus, createUserPost, userPostsOut, charStories, markStorySeen, mediaOwnedBy } from './social.js';
 import { feedFor, likePost, commentPost } from './feed.js';
 import { LIB_DIR, pickPhoto, photoById, fillFromPexels, saveUpload, PHOTO_TAGS, photoCount } from './photos.js';
 
@@ -107,7 +108,8 @@ app.post('/api/auth/logout', auth, (req, res) => {
 app.get('/api/me', auth, (req, res) => {
   const u = req.user;
   res.json({ id: u.id, nickname: u.nickname, callName: u.call_name, recoveryCode: u.recovery_code, settings: j(u.settings, {}),
-    cohort: u.cohort, gender: u.gender, seeks: u.seeks,
+    cohort: u.cohort, gender: u.gender, seeks: u.seeks, bio: u.bio || '', avatar: u.avatar ? `/api/media/${u.avatar}` : null, status: userStatus(u),
+    counts: { rels: db.prepare(`SELECT COUNT(*) n FROM relationships WHERE user_id=? AND status='active'`).get(u.id).n, posts: db.prepare('SELECT COUNT(*) n FROM user_posts WHERE user_id=? AND story=0').get(u.id).n },
     pushKey: pushEnabled() ? config.vapidPublic : null, mock: config.mock, orderMode: config.orderMode });
 });
 
@@ -118,10 +120,46 @@ app.patch('/api/me', auth, (req, res) => {
   for (const k of Object.keys(settings)) if (!allowed.includes(k)) delete settings[k];
   const seeks = ['male', 'female', 'any'].includes(b.seeks) ? b.seeks : req.user.seeks;
   const gender = ['female', 'male', 'other'].includes(b.gender) ? b.gender : req.user.gender;
-  db.prepare('UPDATE users SET nickname=?, call_name=?, settings=?, seeks=?, gender=? WHERE id=?').run(
-    String(b.nickname ?? req.user.nickname).slice(0, 16), String(b.callName ?? req.user.call_name).slice(0, 16), JSON.stringify(settings), seeks, gender, req.user.id);
+  db.prepare('UPDATE users SET nickname=?, call_name=?, settings=?, seeks=?, gender=?, bio=? WHERE id=?').run(
+    String(b.nickname ?? req.user.nickname).slice(0, 16), String(b.callName ?? req.user.call_name).slice(0, 16), JSON.stringify(settings), seeks, gender,
+    String(b.bio ?? req.user.bio ?? '').slice(0, 80), req.user.id);
   res.json({ ok: true });
 });
+
+// ---------- 你的主頁 ----------
+app.post('/api/me/avatar', auth, upload.single('photo'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: '沒有收到照片' });
+  const f = `${id('av_')}.jpg`;
+  fs.writeFileSync(path.join(config.dataDir, 'uploads', f), req.file.buffer);
+  db.prepare('UPDATE users SET avatar=? WHERE id=?').run(f, req.user.id);
+  res.json({ avatar: `/api/media/${f}` });
+});
+app.post('/api/me/status', auth, (req, res) => {
+  const text = String(req.body?.text || '').trim().slice(0, 30);
+  db.prepare('UPDATE users SET status_text=?, status_emoji=?, status_at=? WHERE id=?').run(text || null, text ? String(req.body?.emoji || '').slice(0, 4) : null, text ? now() : null, req.user.id);
+  if (text) logEvent(req.user.id, 'user_status', {});
+  res.json({ ok: true });
+});
+app.get('/api/me/posts', auth, (req, res) => res.json(userPostsOut(req.user.id)));
+app.post('/api/me/posts', auth, upload.single('photo'), (req, res) => {
+  const text = String(req.body?.text || '').trim();
+  if (!text && !req.file) return res.status(400).json({ error: '寫點什麼，或放一張照片' });
+  let media = null;
+  if (req.file) { media = `${id('up_')}.jpg`; fs.writeFileSync(path.join(config.dataDir, 'uploads', media), req.file.buffer); }
+  let audience = req.body?.audience || 'all';
+  if (audience !== 'all' && audience !== 'lover') audience = j(audience, []);
+  res.json({ id: createUserPost(req.user, { story: req.body?.story === '1', text, media, audience }) });
+});
+app.delete('/api/me/posts/:id', auth, (req, res) => {
+  db.prepare('DELETE FROM user_posts WHERE id=? AND user_id=?').run(req.params.id, req.user.id);
+  res.json({ ok: true });
+});
+// 限時動態：你的＋他們的
+app.get('/api/stories', auth, (req, res) => {
+  res.json({ mine: userPostsOut(req.user.id, { stories: true }),
+    chars: charStories(req.user.id).map(g => ({ relId: g.relId, frame: publicFrame(g.persona), items: g.items.map(i => ({ ...i, photo: i.photoId ? photoById(i.photoId) : null })) })) });
+});
+app.post('/api/stories/:id/seen', auth, (req, res) => { markStorySeen(req.user.id, Number(req.params.id)); res.json({ ok: true }); });
 
 app.get('/api/me/export', auth, (req, res) => {
   const uid = req.user.id;
@@ -316,7 +354,8 @@ app.post('/api/rels/:id/messages', auth, upload.fields([{ name: 'photo', maxCoun
       addMessage(rel, 'user', 'sticker', { text, card: { id: sid } });
     } else {
       if (!text) return res.status(400).json({ error: '空白訊息' });
-      addMessage(rel, 'user', 'text', { text });
+      const sr = Number(req.body?.storyRef) && db.prepare('SELECT text FROM posts WHERE id=? AND rel_id=?').get(Number(req.body.storyRef), rel.id);
+      addMessage(rel, 'user', 'text', { text, card: sr ? { storyReply: (sr.text || '').slice(0, 30) } : null });
     }
     db.prepare('UPDATE relationships SET user_msg_count=user_msg_count+1, last_user_msg_at=?, unanswered=0, user_busy_until=NULL WHERE id=?').run(now(), rel.id);
     const out = await replyOrDefer(req.user, rel, { userText: text, imageMedia });
@@ -600,7 +639,8 @@ app.get('/api/story', auth, (req, res) => {
 app.get('/api/media/:file', auth, (req, res) => {
   const f = path.basename(req.params.file);
   const own = db.prepare('SELECT 1 FROM messages WHERE user_id=? AND media=?').get(req.user.id, f)
-    || db.prepare(`SELECT 1 FROM story WHERE user_id=? AND media LIKE ?`).get(req.user.id, `%${f}%`);
+    || db.prepare(`SELECT 1 FROM story WHERE user_id=? AND media LIKE ?`).get(req.user.id, `%${f}%`)
+    || mediaOwnedBy(req.user.id, f);
   if (!own) return res.status(404).end();
   for (const dir of ['uploads', 'audio']) {
     const p = path.join(config.dataDir, dir, f);
