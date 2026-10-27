@@ -310,6 +310,17 @@ function recentCharTexts(relId) {
 }
 function findRepeat(texts, recent) {
   for (const t of texts) for (const r of recent) if (t.length >= 10 && similarity(t, r) >= 0.6) return { now: t, before: r };
+  // 換句話說但講同一件事（例如連三次「被學長抓去改病歷」）：最近的話裡出現同一段 7 個字以上
+  const clean = (x) => String(x).replace(/[^\p{Script=Han}A-Za-z0-9]/gu, '');
+  const near = recent.slice(0, 15).map(clean);
+  for (const t of texts) {
+    const c = clean(t);
+    for (let i = 0; i + 7 <= c.length; i++) {
+      const w = c.slice(i, i + 7);
+      const hit = near.findIndex(r => r.includes(w));
+      if (hit >= 0) return { now: t, before: recent[hit] };
+    }
+  }
   return null;
 }
 
@@ -383,7 +394,8 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   rel = refreshRel(relId);
   const isProactive = trigger && !lateReply && !String(triggerKey || '').startsWith('nudge') ? 1 : 0;
   if (!trigger || lateReply) db.prepare(`UPDATE relationships SET char_read_id=(SELECT COALESCE(MAX(id),0) FROM messages WHERE rel_id=? AND sender='user'), pending_reply_at=NULL WHERE id=?`).run(rel.id, rel.id);
-  const texts = (out.messages || []).map(m => String(m.text || '').trim()).filter(Boolean).slice(0, 4);
+  // 一則泡泡裡有換行就拆成兩則（像真人分開傳）
+  const texts = (out.messages || []).flatMap(m => String(m.text || '').split(/\n+/)).map(x => x.trim()).filter(Boolean).slice(0, 5);
   if (!texts.length && !out.meal && !out.postcard) logIssue({ level: 'warn', source: 'llm', message: '角色這一輪沒有回任何話', detail: { trigger: triggerKey, tier, userText: userText ? userText.slice(0, 200) : null }, userId: rel.user_id, relId: rel.id });
   if (out.voice && voiceAllowed && texts.length) {
     const joined = texts.join(' ');
@@ -410,6 +422,9 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   rel.affection = aff; rel.understanding = und;
 
   for (const m of out.memories_add || []) addMemory(rel, m.kind, m.content, m.weight);
+  if ((out.memories_add || []).some(m => m.kind === 'style')) {
+    updateUserPrefs(rel.user_id, { force: true }).catch(e => logIssue({ level: 'warn', source: 'llm', message: `相處偏好整理失敗：${e.message}`, error: e, userId: rel.user_id, relId: rel.id }));
+  }
   for (const m of out.memories_correct || []) correctMemory(rel, m.id, m.content);
   for (const mid of out.memories_forget || []) forgetMemory(rel, mid);
 
@@ -455,7 +470,9 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     if (n < 3) addPost(rel, out.life_post.slice(0, 100), out.life_post_photo);
   }
   if (out.told) addTold(rel.id, out.told);
-  if (out.sticker && STICKERS[out.sticker]) addMessage(rel, 'char', 'sticker', { text: STICKERS[out.sticker], card: { id: out.sticker }, proactive: isProactive, reason: triggerKey });
+  // 貼圖不洗版：最近 8 則裡他已經傳過貼圖就不傳
+  const recentSticker = db.prepare(`SELECT 1 FROM (SELECT sender, kind FROM messages WHERE rel_id=? ORDER BY id DESC LIMIT 8) WHERE sender='char' AND kind='sticker'`).get(rel.id);
+  if (out.sticker && STICKERS[out.sticker] && !recentSticker) addMessage(rel, 'char', 'sticker', { text: STICKERS[out.sticker], card: { id: out.sticker }, proactive: isProactive, reason: triggerKey });
   // 出遊中的小插曲（一次出遊最多一次）
   if (out.choice && rel.outing_active && out.choice.options?.length >= 2 && !crisis) {
     const had = db.prepare(`SELECT 1 FROM messages WHERE rel_id=? AND kind='card' AND card LIKE '%"type":"choice"%' AND created_at>=?`).get(rel.id, rel.outing_started_at || 0);
@@ -476,7 +493,14 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   if (out.activity && !trigger && !activity) startActivity(rel, persona, out.activity);
   if (out.status_line) db.prepare('UPDATE relationships SET status_line=?, status_line_at=? WHERE id=?').run(out.status_line.slice(0, 40), now(), rel.id);
 
-  if (out.hint && rel.mode === 'practice' && !trigger) addMessage(rel, 'system', 'card', { card: { type: 'hint', text: out.hint } });
+  // 他的小心情旁白：短、只寫他自己、很久才出現一次、代名詞對
+  if (out.hint && rel.mode === 'practice' && !trigger) {
+    const P = persona.gender === 'female' ? '她' : '他';
+    let h = String(out.hint).trim().replace(/^[（(]|[）)]$/g, '').replace(/^[他她]/, P);
+    const recentHint = db.prepare(`SELECT 1 FROM (SELECT kind, card FROM messages WHERE rel_id=? ORDER BY id DESC LIMIT 24) WHERE kind='card' AND card LIKE '%"type":"hint"%'`).get(rel.id);
+    const meta = /對方|你|接住|話題|回覆|回應|帶過|先溫柔|順便/.test(h);
+    if (h && h.length <= 18 && !meta && !recentHint) addMessage(rel, 'system', 'card', { card: { type: 'hint', text: h } });
+  }
 
   if (out.meal && out.meal.options?.length >= 2 && !todayMealProposed && !crisis) {
     addMessage(rel, 'char', 'card', { card: buildMealCard(out.meal.options) });

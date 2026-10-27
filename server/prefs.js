@@ -22,10 +22,11 @@ function stats(userId) {
   return `平均每則 ${Math.round(len)} 字；用表情符號的比例 ${Math.round(emoji * 100)}%；常笑（哈哈、XD）${Math.round(laugh * 100)}%；會主動問問題 ${Math.round(ask * 100)}%；深夜聊天 ${Math.round(night * 100)}%`;
 }
 
-export async function updateUserPrefs(userId) {
+// force：對方剛明確說了希望怎麼被對待，馬上整理，讓其他角色也立刻知道
+export async function updateUserPrefs(userId, { force = false } = {}) {
   const u = db.prepare('SELECT prefs FROM users WHERE id=?').get(userId);
   const cur = j(u?.prefs, null);
-  if (cur && now() - cur.at < 12 * 3600e3) return;
+  if (!force && cur && now() - cur.at < 12 * 3600e3) return;
   const chars = db.prepare(`SELECT c.persona FROM relationships r JOIN characters c ON c.id=r.character_id WHERE r.user_id=?`).all(userId).map(r => j(r.persona, {}));
   const more = chars.flatMap(p => p.tuning?.more || []), less = chars.flatMap(p => p.tuning?.less || []);
   const habits = db.prepare(`SELECT content FROM memories WHERE user_id=? AND kind='style'`).all(userId).map(r => r.content);

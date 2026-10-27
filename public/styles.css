@@ -535,22 +535,105 @@ a { color: inherit; }
 @keyframes dropin { from { transform:translate(-50%,-20px); opacity:0 } to { transform:translate(-50%,0); opacity:1 } }
 
 /* ================= 系統主題 ================= */
+/* 三種風格：換系統主題時，整個 App 的質感、字體、吉祥物一起換。
+   每一種只有一個最明顯的記憶點：手帳＝方格紙和紙膠帶、電台＝夜空和柔光、日光＝大標題和留白。 */
+
+/* ---------- 1. 溫暖手帳（小糰）：像跟他寫交換日記 ---------- */
+:root[data-app="milk"] {
+  --paper:#F7EEF0; --surface:#FFFCFB; --ink:#3A2D44; --muted:#8A7A8C; --line:#EADCE1;
+  --me:#4A3558; --me-ink:#FFF; --him:#FFFCFB; --rose:#D14D7A; --rose-soft:#F8DDE6; --amber:#E39A3B; --sage:#6E9A7A;
+  --tape:#F7C9A9; --tape2:#C9DAF0;
+  --title-font: var(--hand);
+  --deco: radial-gradient(circle, #E3CFD7 1px, transparent 1.3px) 0 0 / 18px 18px;
+  --ring: conic-gradient(#D14D7A, #F7A58A, #F7C9A9, #C9DAF0, #D14D7A);
+  --card-shadow: 0 1px 0 #EADCE1, 0 10px 18px -14px rgba(58,45,68,.45);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-app="milk"]:not([data-theme="light"]) {
+    --paper:#1F1820; --surface:#2A2129; --ink:#F3E8EE; --muted:#B19FAE; --line:#3B2F3A;
+    --me:#B9849F; --me-ink:#1F1820; --him:#2E242D; --rose:#EE86AA; --rose-soft:#43293A; --tape:#8A5A47; --tape2:#3E4C66;
+    --deco: radial-gradient(circle, #3A2E39 1px, transparent 1.3px) 0 0 / 18px 18px;
+    --card-shadow: 0 1px 0 #3B2F3A;
+    color-scheme: dark;
+  }
+}
+:root[data-app="milk"] body { background: var(--deco), var(--paper); background-attachment: fixed; }
+:root[data-app="milk"] .page h1 { font-size: 28px; display: inline-block; padding: 0 6px; margin-left: -6px;
+  background: linear-gradient(transparent 58%, color-mix(in srgb, var(--tape) 75%, transparent) 58% 92%, transparent 92%); }
+:root[data-app="milk"] .page h2 { font-family: var(--hand); font-size: 18px; display: inline-block; position: relative; padding: 0 8px; margin-left: -4px; z-index: 0; }
+:root[data-app="milk"] .page h2::before { content: ""; position: absolute; inset: 3px -2px 2px; background: color-mix(in srgb, var(--tape2) 70%, transparent); transform: rotate(-1.2deg); z-index: -1; border-radius: 2px;
+  -webkit-mask: linear-gradient(90deg, transparent 0 2px, #000 2px calc(100% - 2px), transparent calc(100% - 2px)); }
+:root[data-app="milk"] .section, :root[data-app="milk"] .tile, :root[data-app="milk"] .person, :root[data-app="milk"] .lover-card, :root[data-app="milk"] .fpost, :root[data-app="milk"] .ann, :root[data-app="milk"] .mm-card:not(.locked) { box-shadow: var(--card-shadow); border-color: transparent; }
+:root[data-app="milk"] .stream { background: var(--deco); }
+:root[data-app="milk"] .msg.him .bubble { box-shadow: 0 0 0 1px var(--line); }
+:root[data-app="milk"] .tabs { border-top: 1px dashed color-mix(in srgb, var(--ink) 25%, transparent); }
+:root[data-app="milk"] .tabs a[aria-current="page"] { color: var(--rose); }
+
+/* ---------- 2. 夜晚電台（小月）：凌晨兩點，有人陪你醒著 ---------- */
 :root[data-app="night"] {
-  --paper:#191730; --surface:#24213F; --ink:#EEEAFB; --muted:#A7A1C8; --line:#34305A;
-  --me:#7C6BD6; --me-ink:#fff; --him:#2B2750; --rose:#F2A6C8; --rose-soft:#3A2C4F; --amber:#F6D28B; --sage:#9BC7A6;
+  --paper:#16142C; --surface:rgba(255,255,255,.06); --ink:#F1ECFF; --muted:#A9A2CC; --line:rgba(255,255,255,.10);
+  --me:#8D78E8; --me-ink:#FFF; --him:rgba(255,255,255,.08); --rose:#F2A6C8; --rose-soft:rgba(242,166,200,.16); --amber:#F6D98B; --sage:#9BC7A6;
+  --title-font: "Noto Serif TC", serif;
+  --ring: conic-gradient(#F6D98B, #F2A6C8, #B7A6FF, #F6D98B);
   color-scheme: dark;
 }
+:root[data-app="night"] body {
+  background:
+    radial-gradient(1px 1px at 20% 12%, #fff9 50%, transparent), radial-gradient(1px 1px at 72% 6%, #fff7 50%, transparent),
+    radial-gradient(1.4px 1.4px at 86% 22%, #F6D98Bcc 50%, transparent), radial-gradient(1px 1px at 40% 30%, #fff5 50%, transparent),
+    radial-gradient(1px 1px at 8% 44%, #fff6 50%, transparent), radial-gradient(1px 1px at 60% 52%, #fff4 50%, transparent),
+    radial-gradient(120% 60% at 50% -10%, #3A3078 0%, #211C48 45%, #16142C 80%) fixed;
+  background-color: #16142C;
+}
+:root[data-app="night"] .page h1 { font: 600 28px/1.3 var(--title-font); letter-spacing: .06em; text-shadow: 0 0 22px rgba(183,166,255,.45); }
+:root[data-app="night"] .page h2 { font-family: var(--title-font); font-weight: 600; letter-spacing: .04em; }
+:root[data-app="night"] .section, :root[data-app="night"] .tile, :root[data-app="night"] .person, :root[data-app="night"] .lover-card, :root[data-app="night"] .fpost, :root[data-app="night"] .ann,
+:root[data-app="night"] .chip, :root[data-app="night"] .cat, :root[data-app="night"] .choice, :root[data-app="night"] .tb-item, :root[data-app="night"] .mm-card {
+  background: var(--surface); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+:root[data-app="night"] .sheet { background: #211D42; }
+:root[data-app="night"] .composer, :root[data-app="night"] .composer textarea { background: rgba(22,20,44,.85); }
+:root[data-app="night"] .msg.me .bubble { background: linear-gradient(135deg, #8D78E8, #B07CD8); box-shadow: 0 6px 20px -8px rgba(160,124,224,.8); }
+:root[data-app="night"] .msg.him .bubble { border: 1px solid var(--line); }
+:root[data-app="night"] .btn:not(.ghost):not(.danger) { background: linear-gradient(135deg, #8D78E8, #B07CD8); box-shadow: 0 6px 18px -8px rgba(160,124,224,.9); }
+:root[data-app="night"] .tabs { background: rgba(22,20,44,.72); }
+:root[data-app="night"] .tabs a[aria-current="page"] { color: var(--amber); }
+:root[data-app="night"] .tabs a[aria-current="page"] svg { filter: drop-shadow(0 0 6px rgba(246,217,139,.6)); }
+:root[data-app="night"] .cat.on, :root[data-app="night"] .chip[aria-pressed="true"] { background: var(--ink); color: #16142C; }
+
+/* ---------- 3. 清新日光（小芽）：週末早上，陽光照進來 ---------- */
 :root[data-app="forest"] {
-  --paper:#EEF2EA; --surface:#FFFFFF; --ink:#24332A; --muted:#6F806F; --line:#D6E0D2;
-  --me:#3F6B4E; --me-ink:#fff; --him:#FFFFFF; --rose:#D9746B; --rose-soft:#F6E4DF; --amber:#D9A441; --sage:#5E8C6A;
+  --paper:#FFFFFF; --surface:#F3F7F2; --ink:#14261C; --muted:#6B7C70; --line:#E3ECE2;
+  --me:#1F9B68; --me-ink:#FFF; --him:#F1F5F0; --rose:#FF6B5E; --rose-soft:#FFE7E3; --amber:#FFB938; --sage:#1F9B68;
+  --title-font: var(--sans);
+  --ring: conic-gradient(#FFC53D, #FF8A4C, #1F9B68, #2BB3A3, #FFC53D);
   color-scheme: light;
 }
+@media (prefers-color-scheme: dark) {
+  :root[data-app="forest"]:not([data-theme="light"]) {
+    --paper:#0F1813; --surface:#18241C; --ink:#E9F3EC; --muted:#93A79A; --line:#24342A; --him:#1B2920; --rose-soft:#3A2420;
+    color-scheme: dark;
+  }
+}
+:root[data-app="forest"] .page h1 { font: 900 32px/1.15 var(--sans); letter-spacing: -.02em; margin-bottom: 20px; }
+:root[data-app="forest"] .page h2 { font-weight: 900; font-size: 19px; letter-spacing: -.01em; }
+:root[data-app="forest"] .section, :root[data-app="forest"] .tile, :root[data-app="forest"] .person, :root[data-app="forest"] .lover-card, :root[data-app="forest"] .fpost, :root[data-app="forest"] .ann { box-shadow: none; border: 0; border-radius: 22px; }
+:root[data-app="forest"] .tile .nm, :root[data-app="forest"] .person .nm, :root[data-app="forest"] .lover-card .name, :root[data-app="forest"] .room-head .nm { font-family: var(--sans); font-weight: 900; letter-spacing: -.01em; }
+:root[data-app="forest"] .msg.him .bubble { font-family: var(--sans); font-size: 16px; }
+:root[data-app="forest"] .bubble { border-radius: 22px; }
+:root[data-app="forest"] .tabs { background: var(--paper); backdrop-filter: none; border-top-color: transparent; box-shadow: 0 -1px 0 var(--line); }
+:root[data-app="forest"] .tabs a[aria-current="page"] { color: var(--me); }
+:root[data-app="forest"] .tabs a[aria-current="page"]::after { content: ""; position: absolute; bottom: 6px; width: 4px; height: 4px; border-radius: 50%; background: var(--me); }
+:root[data-app="forest"] .cat.on, :root[data-app="forest"] .chip[aria-pressed="true"] { background: var(--me); border-color: var(--me); color: #fff; }
+
+/* 共用：限動圈圈跟著風格換色、頁面標題字體 */
+:root[data-app] .st-circle .ring:not(.seen):not(.add) { background: var(--ring); }
+
 .theme-pick { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:8px; }
 .theme-pick button { border:1px solid var(--line); background:var(--surface); border-radius:16px; padding:12px 8px; display:flex; flex-direction:column; align-items:center; gap:4px; font:inherit; color:var(--ink); text-align:center; }
 .theme-pick button[aria-pressed="true"] { box-shadow:0 0 0 2px var(--ink); }
 .theme-pick .small { font-size:11px; line-height:1.4; }
 .tp-art { width:58px; height:58px; border-radius:50%; display:grid; place-items:center; padding:6px; }
-.tp-milk { background:#F6E3EC; } .tp-night { background:#2B2750; } .tp-forest { background:#DDEBD6; }
+.tp-milk { background: radial-gradient(circle, #E3CFD7 1px, transparent 1.3px) 0 0/10px 10px, #F7EEF0; } .tp-night { background: radial-gradient(1px 1px at 30% 25%, #fff 50%, transparent), radial-gradient(1px 1px at 75% 60%, #F6D98B 50%, transparent), linear-gradient(160deg,#3A3078,#16142C); } .tp-forest { background: linear-gradient(160deg,#FFF6D6,#DDF2E6); }
 .tp-art svg { width:100%; height:100%; }
 .mood-head-art { width:64px; height:64px; margin:0 auto 4px; animation:bob 2.6s ease-in-out infinite; }
 .mood-head-art svg { width:100%; height:100%; }

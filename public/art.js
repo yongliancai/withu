@@ -314,9 +314,9 @@ export function stickerSVG(id, size = 120) {
 // ---------------------------------------------------------------- mascots
 // 系統吉祥物（原創）：三種系統主題各一隻。face: idle | happy | wow
 export const APP_THEMES = [
-  ['milk', '奶茶', '小糰：軟軟的麻糬，頭上冒著愛心'],
-  ['night', '夜空', '小月：抱著月亮睡覺的夜貓子'],
-  ['forest', '森林', '小芽：頭上長出嫩葉的種子'],
+  ['milk', '溫暖手帳', '方格紙和紙膠帶，像在寫交換日記。陪你的是小糰'],
+  ['night', '夜晚電台', '深夜的星空和柔光，適合晚睡的人。陪你的是小月'],
+  ['forest', '清新日光', '大標題、多留白，乾淨明亮。陪你的是小芽'],
 ];
 export function mascotSVG(theme = 'milk', face = 'idle') {
   const ink = theme === 'night' ? '#2A2550' : theme === 'forest' ? '#2F3B2A' : '#3B3561';

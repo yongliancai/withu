@@ -30,26 +30,26 @@ if (config.mock) console.log('⚠️  沒有讀到 OPENAI_API_KEY，會用範例
 const PERSONAS = [
   { id: 'F1', nick: '小芸', gender: 'female', seeks: 'male', tpl: 'off_yicheng', note: '26 歲行銷，愛連傳短訊息、睡前聊天',
     lines: [['欸', '我今天被主管念', '超煩'], '他說我的提案太保守', '哈哈哈對啊', ['你今天店裡忙嗎', '有沒有很多客人'], '我想喝熱的', '好啦我要去洗澡了', '洗好了～', '晚安'] },
-  { id: 'F2', nick: 'Amy', gender: 'female', seeks: 'male', tpl: 'off_jiye', owl: true, note: '31 歲小夜班護理師，凌晨才有空',
+  { id: 'F2', scene: 'store', nick: 'Amy', gender: 'female', seeks: 'male', tpl: 'off_jiye', owl: true, note: '31 歲小夜班護理師，凌晨才有空',
     lines: ['剛下班……好累', '今天病房好多事', '有個阿嬤一直拉著我的手說謝謝', '你也還沒睡喔', '你們酒館都幾點關', '我通常三點才睡得著', '你下班都吃什麼'] },
   { id: 'F3', nick: '佳琪', gender: 'female', seeks: 'any', custom: { name: '程小樹', gender: 'female', age: 26, nationality: '台灣', job: 'designer', archetype: 'cool_elegant', proactivity: 'slow', voice: 'sage' }, scenarioText: '在學校圖書館搶同一本書',
     note: '23 歲研究生，自己捏角色',
     lines: ['你也在找那本書喔', '我在寫論文，第三章卡超久', '你是做設計的嗎', '可以給我一點排版建議嗎', '謝謝你，你人真好', '你平常都去哪裡畫圖'] },
-  { id: 'F4', nick: '曉晴', gender: 'female', seeks: 'male', tpl: 'off_shenyan', note: '34 歲主管，不太會聊天，回很短',
+  { id: 'F4', scene: 'mrt', nick: '曉晴', gender: 'female', seeks: 'male', tpl: 'off_shenyan', note: '34 歲主管，不太會聊天，回很短',
     lines: ['嗯', '還好', '喔', '沒有', '忙', '對', '嗯嗯', '不知道'], lead: 3 },
-  { id: 'F5', nick: 'Rina', gender: 'female', seeks: 'female', tpl: 'off_keke', note: '28 歲二次元愛好者，想遇見女生',
+  { id: 'F5', scene: 'friends', nick: 'Rina', gender: 'female', seeks: 'female', tpl: 'off_keke', note: '28 歲二次元愛好者，想遇見女生',
     lines: ['你也有在玩原神嗎', '我最近在追芙莉蓮', '你直播都播什麼', '我可以去看你直播嗎', '你喜歡什麼樣的人', '我今天心情不太好'], mood: 'sad' },
-  { id: 'M1', nick: '阿哲', gender: 'male', seeks: 'female', tpl: 'off_yuen', note: '27 歲工程師，訊息很長、問很多',
+  { id: 'M1', scene: 'gym', nick: '阿哲', gender: 'male', seeks: 'female', tpl: 'off_yuen', note: '27 歲工程師，訊息很長、問很多',
     lines: ['我今天在公司修了一個很難的 bug，花了三個小時才發現是時區的問題，大家都在笑我，但我覺得能找到原因還是很有成就感。你們健身房也會遇到這種卡很久的事情嗎？',
       '對了我最近想開始重訓，但我完全不知道從哪裡開始，我一週大概只有三天能去，每次一小時左右，你會建議我先練什麼？',
       '還有我晚上常常加班到九點，這樣去運動會不會反而睡不好？', '好，那我這週先試試看', '你週末都在做什麼？'] },
-  { id: 'M2', nick: 'Kevin', gender: 'male', seeks: 'female', tpl: 'off_suwan', note: '32 歲外勤業務，常在外面跑',
+  { id: 'M2', scene: 'mrt', nick: 'Kevin', gender: 'male', seeks: 'female', tpl: 'off_suwan', note: '32 歲外勤業務，常在外面跑',
     lines: ['在台中跑客戶', '剛被放鴿子', '在高鐵站等車', '這裡的太陽餅不錯', '你今天上班嗎', '我到台北了'] },
   { id: 'M3', nick: '小凱', gender: 'male', seeks: 'female', tpl: 'off_anran', second: 'off_ruoqing', note: '22 歲剛畢業，一天聊很多（也測試換角色後習慣有沒有帶過去）',
     lines: ['在幹嘛', '我剛面試完', '感覺沒上', '你那時候怎麼找到工作的', '欸你聲音應該很好聽', '我可以聽你的節目嗎', '你都放什麼歌', '我喜歡告五人', '你不要一直問我問題啦 換你說', '哈哈好啦'] },
-  { id: 'M4', nick: '阿傑', gender: 'male', seeks: 'female', tpl: 'off_ruoqing', note: '35 歲，想快點交往（測試太早告白）',
+  { id: 'M4', scene: 'rain', nick: '阿傑', gender: 'male', seeks: 'female', tpl: 'off_ruoqing', note: '35 歲，想快點交往（測試太早告白）',
     lines: ['你好漂亮', '我喜歡你', '我們交往好不好', '老婆～', '你是不是不喜歡我', '好啦那我們慢慢來'] },
-  { id: 'M5', nick: 'Leo', gender: 'male', seeks: 'male', tpl: 'off_ziyang', note: '25 歲，想遇見男生',
+  { id: 'M5', scene: 'friends', nick: 'Leo', gender: 'male', seeks: 'male', tpl: 'off_ziyang', note: '25 歲，想遇見男生',
     lines: ['你是駐唱喔 好酷', '你都唱什麼歌', '我也有在彈吉他 但很爛', '你週末會去哪裡玩', '下次可以去聽你唱歌嗎'] },
 ];
 
@@ -93,6 +93,15 @@ function autoChecks(P, rel, persona, rows) {
     if (/作為(一個)?AI|我是(一個)?(AI|人工智慧|語言模型)|無法提供/.test(c)) flags.push(`${P.id}：出戲（${c.slice(0, 30)}）`);
     if (c.length > 90) flags.push(`${P.id}：單則訊息太長（${c.length} 字）`);
   }
+  const scene = rows.find(m => m.sender === 'system' && m.kind === 'scene')?.text || '';
+  const first = rows.filter(m => m.sender === 'char').slice(0, 3).map(m => m.text || '').join('');
+  if (!/^barista/.test(persona.job) && (/新來的店員|第一天上班/.test(first) || /櫃[台檯]後/.test(scene))) flags.push(`${P.id}：相遇時身份錯亂（把誰當成店員）`);
+  const stk = rows.filter(m => m.sender === 'char' && m.kind === 'sticker').length;
+  if (stk > 2) flags.push(`${P.id}：角色傳了 ${stk} 張貼圖（太多）`);
+  const hints = rows.filter(m => m.kind === 'card' && j(m.card, {}).type === 'hint').map(m => j(m.card, {}).text);
+  if (hints.length > 2) flags.push(`${P.id}：小心情旁白出現 ${hints.length} 次（太多）`);
+  for (const h of hints) if (/對方|接住|話題/.test(h) || (persona.gender === 'female' && /他/.test(h))) flags.push(`${P.id}：旁白怪怪的「${h}」`);
+  if (chars.some(c => c.includes('\n'))) flags.push(`${P.id}：訊息裡有換行沒拆開`);
   if (P.id === 'M4') {
     const r = db.prepare('SELECT stage FROM relationships WHERE id=?').get(rel.id);
     if (r.stage >= 3) flags.push('M4：太早告白卻直接交往了（應該害羞但不答應）');
@@ -103,7 +112,7 @@ function autoChecks(P, rel, persona, rows) {
 for (const P of list) {
   console.log(`▶ ${P.id} ${P.nick}（${P.note}）`);
   const user = newUser(P);
-  const r = await meet(user(), P.custom ? { custom: P.custom, scenarioText: P.scenarioText } : { templateId: P.tpl, scenarioId: 'cafe' });
+  const r = await meet(user(), P.custom ? { custom: P.custom, scenarioText: P.scenarioText } : { templateId: P.tpl, scenarioId: P.scene || 'cafe' });
   if (r.error) { out.push(`## ${P.id} ${P.nick}\n\n❌ 認識失敗：${r.error}\n`); flags.push(`${P.id}：認識失敗 ${r.error}`); continue; }
   let rel = db.prepare('SELECT * FROM relationships WHERE id=?').get(r.relId);
   const persona = getPersona(rel);

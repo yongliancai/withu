@@ -164,11 +164,23 @@ export async function meet(user, { templateId, custom, scenarioId, scenarioText,
   const rel = db.prepare('SELECT * FROM relationships WHERE id=?').get(relId);
   for (const s of scene.setting_memories || []) addMemory(rel, 'fact', s, 3, 'setting');
 
+  // 誰是誰：說清楚雙方的身份，不然模型會把「換了新店員」套在錯的人身上
+  const job = JOBS[frame.job];
+  const P = frame.gender === 'female' ? '她' : '他';
+  const who = `${frame.name}是${job?.label || '上班族'}`;
+  const ROLES = {
+    cafe: /^barista/.test(frame.job) ? `你（用戶）是這間咖啡廳的常客；${frame.name}是這裡新來的店員。`
+      : `你（用戶）和${frame.name}都是這間咖啡廳的客人（這間店最近換了新店員，但那不是你們兩個）。${who}，今天剛好坐在你附近或排在你後面。不要寫${P}在櫃台後面工作，也不要問對方是不是新來的店員。`,
+    colleague: `你們在同一棟辦公室、不同部門；${frame.name}是隔壁部門新來的同事（${job?.label || ''}）。`,
+    gym: frame.job === 'trainer' ? `你（用戶）是這間健身房的會員；${frame.name}是這裡的教練。` : `你們都是這間健身房的會員，${who}。`,
+    friends: `你們是朋友聚會上被介紹認識的，${who}。`,
+  };
+  const roles = scenarioText ? '' : (ROLES[scenarioId] || `你們都只是剛好在這裡的人（不是店員），${who}。`);
   // Opening scene narration
   const narration = await jsonCall({
     userId: user.id, kind: 'scene', tier: 'good',
     instructions: `${personaBlock(frame)}\n\n寫一段 2–3 句的相遇場景旁白（第二人稱「你」指用戶），台灣日常、具體、有畫面，最後停在角色注意到你的那一刻（角色是${frame.gender === 'female' ? '女生，用「她」' : '男生，用「他」'}）。不要寫角色的台詞。只輸出 JSON。`,
-    input: [{ role: 'user', content: `情境：${label}\n地點：${scene.place}｜時間：${scene.time}｜氣氛：${scene.mood}\n起始關係：${startFriend ? '本來就認識的朋友' : '陌生人'}${scene.implied_lover ? '（用戶原本寫的是戀人，但你們目前只是朋友）' : ''}` }],
+    input: [{ role: 'user', content: `情境：${label}\n${roles ? '身份：' + roles + '\n' : ''}地點：${scene.place}｜時間：${scene.time}｜氣氛：${scene.mood}\n起始關係：${startFriend ? '本來就認識的朋友' : '陌生人'}${scene.implied_lover ? '（用戶原本寫的是戀人，但你們目前只是朋友）' : ''}` }],
     schema: { type: 'object', additionalProperties: false, properties: { narration: { type: 'string' } }, required: ['narration'] },
     schemaName: 'scene_text',
     mock: { narration: `${label}。你抬起頭的時候，剛好對上一雙有點驚訝的眼睛。` },
@@ -177,7 +189,7 @@ export async function meet(user, { templateId, custom, scenarioId, scenarioText,
   if (scene.implied_lover) addMessage(rel, 'system', 'card', { card: { type: 'hint', text: '戀人關係要靠你們一起慢慢走到，先從朋友開始吧。' } });
 
   logEvent(user.id, 'meet', { rel: relId, origin, scenario: scenarioId || 'free', start: rel.start_type });
-  await runTurn({ user, relId, trigger: `這是你們的第一次相遇（${label}）。${startFriend ? '你們本來就認識，語氣自然但還只是朋友。' : '你們是陌生人，有禮貌、不叫小名、不說曖昧的話。'}${scene.moodId ? `對方今天的心情是「${scene.mood}」，你看得出來；先輕輕關心，不追問。` : ''}由你先開口，一兩句就好；最後留一個對方很好回答的小問題（例如是不是常來、要不要幫忙、喜不喜歡某個東西），不要只丟一句讓人不知道怎麼接的話。suggestions 給三個符合這個場景的回覆。`, triggerKey: 'FIRST' });
+  await runTurn({ user, relId, trigger: `這是你們的第一次相遇（${label}）。${roles.replace(/你（用戶）/g, '對方')}${startFriend ? '你們本來就認識，語氣自然但還只是朋友。' : '你們是陌生人，有禮貌、不叫小名、不說曖昧的話。'}${scene.moodId ? `對方今天的心情是「${scene.mood}」，你看得出來；先輕輕關心，不追問。` : ''}由你先開口，一兩句就好；最後留一個對方很好回答的小問題（例如是不是常來、要不要幫忙、喜不喜歡某個東西），不要只丟一句讓人不知道怎麼接的話。suggestions 給三個符合這個場景的回覆。`, triggerKey: 'FIRST' });
   // 第一次報備或小問題：當天稍晚
   db.prepare('INSERT INTO followups (rel_id,due_at,topic) VALUES (?,?,?)').run(relId, now() + (3 + Math.random() * 3) * 3600e3,
     '你們今天剛認識。傳一個小小的報備或小問題，讓對方感覺你真的存在（例如你正要下班、或想到剛剛的事）');

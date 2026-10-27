@@ -1072,7 +1072,9 @@ async function shrinkImage(file, max = 1280) {
 function applyAppTheme(t) {
   const theme = APP_THEMES.some(([k]) => k === t) ? t : 'milk';
   document.documentElement.dataset.app = theme;
-  if (theme !== 'milk') document.querySelectorAll('meta[name="theme-color"]').forEach(m => { m.content = { night: '#191730', forest: '#EEF2EA' }[theme]; });
+  try { localStorage.setItem('appTheme', theme); } catch {}
+  const bar = { milk: ['#F7EEF0', '#1F1820'], night: ['#16142C', '#16142C'], forest: ['#FFFFFF', '#0F1813'] }[theme];
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m, i) => { m.content = bar[i] || bar[0]; });
 }
 const moodFace = (face = 'idle') => mascotSVG(document.documentElement.dataset.app || 'milk', face);
 // ---------- 心情按鈕：不想打字時按一按，連按越多下代表越強烈 ----------
