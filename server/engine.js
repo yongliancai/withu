@@ -1,6 +1,8 @@
 // 對話編排層：assemble persona + relationship + memories + recent chat, call the model,
 // then apply everything the model decided (memories, stage, meal card, outing, follow-ups…).
 import fs from 'node:fs';
+import { lifeContext } from './lifelog.js';
+import { S } from './settings.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { db, now, j, logEvent } from './db.js';
@@ -160,18 +162,16 @@ function setStage(rel, persona, user, stage) {
 }
 
 // 關係進度的最短天數（從認識那天算）：再常聊也不會一天就變曖昧
-export const AFF_DAILY_CAP = 15;
-export const MIN_DAYS = { friend: 2, flirt: 7 };
 function evaluateStage(rel, persona, user, out) {
   const sp = config.stageSpeed;
   const a = rel.affection, u = rel.understanding;
   const days = (now() - rel.created_at) / 864e5 * sp;
   const loverElsewhere = loverOf(rel.user_id, rel.id);
-  if (rel.stage === 0 && days >= MIN_DAYS.friend && a >= 18 / sp && u >= 6 / sp && rel.user_msg_count >= Math.ceil(8 / sp)) return setStage(rel, persona, user, 1);
+  if (rel.stage === 0 && days >= S('minDaysFriend') && a >= 18 / sp && u >= 6 / sp && rel.user_msg_count >= Math.ceil(8 / sp)) return setStage(rel, persona, user, 1);
   if (loverElsewhere) return; // only one lover at a time; others stay friends
   // 心情低落時認識的人：至少三天後才可能變曖昧
   if (rel.stage === 1 && j(rel.scenario, {}).friend_first && now() - rel.created_at < 3 * 864e5) return;
-  if (rel.stage === 1 && days >= MIN_DAYS.flirt && a >= 45 / sp && u >= 18 / sp && lifeEventCount(rel.id) >= 1) return setStage(rel, persona, user, 2);
+  if (rel.stage === 1 && days >= S('minDaysFlirt') && a >= 45 / sp && u >= 18 / sp && lifeEventCount(rel.id) >= 1) return setStage(rel, persona, user, 2);
   if (rel.stage === 2 && out.relationship_event === 'confession_accepted' && a >= 55) return setStage(rel, persona, user, 3);
   if (rel.stage === 3) {
     const days = (now() - (rel.stage_changed_at || now())) / 864e5;
@@ -376,6 +376,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     world, arc, goals: db.prepare(`SELECT title, days, done FROM goals WHERE rel_id=? AND status='active'`).all(rel.id).map(g => `${g.title}（做到 ${j(g.done, []).length}/${g.days} 天）`),
     episodes: episodesFor(rel.id, userText).map(e => `${new Date(e.created_at).toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric' })}${e.tags ? `（${e.tags}）` : ''} ${e.summary}`),
     selfTopics: selfTopicsToday(rel.id),
+    life: lifeContext(rel.id),
     habits: habitsOf(rel.id), notes: db.prepare('SELECT text FROM notes WHERE rel_id=? AND done=0 ORDER BY id DESC LIMIT 10').all(rel.id).map(n => n.text), told: toldOf(rel.id), summary: rel.summary || '', lateReply, activity,
     lowEffort: !trigger && lowEffortStreak(rel.id),
     userStatus: statusLine(db.prepare('SELECT * FROM users WHERE id=?').get(rel.user_id) || user), userPosts: postsVisibleTo(rel),
@@ -385,7 +386,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   }) });
 
   const call = () => jsonCall({
-    userId: rel.user_id, kind: trigger ? 'proactive' : 'chat', tier, instructions, input,
+    userId: rel.user_id, kind: trigger ? 'proactive' : 'chat', tier, instructions, input, essential: !!crisis,
     schema: TURN_SCHEMA, schemaName: 'turn', cacheKey: `persona:${persona._char.id}`,
     mock: () => mockTurn({ rel, persona, user, userText, imageMedia, trigger: triggerKey === 'FIRST' ? 'FIRST' : trigger, todayMealProposed, crisis, lateReply }),
   });
@@ -432,11 +433,11 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     texts.forEach(tx => addMessage(rel, 'char', 'text', { text: tx, proactive: isProactive, reason: triggerKey }));
   }
 
-  // 好感一天最多加 AFF_DAILY_CAP：聊再多，感情也要靠時間慢慢累積
+  // 好感一天最多加 affDailyCap（後台可調）：聊再多，感情也要靠時間慢慢累積
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei' }).format(new Date());
   const gainedToday = rel.aff_day === today ? rel.aff_gain || 0 : 0;
   let delta = Math.max(-10, Math.min(5, out.affection_delta || 0));
-  if (delta > 0) delta = Math.max(0, Math.min(delta, Math.round(AFF_DAILY_CAP * config.stageSpeed) - gainedToday));
+  if (delta > 0) delta = Math.max(0, Math.min(delta, Math.round(S('affDailyCap') * config.stageSpeed) - gainedToday));
   const aff = Math.max(0, Math.min(100, rel.affection + delta));
   const und = Math.max(0, Math.min(100, rel.understanding + Math.max(0, Math.min(3, out.understanding_delta || 0))));
   db.prepare('UPDATE relationships SET affection=?, understanding=?, aff_day=?, aff_gain=? WHERE id=?').run(aff, und, today, gainedToday + Math.max(0, delta), rel.id);
@@ -485,16 +486,15 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
       db.prepare('UPDATE characters SET persona=? WHERE id=?').run(JSON.stringify(p), persona._char.id);
     }
   }
-  // 生活動態：個人頁上的短文，一天最多 3 則
+  // 生活動態：個人頁上的短文（每天幾則、間隔多久由後台設定）
   if (out.life_post) {
-    const n = db.prepare('SELECT COUNT(*) n FROM posts WHERE rel_id=? AND created_at>?').get(rel.id, now() - 864e5).n;
-    if (n < 3) addPost(rel, out.life_post.slice(0, 100), out.life_post_photo);
+    addPost(rel, out.life_post.slice(0, 100), out.life_post_photo); // 共用關卡會決定要不要真的發
   }
   if (out.told) addTold(rel.id, out.told);
   if (out.self_topic) addSelfTopic(rel.id, out.self_topic);
   // 貼圖不洗版：最近 8 則裡他已經傳過貼圖就不傳
   // 貼圖不洗版：最近 5 輪（對方的 5 則訊息）內傳過就不傳；同一張一天一次；晚安貼圖只在對方要睡時
-  const fifthUser = db.prepare(`SELECT id FROM messages WHERE rel_id=? AND sender='user' ORDER BY id DESC LIMIT 1 OFFSET 4`).get(rel.id)?.id || 0;
+  const fifthUser = db.prepare(`SELECT id FROM messages WHERE rel_id=? AND sender='user' ORDER BY id DESC LIMIT 1 OFFSET ?`).get(rel.id, Math.max(0, S('stickerGapTurns') - 1))?.id || 0;
   const recentSticker = db.prepare(`SELECT 1 FROM messages WHERE rel_id=? AND sender='char' AND kind='sticker' AND id>?`).get(rel.id, fifthUser);
   const sameToday = out.sticker && db.prepare(`SELECT 1 FROM messages WHERE rel_id=? AND sender='char' AND kind='sticker' AND card LIKE ? AND created_at>?`).get(rel.id, `%"id":"${out.sticker}"%`, now() - 864e5);
   const badNight = out.sticker === 'night' && !/晚安|睡了|去睡|要睡|睡覺|先睡/.test(userText || '');

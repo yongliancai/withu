@@ -1,16 +1,20 @@
 // 主動排程引擎：decides when he reaches out (報備、早安晚安、吃飯關心、跟進、好久不見).
 // Frequency = his personality × relationship stage × how she responds × her own settings (highest priority).
 import { db, now, j } from './db.js';
+import { tickLife } from './lifelog.js';
+import { S } from './settings.js';
+import { budgetPaused } from './budget.js';
 import { config } from './config.js';
 import { PROACTIVITY, taipeiParts, toMin, charStatus } from './characters.js';
 import { runTurn, getPersona, finishOuting, endActivity } from './engine.js';
 import { logIssue } from './logger.js';
-import { generatePost, postMoment } from './feed.js';
+import { generatePost, postMoment, canPost } from './feed.js';
 import { shouldHoldProactive, gapLabel as gapLabelFn } from './review.js';
 import { tickArc } from './arcs.js';
 import { anniversariesFor, anniversaryReason } from './anniv.js';
 
 const STAGE_MULT = [0.3, 0.6, 0.9, 1.2, 1.2];
+const firedWindows = new Set(); // 今天已經發過（或試過）的發文時段
 const LEVEL_MULT = { low: 0.5, normal: 1, high: 1.5 };
 
 function inWindow(m, from, to) { return m >= from && m <= to; }
@@ -66,6 +70,8 @@ async function tickRel(rel, user, t, userSentToday) {
     return;
   }
   if (rel.outing_active) return;
+  // 他今天的生活日誌（早上在背景寫好，聊天時直接讀）
+  await tickLife(rel, persona, user);
   // 舊版散步：直接結束，不另外通知
   if (rel.walk_started_at) db.prepare('UPDATE relationships SET walk_started_at=NULL WHERE id=?').run(rel.id);
   // 他在忙／睡覺時收到的訊息：時間到了才回，並推播通知
@@ -81,13 +87,13 @@ async function tickRel(rel, user, t, userSentToday) {
     await runTurn({ user, relId: rel.id, userText: texts.join('\n'), lateReply: { minutes, why: morning ? '在睡覺（現在剛起床）' : why }, notifyUser: true, triggerKey: 'late_reply' });
     return;
   }
-  // 他自己發動態（不傳訊息、不推播）：一天最多兩則，間隔至少三小時
-  const moment = rel.stage >= 0 && postMoment(persona, rel, t);
-  if (moment) {
-    const last = db.prepare('SELECT MAX(created_at) at, SUM(created_at>?) today FROM posts WHERE rel_id=?').get(now() - t.minutes * 60000, rel.id);
-    if ((last.today || 0) < 2 && (!last.at || now() - last.at > 3 * 3600e3) && Math.random() < (config.schedulerMs >= 60000 ? 0.04 : 0.3)) {
-      await generatePost(rel, persona, moment).catch(e => logIssue({ level: 'warn', source: 'scheduler', message: `發動態失敗：${e.message}`, error: e, relId: rel.id }));
-    }
+  // 他自己發動態（不傳訊息、不推播）：每個發文時段當天只決定一次要不要發、在時段裡的哪一分鐘發；
+  // 每天幾則、間隔多久由共用關卡 canPost 控制（後台可調）
+  const moment = postMoment(persona, rel, t);
+  const winKey = moment && `${rel.id}|${t.date}|${moment.label}`;
+  if (moment && moment.fire && !firedWindows.has(winKey) && canPost(rel.id)) {
+    firedWindows.add(winKey);
+    await generatePost(rel, persona, moment.label).catch(e => logIssue({ level: 'warn', source: 'scheduler', message: `發動態失敗：${e.message}`, error: e, relId: rel.id }));
   }
   // 小目標過了兩倍天數還沒完成：安靜結束，不責備
   db.prepare(`UPDATE goals SET status='ended', ended_at=? WHERE rel_id=? AND status='active' AND created_at < ? - days * 2 * 86400000`).run(now(), rel.id, now());
@@ -107,10 +113,10 @@ async function tickRel(rel, user, t, userSentToday) {
   // Follow-ups she created by talking ("明天十點要報告") always win, they are the most personal.
   const due = db.prepare('SELECT * FROM followups WHERE rel_id=? AND done=0 AND due_at<=? ORDER BY due_at LIMIT 1').get(rel.id, now());
   const pro = PROACTIVITY[persona.proactivity] || PROACTIVITY.slow;
-  let budget = pro.base * STAGE_MULT[rel.stage] * (LEVEL_MULT[settings.proactiveLevel] || 1);
+  let budget = pro.base * STAGE_MULT[rel.stage] * (LEVEL_MULT[settings.proactiveLevel] || 1) * S('proactiveMult');
   if (persona.proactivity === 'slow') budget *= 0.7 + rel.stage * 0.25; // 慢熱型越熟越常找你
   if (rel.unanswered >= 2) budget *= 0.5;                                 // 常已讀不回就收斂
-  const capped = today.count >= Math.max(1, Math.round(budget));
+  const capped = S('proactiveMult') <= 0 || today.count >= Math.max(1, Math.round(budget));
 
   let pick = null;
   const holdFollowup = due && shouldHoldProactive(rel, persona, 'followup');
@@ -143,6 +149,7 @@ async function tickRel(rel, user, t, userSentToday) {
 let running = false;
 export async function tick() {
   if (running) return;
+  if (budgetPaused()) return; // 超過預算：主動訊息、動態、連續劇都先停
   running = true;
   try {
     const t = taipeiParts();

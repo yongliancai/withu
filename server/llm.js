@@ -2,6 +2,7 @@ import OpenAI, { toFile } from 'openai';
 import { config } from './config.js';
 import { db, now } from './db.js';
 import { logIssue } from './logger.js';
+import { budgetPaused } from './budget.js';
 
 export const openai = config.mock ? null : new OpenAI({ apiKey: config.openaiKey });
 
@@ -17,7 +18,9 @@ function logUsage(userId, kind, model, usage, units = 0) {
  * Call the Responses API and get JSON back that matches `schema`.
  * tier: 'cheap' | 'good'
  */
-export async function jsonCall({ userId, kind, tier = 'cheap', instructions, input, schema, schemaName, cacheKey, mock }) {
+export async function jsonCall({ userId, kind, tier = 'cheap', instructions, input, schema, schemaName, cacheKey, mock, essential = false }) {
+  // 超過預算且設定為暫停：除了危機時的回覆，其他 AI 呼叫都先停下來
+  if (!essential && budgetPaused()) throw Object.assign(new Error('超過預算，AI 暫停中'), { code: 'budget_paused' });
   if (config.mock) {
     const out = typeof mock === 'function' ? mock() : mock;
     logUsage(userId, kind, 'mock', { input_tokens: 0, output_tokens: 0 });

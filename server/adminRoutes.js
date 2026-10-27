@@ -149,9 +149,9 @@ export function mountAdmin(app) {
   });
 
   A('get', '/officials', (req, res) => {
-    res.json(db.prepare(`SELECT id, data, uses FROM templates WHERE kind='official' ORDER BY id`).all().map(t => {
+    res.json(db.prepare(`SELECT id, data, uses, status FROM templates WHERE kind='official' ORDER BY created_at, id`).all().map(t => {
       const f = j(t.data, {});
-      return { id: t.id, uses: t.uses, name: f.name, gender: f.gender, jobLabel: f.jobLabel, archetype: f.archetype, ...Object.fromEntries(EDITABLE.map(k => [k, f[k]])) };
+      return { id: t.id, uses: t.uses, status: t.status, name: f.name, gender: f.gender, jobLabel: f.jobLabel, archetype: f.archetype, ...Object.fromEntries(EDITABLE.map(k => [k, f[k]])) };
     }));
   });
   A('post', '/officials/:id', (req, res) => {

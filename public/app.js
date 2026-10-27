@@ -458,7 +458,7 @@ async function renderChatList() {
     const others = active.filter(r => r !== lover).sort((a, b) => (b.starred - a.starred) || ((b.last?.at || 0) - (a.last?.at || 0)));
     app.innerHTML = `<div class="page">
       ${S.me.mock ? '<div class="banner-test">測試模式：尚未設定 OpenAI 金鑰，回覆為範例</div>' : ''}
-      <h1>聊天</h1>${installBanner()}<div id="annBanner"></div>
+      <h1>聊天</h1>${installBanner()}<div id="sysAnn"></div><div id="annBanner"></div>
       ${lover ? `<a class="lover-card" href="#/chat/${lover.id}">${avatar(lover.frame, 72, { lover: true })}
         <span class="grow" style="min-width:0"><span class="name">${esc(displayName(lover.frame))}</span>
         ${lover.statusLine && Date.now() - lover.statusLineAt < 12 * 3600e3
@@ -476,6 +476,14 @@ async function renderChatList() {
     <button class="mood-fab" id="moodFab" aria-label="心情按鈕">${moodFace()}</button>`;
     bindInstall();
     $('#moodFab').onclick = () => openMoodButton();
+    // 伴旅的公告（後台發的）：看過、按掉就不再出現
+    api('/api/announcements').then(list => {
+      let gone = []; try { gone = JSON.parse(localStorage.getItem('annGone') || '[]'); } catch {}
+      const a = list.find(x => !gone.includes(x.id));
+      if (!a || !$('#sysAnn')) return;
+      $('#sysAnn').innerHTML = `<div class="sys-ann" role="status"><span class="sys-ann-art">${moodFace('happy')}</span><span class="grow">${esc(a.text)}</span><button class="icon-btn" aria-label="知道了">${icon('x')}</button></div>`;
+      $('#sysAnn button').onclick = () => { try { localStorage.setItem('annGone', JSON.stringify([...gone, a.id].slice(-30))); } catch {} $('#sysAnn').innerHTML = ''; };
+    }).catch(() => {});
     api('/api/anniversaries').then(list => {
       const a = list.find(x => x.kind === 'his_birthday') || list[0];
       if (!a || !$('#annBanner')) return;

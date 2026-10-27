@@ -1,4 +1,8 @@
 import express from 'express';
+import { S } from './settings.js';
+import { deleteAccount } from './account.js';
+import { mountAdminMore, activeAnnouncements } from './adminMore.js';
+import { budgetPaused } from './budget.js';
 import cookieParser from 'cookie-parser';
 import multer from 'multer';
 import fs from 'node:fs';
@@ -56,6 +60,7 @@ function auth(req, res, next) {
   next();
 }
 const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch(e => {
+  if (e?.code === 'budget_paused') return res.status(503).json({ error: '伴旅暫時休息中，晚一點再試一次。' });
   logIssue({ source: 'server', message: `${req.method} ${req.route?.path || req.path}：${e.message}`, error: e,
     detail: { path: req.originalUrl.replace(/[?].*/, '') }, userId: req.user?.id, relId: req.params?.id });
   if (e?.status === 429 || e?.code === 'credit_balance_exhausted') {
@@ -186,24 +191,7 @@ app.get('/api/me/export', auth, (req, res) => {
 });
 
 app.delete('/api/me', auth, (req, res) => {
-  const uid = req.user.id;
-  const files = [
-    ...db.prepare('SELECT media FROM messages WHERE user_id=? AND media IS NOT NULL').all(uid).map(r => r.media),
-    ...db.prepare('SELECT media FROM user_posts WHERE user_id=? AND media IS NOT NULL').all(uid).map(r => r.media),
-    ...(req.user.avatar ? [req.user.avatar] : []),
-  ];
-  for (const f of files) for (const dir of ['uploads', 'audio']) fs.rmSync(path.join(config.dataDir, dir, path.basename(f)), { force: true });
-  db.prepare('DELETE FROM templates WHERE creator_user_id=?').run(uid);
-  db.prepare('DELETE FROM events WHERE user_id=?').run(uid);
-  db.prepare('DELETE FROM usage WHERE user_id=?').run(uid);
-  db.prepare('DELETE FROM messages WHERE user_id=?').run(uid);
-  db.prepare('DELETE FROM memories WHERE user_id=?').run(uid);
-  db.prepare('DELETE FROM story WHERE user_id=?').run(uid);
-  db.prepare('DELETE FROM logs WHERE user_id=?').run(uid);
-  db.prepare('DELETE FROM story_views WHERE user_id=?').run(uid);
-  db.prepare('DELETE FROM self_topics WHERE rel_id IN (SELECT id FROM relationships WHERE user_id=?)').run(uid);
-  db.prepare('DELETE FROM daily_use WHERE user_id=?').run(uid);
-  db.prepare('DELETE FROM users WHERE id=?').run(uid); // cascades
+  deleteAccount(req.user.id);
   res.clearCookie('sid');
   res.json({ ok: true });
 });
@@ -433,9 +421,17 @@ async function replyOrDefer(user, rel, { userText = '', imageMedia = null, trigg
   const persona = getPersona(fresh);
   const settings = j(user.settings, {});
   const crisis = crisisSignal(userText);
+  // 超過預算、暫停中：一天只提醒一次（危機訊息照常回）
+  if (!crisis && budgetPaused()) {
+    const day = taipeiDay();
+    const seen = db.prepare(`SELECT 1 FROM messages WHERE rel_id=? AND kind='card' AND card LIKE '%budget_paused%' AND created_at>?`).get(fresh.id, now() - 12 * 3600e3);
+    if (!seen) addMessage(fresh, 'system', 'card', { card: { type: 'info', key: 'budget_paused', text: '伴旅暫時休息中，角色晚一點才能回覆你。訊息都有收到，不會不見。' } });
+    logEvent(user.id, 'budget_paused', { day });
+    return { capped: true };
+  }
   if (!crisis) {
     const use = dailyUse(user.id);
-    if (use.replies >= config.dailyReplyCap) {
+    if (use.replies >= S('dailyReplyCap')) {
       if (use.capped) return { capped: true };
       db.prepare('UPDATE daily_use SET capped=1 WHERE user_id=? AND day=?').run(user.id, use.day);
       TIRED[Math.floor(Math.random() * TIRED.length)].forEach(t => addMessage(fresh, 'char', 'text', { text: t }));
@@ -445,7 +441,7 @@ async function replyOrDefer(user, rel, { userText = '', imageMedia = null, trigg
     }
     db.prepare('UPDATE daily_use SET replies=replies+1 WHERE user_id=? AND day=?').run(user.id, use.day);
     if (imageMedia) {
-      if (use.photos >= config.dailyPhotoCap) {
+      if (use.photos >= S('dailyPhotoCap')) {
         imageMedia = null; // 不再看照片內容，請他自然地說明天再看
         userText = `${userText}\n（系統：對方傳了一張照片，但你今天已經看了很多照片、現在看不清楚。自然地說等明天再好好看，不要假裝知道照片內容。）`;
       } else db.prepare('UPDATE daily_use SET photos=photos+1 WHERE user_id=? AND day=?').run(user.id, use.day);
@@ -489,6 +485,8 @@ app.get('/api/rels/:id/search', auth, (req, res) => {
   res.json(db.prepare(`SELECT id, sender, text, created_at at FROM messages WHERE rel_id=? AND kind IN ('text','voice') AND text LIKE ? ORDER BY id DESC LIMIT 50`)
     .all(rel.id, `%${q.replace(/[%_]/g, '')}%`));
 });
+app.get('/api/announcements', auth, (req, res) => res.json(activeAnnouncements()));
+
 // 依主題找聊天片段：每幾輪整理出來、有標籤的對話摘要
 app.get('/api/rels/:id/episodes', auth, (req, res) => {
   const rel = ownRel(req, res); if (!rel) return;
@@ -860,6 +858,7 @@ app.post('/api/admin/tick', (req, res) => {
 });
 
 mountAdmin(app);
+mountAdminMore(app);
 // 照片庫（後台）
 const adminOk = (req) => config.adminToken && (req.headers.authorization || '') === `Bearer ${config.adminToken}`;
 app.get('/api/admin/photos', (req, res) => {

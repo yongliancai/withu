@@ -1,4 +1,5 @@
 import { db, now, j } from './db.js';
+import { S } from './settings.js';
 import { jsonCall } from './llm.js';
 import { logIssue } from './logger.js';
 
@@ -90,7 +91,7 @@ export async function consolidateMemories(rel, persona, user) {
   if (consolidating.has(rel.id)) return;
   const fresh = db.prepare('SELECT * FROM relationships WHERE id=?').get(rel.id);
   const msgs = db.prepare(`SELECT id, sender, kind, text FROM messages WHERE rel_id=? AND id>? AND sender IN ('user','char') AND text IS NOT NULL ORDER BY id LIMIT 60`).all(rel.id, fresh.mem_upto || 0);
-  if (msgs.filter(m => m.sender === 'user').length < 4) return;
+  if (msgs.filter(m => m.sender === 'user').length < S('memoryEvery')) return;
   consolidating.add(rel.id);
   try {
     const mems = db.prepare(`SELECT id, kind, content, tags FROM memories WHERE rel_id=? AND kind != 'style' AND source != 'setting' ORDER BY id`).all(rel.id);

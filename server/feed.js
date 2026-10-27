@@ -1,10 +1,12 @@
 // 動態牆：他自己發的生活動態（文字＋寫實照片），你可以按讚、留言，他會回你的留言。
 import { db, now, j, logEvent } from './db.js';
+import { lifeContext } from './lifelog.js';
+import { S } from './settings.js';
 import { jsonCall } from './llm.js';
 import { personaBlock } from './prompt.js';
 import { PHOTO_TAGS, pickPhoto, photoById } from './photos.js';
 import { taipeiParts, describeNow, charStatus } from './characters.js';
-import { toldOf, addTold } from './memory.js';
+import { toldOf, addTold, similarity } from './memory.js';
 import { presenceOf } from './presence.js';
 import { logIssue } from './logger.js';
 
@@ -22,7 +24,24 @@ db.exec(`CREATE TABLE IF NOT EXISTS post_comments (
 
 const TAG_LIST = Object.keys(PHOTO_TAGS);
 
+// 共用關卡：不管是排程、聊天中、還是生活連續劇，發動態都要過這一關
+// （今天幾則、離上一則多久、內容跟最近的不能太像），避免一分鐘內連發兩則。
+const dayStartTpe = () => { const t = taipeiParts(); return now() - t.minutes * 60000; };
+export function canPost(relId, text = '') {
+  const st = db.prepare('SELECT COUNT(*) n FROM posts WHERE rel_id=? AND created_at>=?').get(relId, dayStartTpe());
+  if (st.n >= S('postPerDay')) return false;
+  const last = db.prepare('SELECT text, created_at FROM posts WHERE rel_id=? ORDER BY id DESC LIMIT 1').get(relId);
+  if (last && now() - last.created_at < S('postGapHours') * 3600e3) return false;
+  if (text) {
+    const recent = db.prepare('SELECT text FROM posts WHERE rel_id=? ORDER BY id DESC LIMIT 10').all(relId);
+    if (recent.some(r => similarity(r.text || '', text) >= 0.5)) return false;
+  }
+  return true;
+}
+
+/** 發一則動態；沒通過關卡就不發，回傳 null。 */
 export function addPost(rel, text, tag, { story = false } = {}) {
+  if (!canPost(rel.id, text)) return null;
   const photo = tag && PHOTO_TAGS[tag] ? pickPhoto(tag) : null;
   return db.prepare('INSERT INTO posts (rel_id,text,photo_id,photo_tag,story,expires_at,created_at) VALUES (?,?,?,?,?,?,?)')
     .run(rel.id, String(text).slice(0, 120), photo?.id || null, tag || null, story ? 1 : 0, story ? now() + 24 * 3600e3 : null, now()).lastInsertRowid;
@@ -36,6 +55,7 @@ export async function generatePost(rel, persona, moment) {
     instructions: `${personaBlock(persona)}
 
 你要在自己的社群帳號（像 IG、Threads）發一則動態。現在是 ${describeNow()}，你此刻：${charStatus(persona).label}。時機：${moment}。
+你今天的生活手帳（動態內容要跟這裡一致，挑一件已經發生的事來發）：${lifeContext(rel.id).join('；') || '（沒有）'}
 - 第一人稱，20–60 字，像真人發文：具體、有畫面、有一點心情，可以有一兩個表情符號或 hashtag。
 - 內容是你自己的生活（可以延續「你生活中正在進行的事」，要有新進展），不要提到和你聊天的那個人，也不要寫對方的任何私事。
 - photo_tag 從這些類別挑一個最符合的照片：${TAG_LIST.join('、')}；這則不適合配照片就填 null。
@@ -54,23 +74,38 @@ export async function generatePost(rel, persona, moment) {
     },
   });
   if (!res.text) return null;
-  addTold(rel.id, res.told);
   // 有照片的有時候發成限時動態（24 小時後消失）
   const id = addPost(rel, res.text, res.photo_tag, { story: !!res.photo_tag && Math.random() < 0.45 });
+  if (!id) return null;
+  addTold(rel.id, res.told);
   logEvent(rel.user_id, 'post', { rel: rel.id });
   return id;
 }
 
 // 一天最多兩則：午休、下班後、休假的午後
+function hash01(str) {
+  let h = 2166136261;
+  for (const c of str) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); }
+  return ((h >>> 0) % 10000) / 10000;
+}
+// 發文時段：午休、下班後、休假的午後。每個時段當天用固定亂數決定「發不發」和「在第幾分鐘發」，
+// 所以不會因為排程每分鐘跑一次就變得很頻繁。
 export function postMoment(persona, rel, t) {
   const s = persona.schedule || { start: '09:00', end: '18:00', days: [1, 2, 3, 4, 5] };
   const workday = s.days.includes(t.weekday);
   const toMin = (x) => { const [h, m] = x.split(':').map(Number); return h * 60 + m; };
-  const m = t.minutes, end = toMin(s.end);
-  if (workday && m >= 12 * 60 && m < 13 * 60 + 30) return '午休時間，分享午餐或工作空檔看到的東西';
-  if (workday && m >= end + 40 && m < end + 180 && m < 23 * 60 + 30) return '下班後，分享今天的一件事或回家路上看到的東西';
-  if (!workday && m >= 14 * 60 && m < 18 * 60) return `休假的午後（${persona.weekend || '在家休息'}）`;
-  return null;
+  const end = toMin(s.end);
+  const wins = [];
+  if (workday && end > 13 * 60 + 30) wins.push({ key: 'lunch', from: 12 * 60, to: 13 * 60 + 30, label: '午休時間，分享午餐或工作空檔看到的東西' });
+  if (workday && end + 40 < 23 * 60) wins.push({ key: 'after', from: end + 40, to: Math.min(end + 180, 23 * 60 + 30), label: '下班後，分享今天的一件事或回家路上看到的東西' });
+  if (!workday) wins.push({ key: 'off', from: 14 * 60, to: 18 * 60, label: `休假的午後（${persona.weekend || '在家休息'}）` });
+  const w = wins.find(x => t.minutes >= x.from && t.minutes < x.to);
+  if (!w) return null;
+  const seed = `${rel.id}|${t.date}|${w.key}`;
+  const go = hash01(seed + '|go') < S('postWindowChance');
+  const at = w.from + Math.floor(hash01(seed + '|at') * (w.to - w.from - 10));
+  // 到了那一分鐘之後才發（之後每分鐘都可能再檢查，但 canPost 會擋住重複）
+  return { label: w.label, fire: go && t.minutes >= at };
 }
 
 export function feedFor(userId) {

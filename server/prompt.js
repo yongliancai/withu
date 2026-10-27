@@ -144,7 +144,7 @@ function meetLine(rel) {
   return `你們的相遇：${sc.label || '（未記錄）'}${rel.start_type === 'friend' ? '（本來就認識）' : ''}，${days === 0 ? '就是今天' : `${days} 天前`}${sad}`;
 }
 
-export function contextBlock({ episodes = [], selfTopics = [], prefs = null, goals = [], world = [], arc = null, lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
+export function contextBlock({ life = [], episodes = [], selfTopics = [], prefs = null, goals = [], world = [], arc = null, lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
   const st = charStatus(persona);
   // 剛認識的這幾個小時：他的狀態以相遇場景為準，不然會變成「剛剛在咖啡廳上班、下一句說今天休假」
   let sc0 = {}; try { sc0 = JSON.parse(rel.scenario || '{}'); } catch {}
@@ -166,6 +166,7 @@ export function contextBlock({ episodes = [], selfTopics = [], prefs = null, goa
     world.length ? `## 你們生活的世界（真實的天氣與日子）\n${world.map(x => '- ' + x).join('\n')}` : '',
     goals.length ? `## 你們一起在做的小目標（不用連續，做不到也沒關係）\n${goals.map(g => '- ' + g).join('\n')}` : '',
     arc ? `## 你生活中正在發生的事（連續劇）\n${arc}` : '',
+    life.length ? `## 你的生活手帳（你自己的日子，說到自己在做什麼、做過什麼時要跟這裡一致）\n${life.map(x => '- ' + x).join('\n')}` : '',
     userStatus ? `對方現在的狀態（對方自己設定的）：${userStatus}` : '',
     userPosts.length ? `## 對方最近發的動態（你有看到）\n${userPosts.map(x => '- ' + x).join('\n')}\n可以自然地提起或關心，但不要每次都提。` : '',
     stLine,

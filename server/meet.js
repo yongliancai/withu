@@ -1,12 +1,14 @@
 // 新用戶流程與相遇：scenario structuring, character creation, the opening scene, and 角色廣場 sharing.
 import { db, now, j, logEvent } from './db.js';
+import { writeToday } from './lifelog.js';
+import { S } from './settings.js';
 import { config } from './config.js';
 import { jsonCall, moderate } from './llm.js';
 import { logIssue } from './logger.js';
 import { JOBS, ARCHETYPES, SCENARIOS, OFFICIAL, MOODS, frameFromOfficial, AVATAR_HUES } from './characters.js';
 import { personaBlock } from './prompt.js';
 import { addMemory } from './memory.js';
-import { id, addMessage, runTurn, ta } from './engine.js';
+import { id, addMessage, runTurn, ta, getPersona } from './engine.js';
 
 export function seedOfficial() {
   // 新角色直接加入；已存在的只補上缺少的欄位，不覆蓋你在後台改過的設定。
@@ -103,7 +105,7 @@ export async function structureScenario(userId, text, frame) {
 /** Create character + relationship + opening scene, then let him speak first. */
 export async function meet(user, { templateId, custom, scenarioId, scenarioText, reunionRelId, mood: moodId }) {
   const active = db.prepare(`SELECT COUNT(*) n FROM relationships WHERE user_id=? AND status='active'`).get(user.id).n;
-  if (active >= config.maxActive) return { error: `目前最多同時和 ${config.maxActive} 位角色往來。` };
+  if (active >= S('maxActive')) return { error: `目前最多同時和 ${S('maxActive')} 位角色往來。` };
 
   // 緣分重逢: he comes back with his memories.
   if (reunionRelId) {
@@ -199,6 +201,9 @@ export async function meet(user, { templateId, custom, scenarioId, scenarioText,
     throw e;
   }
   if (templateId) db.prepare('UPDATE templates SET uses=uses+1 WHERE id=?').run(templateId);
+  // 他今天的生活日誌：在背景寫，不讓使用者等
+  const relRow = db.prepare('SELECT * FROM relationships WHERE id=?').get(relId);
+  writeToday(relRow, getPersona(relRow)).catch(() => {});
   return { relId };
 }
 

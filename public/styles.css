@@ -531,6 +531,11 @@ a { color: inherit; }
 .ann-left { font-size:13px; font-weight:600; color:#C2477F; white-space:nowrap; }
 .ann-banner { display:block; margin:6px 0 12px; padding:10px 14px; border-radius:14px; background:linear-gradient(135deg,#FBE3EA,#EFE7FB); color:#3B3561; text-decoration:none; font-weight:600; }
 
+/* ---- 系統公告 ---- */
+.sys-ann { display:flex; align-items:center; gap:10px; margin:6px 0 12px; padding:10px 6px 10px 12px; border-radius:16px; background:var(--surface); box-shadow:0 0 0 1px var(--line); font-size:14px; }
+.sys-ann-art { width:36px; height:36px; flex:none; } .sys-ann-art svg { width:100%; height:100%; }
+.sys-ann .grow { flex:1; min-width:0; }
+
 /* ---- 新版本提示 ---- */
 .update-bar { position:fixed; left:50%; transform:translateX(-50%); top:calc(env(safe-area-inset-top) + 10px); z-index:90; display:flex; align-items:center; gap:12px; background:var(--ink); color:var(--paper); padding:10px 10px 10px 16px; border-radius:999px; box-shadow:0 8px 24px rgba(0,0,0,.2); font-size:14px; animation:dropin .35s ease-out; }
 .update-bar button { border:0; background:var(--rose); color:#fff; border-radius:999px; padding:6px 14px; font:inherit; font-weight:600; }

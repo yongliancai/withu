@@ -43,3 +43,16 @@ export async function notify(user, { name, text, relId }) {
     }
   }
 }
+
+/** 公告推播：送給所有開了通知、沒被停用的人（勿擾時段改成靜音）。回傳送出幾個裝置。 */
+export async function broadcast({ title, body }) {
+  if (!enabled) return 0;
+  let n = 0;
+  const rows = db.prepare('SELECT s.*, u.settings FROM push_subs s JOIN users u ON u.id=s.user_id WHERE COALESCE(u.disabled,0)=0').all();
+  for (const s of rows) {
+    const payload = JSON.stringify({ title: title || '伴旅', body: String(body).slice(0, 120), url: '/#/chat', tag: 'announce', silent: inDnd(j(s.settings, {})) });
+    try { await webpush.sendNotification(JSON.parse(s.sub), payload, { TTL: 24 * 3600 }); n++; }
+    catch (e) { if (e.statusCode === 404 || e.statusCode === 410) db.prepare('DELETE FROM push_subs WHERE endpoint=?').run(s.endpoint); }
+  }
+  return n;
+}

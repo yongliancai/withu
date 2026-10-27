@@ -79,12 +79,18 @@ function formatDetail(d) {
   return s;
 }
 
-const TABS = [['stats', '數據'], ['officials', '官方角色'], ['invites', '邀請碼'], ['testers', '測試者'], ['square', '角色廣場'], ['trends', '流行新品'], ['feedback', '意見回饋'], ['crisis', '危機事件'], ['styles', '說話風格'], ['photos', '照片庫'], ['logs', '系統紀錄']];
+const TABS = [['stats', '數據'], ['costs', '費用'], ['settings', '系統設定'], ['announce', '公告'], ['officials', '官方角色'], ['invites', '邀請碼'], ['testers', '測試者'], ['square', '角色廣場'], ['trends', '流行新品'], ['feedback', '意見回饋'], ['crisis', '危機事件'], ['styles', '說話風格'], ['photos', '照片庫'], ['logs', '系統紀錄']];
 function drawTabs() {
   document.getElementById('login').hidden = true;
   const n = document.getElementById('tabs'); n.hidden = false;
   n.innerHTML = TABS.map(([k, l]) => `<button data-t="${k}" aria-pressed="${k === TAB}">${l}</button>`).join('');
   n.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { TAB = b.dataset.t; location.hash = TAB; drawTabs(); render(); });
+  // 預算快用完／已超過：每一頁上方都提醒
+  api('/costs').then(c => {
+    const st = c.state; let el = document.getElementById('budgetBar');
+    if (!el) { el = document.createElement('div'); el.id = 'budgetBar'; n.after(el); }
+    el.innerHTML = st.alert ? `<div class="notice">${st.over ? `<b>已超過預算</b>${st.paused ? '，AI 回覆已暫停（危機訊息照常回）' : '（沒有設定暫停）'}` : '<b>花費快到預算了</b>'}：今天 US$${st.dayUsd}${st.dailyLimit ? ` / ${st.dailyLimit}` : ''}，本月 US$${st.monthUsd}${st.monthlyLimit ? ` / ${st.monthlyLimit}` : ''}。到「系統設定 → 預算」調整。</div>` : '';
+  }).catch(() => {});
 }
 async function render() {
   out.innerHTML = '<p class="muted">載入中…</p>';
@@ -153,12 +159,32 @@ const VIEWS = {
 
   // ------------------------------------------------ 官方角色
   async officials() {
-    const list = await api('/officials');
+    const [list, opt] = await Promise.all([api('/officials'), api('/officials/options')]);
+    const sel2 = (name, items, label) => `<label class="small muted">${label}<br><select name="${name}">${items.map(o => `<option value="${esc(o.id)}">${esc(o.label)}</option>`).join('')}</select></label>`;
     out.innerHTML = `
+      <details class="card"><summary><b>＋ 新增官方角色</b> <span class="muted small">新增後立刻出現在 App 的「探索」</span></summary>
+        <form id="newOff" style="margin-top:10px">
+          <div class="row-form">
+            <label class="small muted">名字<br><input name="name" maxlength="12" required></label>
+            <label class="small muted">性別<br><select name="gender"><option value="male">男</option><option value="female">女</option></select></label>
+            <label class="small muted">年齡<br><input name="age" type="number" min="20" max="45" value="27" style="width:80px"></label>
+            <label class="small muted">國籍<br><input name="nationality" value="台灣" style="width:90px"></label>
+            <label class="small muted">住哪一區<br><input name="home" placeholder="台北市大安區" style="width:140px"></label>
+            <label class="small muted">生日（MM-DD）<br><input name="birthday" placeholder="05-12" style="width:90px"></label>
+          </div>
+          <div class="row-form">${sel2('job', opt.jobs, '職業（決定作息）')}${sel2('archetype', opt.archetypes.map(a => ({ id: a.id, label: a.label + (a.for === 'male' ? '（男）' : a.for === 'female' ? '（女）' : '') })), '個性類型')}${sel2('proactivity', opt.proactivity, '主動程度')}
+            <label class="small muted">聲音<br><select name="voice">${[...opt.voices.male.map(v => ({ ...v, g: '男' })), ...opt.voices.female.map(v => ({ ...v, g: '女' }))].map(v => `<option value="${v.id}">${v.g}・${esc(v.label)}</option>`).join('')}</select></label></div>
+          <p class="small muted" style="margin:6px 0 2px">分類</p><div class="row-form">${opt.categories.map(c => `<label class="small"><input type="checkbox" name="cats" value="${c.id}"> ${esc(c.label)}</label>`).join('')}</div>
+          ${[['intro', '一句介紹（必填）'], ['traits', '核心性格（必填）'], ['values', '價值觀與邊界'], ['weekend', '休假時做什麼'], ['appearance', '外觀'], ['signature', '個性簽名']].map(([k, l]) => `<label class="small muted" style="display:block;margin-top:6px">${l}<input name="${k}" style="width:100%"></label>`).join('')}
+          <label class="small muted" style="display:block;margin-top:6px">口頭禪（一行一個）<textarea name="catchphrases" rows="2" style="width:100%"></textarea></label>
+          <label class="small muted" style="display:block;margin-top:6px">生活中正在進行的事（一行一個）<textarea name="threads" rows="3" style="width:100%"></textarea></label>
+          <p style="margin-top:10px"><button>新增角色</button></p>
+        </form></details>
       <p class="muted">每週檢查後調整官方角色。改動會套用到之後新認識的人；勾選「同步」也會更新還沒定型（還沒到曖昧）的角色，但不會動到他們在相處中長出來的個性和記憶。</p>
       ${list.map(o => `<form class="card" data-id="${o.id}">
-        <div class="row-form" style="justify-content:space-between;margin:0 0 8px"><b>${esc(o.name)} <span class="muted small">${o.gender === 'female' ? '女' : '男'}・${esc(o.jobLabel)}・被認識 ${o.uses} 次</span></b>
-          <span><label class="small"><input type="checkbox" name="syncUnlocked"> 同步到還沒定型的角色</label> <button>儲存</button></span></div>
+        <div class="row-form" style="justify-content:space-between;margin:0 0 8px"><b>${esc(o.name)} <span class="muted small">${o.gender === 'female' ? '女' : '男'}・${esc(o.jobLabel)}・被認識 ${o.uses} 次</span> ${o.status === 'hidden' ? '<span class="tag off">已下架</span>' : '<span class="tag on">上架中</span>'}</b>
+          <span><button type="button" class="sm ${o.status === 'hidden' ? 'ghost' : 'danger'}" data-st="${o.id}" data-v="${o.status === 'hidden' ? 'published' : 'hidden'}">${o.status === 'hidden' ? '重新上架' : '下架'}</button>
+          <label class="small"><input type="checkbox" name="syncUnlocked"> 同步到還沒定型的角色</label> <button>儲存</button></span></div>
         ${[['intro', '一句介紹'], ['signature', '預設個性簽名'], ['traits', '核心性格'], ['values', '價值觀與邊界'], ['weekend', '休假時做什麼'], ['appearance', '外觀']].map(([k, l]) =>
           `<label class="small muted" style="display:block;margin-top:6px">${l}<input name="${k}" value="${esc(o[k] || '')}" style="width:100%"></label>`).join('')}
         <label class="small muted" style="display:block;margin-top:6px">口頭禪（一行一個）<textarea name="catchphrases" rows="2" style="width:100%">${esc((o.catchphrases || []).join('\n'))}</textarea></label>
@@ -174,6 +200,18 @@ const VIEWS = {
       const r = await api('/officials/' + f.dataset.id, 'POST', body);
       toast(r.synced ? `已儲存，並同步到 ${r.synced} 個角色` : '已儲存');
     });
+    out.querySelectorAll('[data-st]').forEach(b => b.onclick = async () => {
+      if (b.dataset.v === 'hidden' && !confirm('下架後新的人不會在探索看到這個角色；已經認識的人不受影響。')) return;
+      await api(`/officials/${b.dataset.st}/status`, 'POST', { status: b.dataset.v }); render();
+    });
+    document.getElementById('newOff').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const body = Object.fromEntries([...fd.entries()].filter(([k]) => k !== 'cats'));
+      body.cats = fd.getAll('cats');
+      const r = await api('/officials', 'POST', body);
+      toast('已新增：' + body.name); render();
+    };
   },
 
   // ------------------------------------------------ 邀請碼
@@ -212,9 +250,10 @@ const VIEWS = {
       ${list.map(u => `<tr><td class="nw">${esc(u.nickname)}</td><td>${COH[u.cohort]}</td><td>${{ female: '女', male: '男', other: '不說' }[u.gender] || '—'}</td><td>${SEEK[u.seeks] || ''}</td>
         <td><code>${esc(u.invite || '')}</code></td><td>${u.rels}</td><td class="nw">${dt(u.createdAt)}</td><td class="nw">${dt(u.lastActiveAt)}</td>
         <td>${u.disabled ? '<span class="tag off">已停用</span>' : '<span class="tag on">使用中</span>'}</td>
-        <td class="nw"><button class="sm ghost" data-code="${u.id}">重發登入碼</button> <button class="sm ${u.disabled ? 'ghost' : 'danger'}" data-dis="${u.id}" data-v="${u.disabled ? 0 : 1}">${u.disabled ? '恢復' : '停用'}</button></td></tr>`).join('') || '<tr><td colspan="10" class="muted">還沒有測試者</td></tr>'}
+        <td class="nw"><button class="sm" data-detail="${u.id}">詳細</button> <button class="sm ghost" data-code="${u.id}">重發登入碼</button> <button class="sm ${u.disabled ? 'ghost' : 'danger'}" data-dis="${u.id}" data-v="${u.disabled ? 0 : 1}">${u.disabled ? '恢復' : '停用'}</button></td></tr>`).join('') || '<tr><td colspan="10" class="muted">還沒有測試者</td></tr>'}
       </tbody></table></div>
       <div id="codeOut"></div>`;
+    out.querySelectorAll('[data-detail]').forEach(b => b.onclick = () => showTester(b.dataset.detail));
     out.querySelectorAll('[data-code]').forEach(b => b.onclick = async () => {
       const u = list.find(x => x.id === b.dataset.code);
       if (!confirm(`要幫「${u.nickname}」重新產生登入碼嗎？舊的登入碼會失效，但目前已登入的裝置不受影響。`)) return;
@@ -336,7 +375,7 @@ const VIEWS = {
     const q = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
     const d = await api('/logs?' + q);
     const LV = { error: ['錯誤', 'off'], warn: ['警告', 'warn'], report: ['使用者回報', 'on'] };
-    const SRC = { server: '伺服器', scheduler: '主動訊息', llm: 'AI 模型', tts: '語音合成', stt: '語音轉文字', push: '推播', client: '手機端', user: '使用者回報', scenario: '相遇情境' };
+    const SRC = { server: '伺服器', budget: '預算', scheduler: '主動訊息', llm: 'AI 模型', tts: '語音合成', stt: '語音轉文字', push: '推播', client: '手機端', user: '使用者回報', scenario: '相遇情境' };
     const sel = (name, opts) => `<select data-f="${name}">${opts.map(([v, l]) => `<option value="${v}" ${f[name] === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
     out.innerHTML = `
       <p class="muted">系統自己解決不了的問題會記在這裡，保留 30 天。同樣的錯誤一分鐘內只記一次。</p>
@@ -387,6 +426,129 @@ const VIEWS = {
     });
   },
 };
+
+
+// ================================================== 第二批後台
+const twd = (u, rate) => Math.round(u * rate);
+Object.assign(VIEWS, {
+  // ------------------------------------------------ 費用
+  async costs() {
+    const c = await api('/costs');
+    const st = c.state, r = c.usdToTwd;
+    const max = Math.max(0.01, ...c.daily.map(d => d.usd));
+    const KIND = { chat: '聊天回覆', proactive: '主動訊息', memory: '記憶整理', lifelog: '生活日誌', lifedigest: '每月大事記', post: '動態', arc: '生活連續劇', review: '發送前檢查', summary: '對話摘要', shape: '個性整理', prefs: '相處偏好', scene: '相遇場景', scenario: '自訂情境', tts: '語音合成', stt: '語音轉文字', react: '回應使用者動態', comment: '留言', letter: '告別信', travelogue: '遊記', share: '分享角色', style: '說話風格', schedule: '作息', scene_photo: '相遇照片', dislike: '不喜歡', image: '圖片生成' };
+    out.innerHTML = `${c.mock ? '<p class="muted">測試模式（沒有接 OpenAI），花費都是 0。</p>' : ''}
+      <div class="kpis">
+        <div class="kpi"><b>US$${st.dayUsd}</b><span>今天（約 NT$${twd(st.dayUsd, r)}）${st.dailyLimit ? `・預算 ${st.dayPct}%` : ''}</span></div>
+        <div class="kpi"><b>US$${st.monthUsd}</b><span>這個月（約 NT$${twd(st.monthUsd, r)}）${st.monthlyLimit ? `・預算 ${st.monthPct}%` : ''}</span></div>
+        <div class="kpi"><b>${st.paused ? '暫停中' : '正常'}</b><span>AI 狀態</span></div>
+      </div>
+      <h2>最近 30 天每日花費（美元）</h2>
+      <div class="card" style="display:flex;align-items:flex-end;gap:3px;height:140px;overflow-x:auto">${c.daily.map(d => `<div title="${d.day}：US$${d.usd}" style="flex:1;min-width:8px;background:var(--me);border-radius:3px 3px 0 0;height:${Math.max(2, d.usd / max * 120)}px"></div>`).join('') || '<span class="muted">還沒有資料</span>'}</div>
+      <h2>這個月花在哪裡</h2>
+      <div class="wrap"><table><thead><tr><th>用途</th><th>美元</th><th>約台幣</th></tr></thead><tbody>
+      ${c.byKind.map(k => `<tr><td>${esc(KIND[k.kind] || k.kind)}</td><td>${k.usd}</td><td>${twd(k.usd, r)}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">還沒有資料</td></tr>'}</tbody></table></div>
+      <h2>這個月花最多的使用者</h2>
+      <div class="wrap"><table><thead><tr><th>暱稱</th><th>美元</th><th>約台幣</th><th></th></tr></thead><tbody>
+      ${c.top.map(u => `<tr><td>${esc(u.nickname)}</td><td>${u.usd}</td><td>${twd(u.usd, r)}</td><td><button class="sm ghost" data-u="${u.id}">看這個人</button></td></tr>`).join('') || '<tr><td colspan="4" class="muted">還沒有資料</td></tr>'}</tbody></table></div>`;
+    out.querySelectorAll('[data-u]').forEach(b => b.onclick = () => showTester(b.dataset.u));
+  },
+
+  // ------------------------------------------------ 系統設定
+  async settings() {
+    const list = await api('/settings');
+    const groups = [...new Set(list.map(x => x.group))];
+    out.innerHTML = `<p class="muted">存檔後立刻生效，不用重啟。標「已修改」的可以按「恢復預設」。</p>
+      <form id="setf">${groups.map(g => `<h2>${esc(g)}</h2><div class="card">${list.filter(x => x.group === g).map(x => `
+        <div class="row-form" style="justify-content:space-between;margin:6px 0">
+          <label style="flex:1;min-width:240px">${esc(x.label)} ${x.edited ? '<span class="tag on">已修改</span>' : ''}${x.help ? `<br><span class="muted small">${esc(x.help)}</span>` : ''}<br><span class="muted small">預設：${x.type === 'bool' ? (x.def ? '是' : '否') : x.def}</span></label>
+          <span>${x.type === 'bool' ? `<input type="checkbox" name="${x.key}" ${x.value ? 'checked' : ''}>` : `<input name="${x.key}" type="number" step="${x.type === 'int' ? 1 : 'any'}" min="${x.min}" max="${x.max}" value="${x.value}" style="width:110px">`}
+          ${x.edited ? `<button type="button" class="sm ghost" data-reset="${x.key}">恢復預設</button>` : ''}</span>
+        </div>`).join('')}</div>`).join('')}
+        <p style="margin-top:16px"><button>儲存</button></p></form>`;
+    document.getElementById('setf').onsubmit = async (e) => {
+      e.preventDefault();
+      const body = {};
+      for (const x of list) {
+        const el = e.target.elements[x.key];
+        const v = x.type === 'bool' ? el.checked : Number(el.value);
+        if (v !== x.value) body[x.key] = v;
+      }
+      if (!Object.keys(body).length) return toast('沒有變更');
+      await api('/settings', 'POST', body); toast('已儲存'); render();
+    };
+    out.querySelectorAll('[data-reset]').forEach(b => b.onclick = async () => { await api('/settings', 'POST', { [b.dataset.reset]: null }); toast('已恢復預設'); render(); });
+  },
+
+  // ------------------------------------------------ 公告
+  async announce() {
+    const d = await api('/announcements');
+    out.innerHTML = `<p class="muted">公告會出現在 App「聊天」頁上方，使用者按掉就不再看到。勾選推播會同時送通知給所有開了通知的人${d.push ? '' : '（目前沒有設定推播金鑰，推播不會送出）'}。</p>
+      <form class="card" id="annf"><textarea name="text" rows="3" maxlength="200" style="width:100%" placeholder="例如：今晚 11 點到 11 點半更新維護，期間角色可能晚一點回覆。"></textarea>
+        <div class="row-form" style="margin:8px 0 0"><label class="small"><input type="checkbox" name="push"> 同時發推播</label><button>發布</button></div></form>
+      <div class="wrap"><table><thead><tr><th>時間</th><th>內容</th><th>推播</th><th>狀態</th><th></th></tr></thead><tbody>
+      ${d.list.map(a => `<tr><td class="nw">${dt(a.created_at)}</td><td class="text">${esc(a.text)}</td><td>${a.pushed ? `${a.pushed} 個裝置` : '—'}</td>
+        <td>${a.active ? '<span class="tag on">顯示中</span>' : '<span class="tag off">已下架</span>'}</td>
+        <td><button class="sm ${a.active ? 'danger' : 'ghost'}" data-a="${a.id}" data-v="${a.active ? 0 : 1}">${a.active ? '下架' : '重新顯示'}</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">還沒有公告</td></tr>'}
+      </tbody></table></div>`;
+    document.getElementById('annf').onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      if (f.push.checked && !confirm('要推播給所有人嗎？')) return;
+      const r = await api('/announcements', 'POST', { text: f.text.value, push: f.push.checked });
+      toast(f.push.checked ? `已發布，推播送出 ${r.sent} 個裝置` : '已發布'); render();
+    };
+    out.querySelectorAll('[data-a]').forEach(b => b.onclick = async () => { await api('/announcements/' + b.dataset.a, 'PATCH', { active: b.dataset.v === '1' }); render(); });
+  },
+});
+
+// ---- 測試者：詳細資料 ----
+async function showTester(id) {
+  const u = await api('/testers/' + id);
+  out.innerHTML = `<p><button class="sm ghost" id="back">← 回測試者列表</button></p>
+    <h2 style="margin-top:0">${esc(u.nickname)} <span class="muted small">${COH[u.cohort] || ''}・想遇見${SEEK[u.seeks] || ''}・${dt(u.createdAt)} 加入・最後上線 ${dt(u.lastActiveAt)}</span></h2>
+    <div class="kpis">
+      <div class="kpi"><b>${u.today.replies} / ${u.today.replyCap}</b><span>今天角色回覆次數</span></div>
+      <div class="kpi"><b>${u.today.photos} / ${u.today.photoCap}</b><span>今天看的照片</span></div>
+      <div class="kpi"><b>US$${u.monthUsd}</b><span>這個月的花費</span></div>
+    </div>
+    <p class="row-form" style="margin-top:12px"><button class="ghost" id="reset">重置今天的用量（解除今天的上限）</button> <button class="danger" id="del">刪除這個人的帳號和所有資料</button></p>
+    ${u.prefs ? `<p class="small muted">系統整理的聊天偏好：喜歡 ${esc((u.prefs.likes || []).join('、') || '—')}；不喜歡 ${esc((u.prefs.dislikes || []).join('、') || '—')}</p>` : ''}
+    <h2>他認識的角色</h2>
+    <div class="wrap"><table><thead><tr><th>角色</th><th>狀態</th><th>關係</th><th>好感</th><th>了解</th><th>訊息（他／角色）</th><th>記憶</th><th>認識</th><th>最後聊天</th><th></th></tr></thead><tbody>
+    ${u.rels.map(r => `<tr><td class="nw">${esc(r.name)} <span class="muted small">${esc(r.jobLabel || '')}</span></td><td>${r.status === 'active' ? '<span class="tag on">往來中</span>' : '<span class="tag off">已結束</span>'}</td>
+      <td>${esc(r.stage)}</td><td>${r.affection}</td><td>${r.understanding}</td><td>${r.userMsgs} / ${r.charMsgs}</td><td>${r.memories}</td><td class="nw">${dt(r.createdAt)}</td><td class="nw">${dt(r.lastAt)}</td>
+      <td><button class="sm ghost" data-life="${r.id}">看角色的生活</button></td></tr>`).join('') || '<tr><td colspan="10" class="muted">還沒有認識任何人</td></tr>'}
+    </tbody></table></div>
+    <p class="muted small" style="margin-top:8px">為了隱私，這裡不顯示聊天內容和使用者的記憶，只顯示數量。</p>
+    <div id="life"></div>`;
+  document.getElementById('back').onclick = () => { TAB = 'testers'; drawTabs(); render(); };
+  document.getElementById('reset').onclick = async () => { await api(`/testers/${id}/reset-today`, 'POST'); toast('已重置今天的用量'); showTester(id); };
+  document.getElementById('del').onclick = async () => {
+    if (prompt(`要永久刪除「${u.nickname}」的帳號和所有資料嗎？無法復原。確定請輸入 DELETE`) !== 'DELETE') return;
+    await api(`/testers/${id}/delete`, 'POST', { confirm: 'DELETE' }); toast('已刪除'); TAB = 'testers'; drawTabs(); render();
+  };
+  out.querySelectorAll('[data-life]').forEach(b => b.onclick = () => showLife(b.dataset.life));
+}
+
+// ---- 角色的生活：日誌、大事記、連續劇、動態 ----
+async function showLife(relId) {
+  const d = await api(`/rels/${relId}/life`);
+  const box = document.getElementById('life');
+  box.innerHTML = `<h2>${esc(d.name)} 的生活 <span class="muted small">${esc(d.jobLabel || '')}・和使用者：${esc(d.stage)}</span></h2>
+    ${d.digests.length ? `<div class="card"><b>每月大事記</b>${d.digests.map(x => `<p class="small" style="margin:6px 0 0">${esc(x.month)}：${esc(x.text)}</p>`).join('')}</div>` : ''}
+    <h2>生活日誌（最近 30 天）</h2>
+    ${d.logs.map(l => `<div class="card"><b>${esc(l.day)}</b> <span class="muted small">${esc(l.summary)}</span>${l.items.map(i => `<div class="small">${esc(i.time)} ${esc(i.text)} <span class="muted">${esc((i.tags || []).join('、'))}</span></div>`).join('')}</div>`).join('') || '<p class="muted">還沒有日誌（每天早上 6 點後、使用者最近 7 天有來時才會寫）</p>'}
+    <h2>生活連續劇</h2>
+    ${d.arcs.map(a => `<div class="card"><div class="row-form" style="justify-content:space-between;margin:0"><b>${esc(a.title)} <span class="muted small">${a.status === 'active' ? `進行中（第 ${a.step}/${a.beats.length} 段）` : '已結束'}</span></b>${a.status === 'active' ? `<button class="sm danger" data-arc="${a.id}">提前結束</button>` : ''}</div>
+      <p class="small muted">${esc(a.premise)}</p>${a.beats.map((t, i) => `<div class="small" style="opacity:${i < a.step ? 1 : .45}">${i + 1}. ${esc(t)}</div>`).join('')}</div>`).join('') || '<p class="muted">還沒有</p>'}
+    <h2>發過的動態</h2>
+    <div class="wrap"><table><tbody>${d.posts.map(p => `<tr><td class="nw">${dt(p.created_at)}</td><td class="text">${esc(p.text)} ${p.story ? '<span class="tag">限動</span>' : ''}</td><td><button class="sm danger" data-post="${p.id}">刪除</button></td></tr>`).join('') || '<tr><td class="muted">還沒有</td></tr>'}</tbody></table></div>
+    <h2>跟使用者講過的自己的事</h2><p class="small">${d.told.map(esc).join('｜') || '—'}</p>`;
+  box.scrollIntoView({ behavior: 'smooth' });
+  box.querySelectorAll('[data-post]').forEach(b => b.onclick = async () => { if (!confirm('刪除這則動態？')) return; await api('/posts/' + b.dataset.post, 'DELETE'); showLife(relId); });
+  box.querySelectorAll('[data-arc]').forEach(b => b.onclick = async () => { if (!confirm('提前結束這段連續劇？之後他會開始新的生活事件。')) return; await api('/arcs/' + b.dataset.arc, 'DELETE'); showLife(relId); });
+}
 
 document.getElementById('login').onsubmit = (e) => {
   e.preventDefault();
