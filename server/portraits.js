@@ -1,4 +1,5 @@
-// 角色的寫實 AI 人像：一張主照 + 幾張生活照，依關係進度慢慢解鎖。
+// 角色的 AI 照片：一張精緻插畫的主照（看得到臉）+ 幾張寫實但不露臉的生活照，依關係進度慢慢解鎖。
+// 臉用插畫，避免「太像 AI 的假真人」；生活照拍背影、手、他看到的東西，像真人手機裡會有的照片。
 // - 每個角色有一組「臉部特徵」（臉型、眼睛、鼻子、眉毛、小特徵），挑沒人用過的組合，避免角色撞臉。
 // - 生活照用主照當參考圖生成，同一個人；失敗時改成背影或側面，不露臉。
 // - 模糊版本在伺服器做好：還不能看的照片，手機拿到的就是模糊的圖，不是靠前端蓋一層。
@@ -61,18 +62,31 @@ function personLine(frame, face) {
   const hair = HAIR[frame.look?.hair] || '';
   return `a fictional ${who}, ${face.shape}, ${face.eyes}, ${face.nose}, ${face.brows}, ${face.mark}${hair ? `, ${hair}` : ''}`;
 }
-const RULES = 'This is an original fictional person who must not resemble any celebrity, idol, actor or real person. Natural skin texture, realistic, not airbrushed, not a model shoot. Fully clothed, everyday modest outfit. No text, no logos, no watermark, no other people\'s faces in focus.';
+const RULES = 'This is an original fictional character who must not resemble any celebrity, idol, actor or real person. Fully clothed, everyday modest outfit. No text, no logos, no watermark, no signature.';
+// 主照的畫風：一般角色是半寫實的韓漫／日系插畫；二次元角色是動畫風
+function artStyle(frame) {
+  if (frame.style === 'anime' || frame.look?.style === 'anime' || (frame.cats || []).includes('anime')) return 'High-quality Japanese anime illustration, clean line art, soft cel shading, gentle pastel lighting, detailed eyes, like a key visual from a slice-of-life anime.';
+  return 'Refined semi-realistic digital illustration in the style of a modern Korean webtoon cover: soft painterly shading, delicate line work, warm natural colors, slightly idealized but grounded proportions. Clearly an illustration, not a photograph.';
+}
+// 生活照：寫實手機照片，但一定不拍到臉（背影、手、遠景、他眼前的東西）
+const NOFACE = 'A realistic candid smartphone photo. The person\'s face must NOT be visible at all (shot from behind, cropped below the chin, hands only, or face hidden by the phone). Natural imperfect framing, slight grain, real-life lighting, not a stock photo, not a model shoot. No text, no logos, no watermark, no other people\'s faces.';
+function bodyLine(frame) {
+  const who = `${frame.age || 27}-year-old ${NAT[frame.nationality] || 'East Asian'} ${frame.gender === 'female' ? 'woman' : 'man'}`;
+  const hair = HAIR[frame.look?.hair] || '';
+  return `a ${who}${hair ? ` with ${hair}` : ''}${frame.appearance ? ` (${frame.appearance})` : ''}`;
+}
 
 // 生活照：曖昧解鎖 3 張、交往解鎖 2 張、付費限定 1 張
 function lifeScenes(frame) {
   const job = JOBS[frame.job];
+  const who = bodyLine(frame);
   return [
-    { min: 2, cap: '上班的時候', scene: `at work in ${job?.place || 'the office'} as a ${job?.label || 'professional'}, candid, focused on work` },
-    { min: 2, cap: '休假的時候', scene: `on a day off: ${frame.weekend || 'relaxing at a cafe'}, candid, soft daylight` },
-    { min: 2, cap: '路上隨手拍', scene: 'walking on a Taipei street in the evening, looking back over the shoulder, slight smile' },
-    { min: 3, cap: '傳給你的自拍', scene: 'a casual front-camera selfie at home in comfy clothes, warm lamp light, shy smile' },
-    { min: 3, cap: '一起吃飯的時候', scene: 'sitting across the table at a cozy restaurant, photo taken by a companion, laughing' },
-    { min: 3, cap: '限定照片', scene: 'dressed up nicely for a special night out, city lights bokeh behind', paid: true },
+    { min: 2, cap: '上班的時候', scene: `Over-the-shoulder shot of ${who} at work in ${job?.place || 'the office'} as a ${job?.label || 'professional'}, focused on the task, only the back of the head and hands visible` },
+    { min: 2, cap: '休假的時候', scene: `${frame.weekend || 'A lazy day off at a cafe'}: what ${who} sees on a day off, their hand holding a drink in the foreground, soft daylight` },
+    { min: 2, cap: '路上隨手拍', scene: `${who} walking away on a Taipei street in the evening, seen from behind, street lights and scooters, slightly motion blurred` },
+    { min: 3, cap: '傳給你的自拍', scene: `A mirror selfie of ${who} at home in comfy clothes, the phone held up covering the whole face, warm lamp light, a bit messy room` },
+    { min: 3, cap: '一起吃飯的時候', scene: `Top-down photo of a table at a cozy restaurant with two meals, ${who}'s hands reaching for food with chopsticks, sleeve visible, no face` },
+    { min: 3, cap: '限定照片', scene: `${who} dressed up nicely for a special night out, standing at a window with city lights bokeh, seen from behind as a silhouette`, paid: true },
   ];
 }
 
@@ -100,7 +114,7 @@ export async function makeMain(owner, frame, { userId = null, force = false } = 
   const { openai } = await import('./llm.js');
   const { f, sig } = pickFace(owner + (force ? `|${Date.now()}` : ''));
   const job = JOBS[frame.job];
-  const prompt = `A candid realistic smartphone photo of ${personLine(frame, f)}. ${frame.appearance ? `Details: ${frame.appearance}.` : ''} Upper body, looking toward the camera with a natural expression, background hints of ${job?.place || 'a Taipei street'}, natural light. ${RULES}`;
+  const prompt = `${artStyle(frame)} Portrait of ${personLine(frame, f)}. ${frame.appearance ? `Details: ${frame.appearance}.` : ''} Upper body, looking toward the viewer with a natural, warm expression, background hints of ${job?.place || 'a Taipei street'}, soft light. ${RULES}`;
   const res = await openai.images.generate({ model: config.imageModel, size: '1024x1536', quality: 'medium', output_format: 'jpeg', n: 1, prompt });
   const b64 = res.data?.[0]?.b64_json;
   if (!b64) throw new Error('沒有拿到圖片');
@@ -112,30 +126,21 @@ export async function makeMain(owner, frame, { userId = null, force = false } = 
   return mainOf(owner);
 }
 
-/** 生成生活照（用主照當參考，同一個人）。 */
+/** 生成生活照（寫實、不露臉；髮型、身形、穿著跟角色設定一致）。 */
 export async function makeLife(owner, frame, { userId = null } = {}) {
   if (config.mock) return 0;
   const main = mainOf(owner);
   if (!main) return 0;
   const have = new Set(db.prepare(`SELECT caption FROM char_photos WHERE owner=? AND kind='life' AND hidden=0`).all(owner).map(r => r.caption));
-  const { openai, toFile } = await import('./llm.js');
+  const { openai } = await import('./llm.js');
   let n = 0;
   for (const s of lifeScenes(frame)) {
     if (have.has(s.cap)) continue;
     let b64 = null;
     try {
-      const ref = await toFile(fs.readFileSync(path.join(PORTRAIT_DIR, main.file)), 'ref.jpg', { type: 'image/jpeg' });
-      const res = await openai.images.edit({ model: config.imageModel, image: ref, size: '1024x1536', quality: 'medium', output_format: 'jpeg',
-        prompt: `The same person as in the reference photo (same face, same hairstyle), ${s.scene}. Realistic smartphone photo. ${RULES}` });
+      const res = await openai.images.generate({ model: config.imageModel, size: '1024x1536', quality: 'medium', output_format: 'jpeg', n: 1, prompt: `${s.scene}. ${NOFACE}` });
       b64 = res.data?.[0]?.b64_json;
-    } catch (e) {
-      // 沒辦法用參考圖：改拍背影或側面，不露臉，避免變成另一個人
-      try {
-        const res = await openai.images.generate({ model: config.imageModel, size: '1024x1536', quality: 'medium', output_format: 'jpeg', n: 1,
-          prompt: `A candid realistic smartphone photo of ${personLine(frame, { shape: '', eyes: '', nose: '', brows: '', mark: '' }).replace(/, ,/g, ',')}, seen from behind or in profile so the face is not visible, ${s.scene}. ${RULES}` });
-        b64 = res.data?.[0]?.b64_json;
-      } catch (e2) { logIssue({ level: 'warn', source: 'photos', message: `生成生活照失敗：${e2.message}`, error: e2 }); }
-    }
+    } catch (e) { logIssue({ level: 'warn', source: 'photos', message: `生成生活照失敗：${e.message}`, error: e }); }
     if (!b64) continue;
     logImage(userId);
     const v = await saveVariants(Buffer.from(b64, 'base64'));

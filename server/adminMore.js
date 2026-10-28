@@ -12,6 +12,7 @@ import { STAGES } from './prompt.js';
 import { pastLife } from './lifelog.js';
 import { mainOf, photosOf, makeMain, makeLife, portraitFile, LIFE_COUNT } from './portraits.js';
 import fs from 'node:fs';
+import { runBugDigest, bugList, githubEnabled } from './bugwatch.js';
 
 db.exec(`CREATE TABLE IF NOT EXISTS announcements (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,6 +35,64 @@ export function mountAdminMore(app) {
     if (!ok(req)) return res.status(401).json({ error: 'unauthorized' });
     try { await fn(req, res); } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
   });
+
+  // ---- 語感調校：使用者的「很像真人／怪怪的」回饋 → 審核 → 變成同類角色的示範例句 ----
+  A('get', '/tuning', (req, res) => {
+    const status = ['new', 'example', 'ignored'].includes(req.query.status) ? req.query.status : 'new';
+    const list = db.prepare(`SELECT id, rating, source, suggestion, context, char_text, pack, archetype, character, status, fixed_text, created_at FROM msg_feedback WHERE status=? ORDER BY id DESC LIMIT 200`).all(status)
+      .map(r => ({ ...r, context: j(r.context, []) }));
+    const counts = Object.fromEntries(db.prepare('SELECT status, COUNT(*) n FROM msg_feedback GROUP BY status').all().map(r => [r.status, r.n]));
+    const bySrc = db.prepare(`SELECT source, rating, COUNT(*) n FROM msg_feedback WHERE created_at>? GROUP BY source, rating`).all(now() - 7 * 86400000);
+    const examples = db.prepare('SELECT * FROM style_examples ORDER BY id DESC LIMIT 300').all();
+    res.json({ list, counts, bySrc, examples });
+  });
+  // 存成示範：好的那句（👍）或後台改寫後的自然說法（👎）
+  A('post', '/tuning/:id', (req, res) => {
+    const f = db.prepare('SELECT * FROM msg_feedback WHERE id=?').get(Number(req.params.id));
+    if (!f) return res.status(404).json({ error: '找不到' });
+    if (req.body?.action === 'ignore') { db.prepare(`UPDATE msg_feedback SET status='ignored' WHERE id=?`).run(f.id); return res.json({ ok: true }); }
+    const reply = String(req.body?.reply || (f.rating === 1 ? f.char_text : '')).trim().slice(0, 200);
+    if (!reply) return res.status(400).json({ error: '請寫上自然的說法' });
+    const ctx = j(f.context, []);
+    const lastUser = [...ctx].reverse().find(x => x.who === '對方')?.text || '';
+    const context = String(req.body?.context ?? lastUser).trim().slice(0, 200);
+    if (!context) return res.status(400).json({ error: '請寫上對方說了什麼' });
+    const scope = req.body?.scope === 'all' ? 'all' : 'arch';
+    db.prepare('INSERT INTO style_examples (pack, archetype, context, reply, feedback_id, active, created_at) VALUES (?,?,?,?,?,1,?)')
+      .run(f.pack || 'f25', scope === 'all' ? null : f.archetype, context, reply, f.id, now());
+    db.prepare(`UPDATE msg_feedback SET status='example', fixed_text=? WHERE id=?`).run(reply, f.id);
+    res.json({ ok: true });
+  });
+  A('post', '/tuning-examples', (req, res) => {
+    const { pack, archetype, context, reply } = req.body || {};
+    if (!/^[fm](20|25|30)$/.test(pack || '') || !context?.trim() || !reply?.trim()) return res.status(400).json({ error: '請填完整' });
+    db.prepare('INSERT INTO style_examples (pack, archetype, context, reply, active, created_at) VALUES (?,?,?,?,1,?)').run(pack, archetype || null, context.trim().slice(0, 200), reply.trim().slice(0, 200), now());
+    res.json({ ok: true });
+  });
+  A('post', '/tuning-examples/:id', (req, res) => {
+    const id = Number(req.params.id);
+    if (req.body?.delete) db.prepare('DELETE FROM style_examples WHERE id=?').run(id);
+    else db.prepare('UPDATE style_examples SET active=? WHERE id=?').run(req.body?.active ? 1 : 0, id);
+    res.json({ ok: true });
+  });
+  // 匯出成微調用的訓練檔（JSONL；只含去識別化的對話片段和審核過的說法）
+  A('get', '/tuning-export', (req, res) => {
+    const rows = db.prepare(`SELECT f.context ctx, e.context, e.reply FROM style_examples e JOIN msg_feedback f ON f.id=e.feedback_id WHERE e.active=1`).all();
+    const lines = rows.map(r => {
+      const msgs = j(r.ctx, []).map(x => ({ role: x.who === '你' ? 'assistant' : 'user', content: x.text }));
+      // 最後一句要是對方說的話（後台審核時填的「對方說」）
+      const last = [...msgs].reverse().find(m => m.role === 'user');
+      if (!last || last.content !== r.context) msgs.push({ role: 'user', content: r.context });
+      return JSON.stringify({ messages: [...msgs, { role: 'assistant', content: r.reply }] });
+    });
+    res.setHeader('Content-Type', 'application/jsonl; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="withu-tuning.jsonl"');
+    res.send(lines.join('\n'));
+  });
+
+  // ---- 待修清單（自動回報的程式問題） ----
+  A('get', '/bugs', (req, res) => res.json({ github: githubEnabled(), repo: process.env.GITHUB_REPO || '', list: bugList() }));
+  A('post', '/bugs/run', async (req, res) => res.json(await runBugDigest()));
 
   // ---- 系統參數 ----
   A('get', '/settings', (req, res) => res.json(allSettings()));
@@ -190,12 +249,16 @@ export function mountAdminMore(app) {
   const jobs = { running: false, done: 0, total: 0, note: '' };
   async function runPortraitJob(list, what) {
     if (jobs.running) return false;
-    Object.assign(jobs, { running: true, done: 0, total: list.length, note: what === 'life' ? '生活照' : '主照' });
+    Object.assign(jobs, { running: true, done: 0, total: list.length, note: { life: '生活照', restyle: '換新畫風' }[what] || '主照' });
     (async () => {
       for (const t of list) {
         const frame = j(t.data, {});
         try {
-          if (what === 'regen') await makeMain(t.id, frame, { force: true });
+          if (what === 'restyle') {
+            // 換畫風：舊照片全部隱藏，重做主照（插畫）和生活照（不露臉）
+            db.prepare('UPDATE char_photos SET hidden=1 WHERE owner=?').run(t.id);
+            await makeMain(t.id, frame, { force: true }); await makeLife(t.id, frame);
+          } else if (what === 'regen') await makeMain(t.id, frame, { force: true });
           else if (what === 'main') await makeMain(t.id, frame);
           else { if (!mainOf(t.id)) await makeMain(t.id, frame); await makeLife(t.id, frame); }
         } catch (e) { jobs.note = `有失敗：${e.message}`; }
@@ -218,14 +281,14 @@ export function mountAdminMore(app) {
     const t = db.prepare(`SELECT id, data FROM templates WHERE id=?`).get(req.params.id);
     if (!t) return res.status(404).json({ error: '找不到' });
     if (config.mock) return res.status(400).json({ error: '測試模式（沒有 OpenAI 金鑰）不能生成' });
-    const ok = await runPortraitJob([t], ['main', 'regen', 'life'].includes(req.body?.what) ? req.body.what : 'main');
+    const ok = await runPortraitJob([t], ['main', 'regen', 'life', 'restyle'].includes(req.body?.what) ? req.body.what : 'main');
     res.json(ok ? { ok: true } : { error: '還有其他照片在生成中，等一下再試' });
   });
   A('post', '/portraits-all', async (req, res) => {
     if (config.mock) return res.status(400).json({ error: '測試模式（沒有 OpenAI 金鑰）不能生成' });
-    const what = req.body?.what === 'life' ? 'life' : 'main';
+    const what = ['life', 'restyle'].includes(req.body?.what) ? req.body.what : 'main';
     const list = db.prepare(`SELECT id, data FROM templates WHERE kind='official' AND status='published'`).all()
-      .filter(t => what === 'main' ? !mainOf(t.id) : photosOf(t.id).filter(p => p.kind === 'life').length < LIFE_COUNT);
+      .filter(t => what === 'restyle' ? true : what === 'main' ? !mainOf(t.id) : photosOf(t.id).filter(p => p.kind === 'life').length < LIFE_COUNT);
     if (!list.length) return res.json({ ok: true, count: 0 });
     const ok = await runPortraitJob(list, what);
     res.json(ok ? { ok: true, count: list.length } : { error: '還有其他照片在生成中' });

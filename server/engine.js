@@ -1,6 +1,7 @@
 // 對話編排層：assemble persona + relationship + memories + recent chat, call the model,
 // then apply everything the model decided (memories, stage, meal card, outing, follow-ups…).
 import fs from 'node:fs';
+import { detectConfusion } from './feedback.js';
 import { ensurePortraits } from './portraits.js';
 import { lifeContext } from './lifelog.js';
 import { S } from './settings.js';
@@ -354,6 +355,8 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const t = taipeiParts();
   const crisis = !trigger && crisisSignal(userText);
   const dueFollowups = db.prepare('SELECT * FROM followups WHERE rel_id=? AND done=0 AND due_at<=? ORDER BY due_at LIMIT 3').all(rel.id, now());
+  // 對方說「什麼意思」「聽不懂」：上一句他說得不自然，記成語感回饋（有同意的人才記）
+  if (userText && !trigger) { try { detectConfusion(user, rel.id, userText); } catch { /* ignore */ } }
   // 對方明確說了希望怎麼聊（「不要一直問我問題」「換你說」）：不靠模型，系統直接記成相處習慣，並馬上告訴其他角色
   if (userText && !trigger && STYLE_ASK.test(userText)) {
     addMemory(rel, 'style', `對方希望：${userText.replace(/\s+/g, ' ').slice(0, 40)}`, 5);

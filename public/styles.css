@@ -746,3 +746,7 @@ button.pf-face { border:0; padding:0; cursor:zoom-in; }
 }
 
 .mm-more { text-align:center; color:var(--muted); font-size:14px; padding:14px 0 4px; }
+
+/* 語感回饋 */
+.quote-line { background: var(--paper-2, rgba(0,0,0,.04)); border-radius: 12px; padding: 10px 12px; margin: 0 0 8px; line-height: 1.6; }
+.msg.him > .bubble { -webkit-touch-callout: none; }

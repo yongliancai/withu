@@ -1,5 +1,7 @@
 import express from 'express';
 import { S } from './settings.js';
+import { addFeedback, consented } from './feedback.js';
+import { runBugDigest } from './bugwatch.js';
 import { securityHeaders, adminGuard, rateLimit } from './security.js';
 import { mainOf, photosForViewer, portraitFile, ownerOfCharacter } from './portraits.js';
 import { updateUserPrefs } from './prefs.js';
@@ -81,7 +83,7 @@ const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch(e => {
 const recoveryCode = () => Array.from(crypto.randomBytes(8)).map(b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('').replace(/(.{4})/, '$1-');
 
 app.post('/api/auth/join', rateLimit('註冊', 20, 3600e3), (req, res) => {
-  const { invite, nickname, callName, adult, aiAck, gender, seeks } = req.body || {};
+  const { invite, nickname, callName, adult, aiAck, gender, seeks, feedbackConsent } = req.body || {};
   const code0 = String(invite || '').trim();
   const cohort = cohortForCode(code0);
   if (!cohort) return res.status(400).json({ error: '邀請碼不正確' });
@@ -94,7 +96,7 @@ app.post('/api/auth/join', rateLimit('註冊', 20, 3600e3), (req, res) => {
   const uid = id('u_');
   const code = recoveryCode();
   db.prepare('INSERT INTO users (id,nickname,call_name,recovery_code,invite_code,cohort,gender,seeks,settings,created_at,last_active_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-    .run(uid, nick, String(callName || nick).trim().slice(0, 16), code, code0, cohort, g, sk, JSON.stringify({ dailyCap: 6, proactiveLevel: 'normal', dndStart: '23:30', dndEnd: '07:30', notifyPreview: 'full', tourDone: false, roomTourDone: false }), now(), now());
+    .run(uid, nick, String(callName || nick).trim().slice(0, 16), code, code0, cohort, g, sk, JSON.stringify({ dailyCap: 6, proactiveLevel: 'normal', dndStart: '23:30', dndEnd: '07:30', notifyPreview: 'full', tourDone: false, roomTourDone: false, feedbackConsent: !!feedbackConsent }), now(), now());
   startSession(res, uid);
   logEvent(uid, 'join', { cohort });
   res.json({ ok: true, recoveryCode: code, cohort });
@@ -132,7 +134,7 @@ app.get('/api/me', auth, (req, res) => {
 app.patch('/api/me', auth, (req, res) => {
   const b = req.body || {};
   const settings = { ...j(req.user.settings, {}), ...(b.settings || {}) };
-  const allowed = ['dailyCap', 'proactiveLevel', 'dndStart', 'dndEnd', 'notifyPreview', 'lunchAt', 'dinnerAt', 'discreetNames', 'portraitStyle', 'showSuggestions', 'realisticDelay', 'notifyAsked', 'appTheme', 'nightOwl', 'customMoods', 'tourDone', 'roomTourDone', 'seenNews'];
+  const allowed = ['dailyCap', 'proactiveLevel', 'dndStart', 'dndEnd', 'notifyPreview', 'lunchAt', 'dinnerAt', 'discreetNames', 'portraitStyle', 'showSuggestions', 'realisticDelay', 'notifyAsked', 'appTheme', 'nightOwl', 'customMoods', 'tourDone', 'roomTourDone', 'seenNews', 'feedbackConsent'];
   for (const k of Object.keys(settings)) if (!allowed.includes(k)) delete settings[k];
   const seeks = ['male', 'female', 'any'].includes(b.seeks) ? b.seeks : req.user.seeks;
   const gender = ['female', 'male', 'other'].includes(b.gender) ? b.gender : req.user.gender;
@@ -585,6 +587,28 @@ app.post('/api/rels/:id/call/end', auth, (req, res) => {
   res.json({ ok: true, seconds: sec });
 });
 
+// 語感回饋：長按角色的訊息 → 很像真人／怪怪的（＋他應該怎麼說）
+app.post('/api/messages/:id/feedback', auth, (req, res) => {
+  const m = db.prepare(`SELECT * FROM messages WHERE id=? AND user_id=? AND sender='char' AND kind IN ('text','voice')`).get(Number(req.params.id), req.user.id);
+  if (!m) return res.status(404).json({ error: '找不到這則訊息' });
+  const rating = req.body?.rating === 1 ? 1 : -1;
+  const suggestion = String(req.body?.suggestion || '').trim().slice(0, 200) || null;
+  if (!consented(req.user)) return res.status(409).json({ error: '需要你同意', needConsent: true });
+  addFeedback(req.user, m, { rating, suggestion });
+  // 怪怪的：這個角色馬上少用這種說法（不用等人工審核）
+  if (rating === -1) {
+    const rel = db.prepare('SELECT * FROM relationships WHERE id=?').get(m.rel_id);
+    const c = rel && db.prepare('SELECT * FROM characters WHERE id=?').get(rel.character_id);
+    if (c) {
+      const p = j(c.persona, {});
+      const note = `少用像「${String(m.text).slice(0, 16)}」這樣的說法${suggestion ? `，可以說得像「${suggestion.slice(0, 20)}」` : ''}`;
+      p.tuning = { ...(p.tuning || {}), less: [note, ...((p.tuning || {}).less || [])].slice(0, 6) };
+      db.prepare('UPDATE characters SET persona=? WHERE id=?').run(JSON.stringify(p), c.id);
+    }
+  }
+  res.json({ ok: true });
+});
+
 // 依主題找聊天片段：每幾輪整理出來、有標籤的對話摘要
 app.get('/api/rels/:id/episodes', auth, (req, res) => {
   const rel = ownRel(req, res); if (!rel) return;
@@ -816,7 +840,8 @@ app.post('/api/client-log', rateLimit('手機端紀錄', 60, 60000), (req, res) 
   const s = req.cookies.sid && db.prepare('SELECT user_id FROM sessions WHERE token=?').get(req.cookies.sid);
   const b = req.body || {};
   logIssue({ level: 'error', source: 'client', message: String(b.message || 'client error').slice(0, 300), userId: s?.user_id,
-    detail: { stack: String(b.stack || '').slice(0, 2000), url: String(b.url || '').slice(0, 200), ua: String(req.headers['user-agent'] || '').slice(0, 200), appVersion: b.v } });
+    detail: { stack: String(b.stack || '').slice(0, 2000), url: String(b.url || '').slice(0, 200), ua: String(req.headers['user-agent'] || '').slice(0, 200), appVersion: b.v,
+      kind: ['js', 'api', 'check'].includes(b.kind) ? b.kind : 'js', check: b.check ? String(b.check).slice(0, 100) : undefined, info: b.info && typeof b.info === 'object' ? Object.fromEntries(Object.entries(b.info).slice(0, 6).map(([k, v]) => [String(k).slice(0, 20), typeof v === 'number' ? v : String(v ?? '').slice(0, 200)])) : undefined } });
   res.json({ ok: true });
 });
 
@@ -1074,6 +1099,8 @@ setTimeout(() => fillLibrary().catch(() => {}), 15000);
 setInterval(() => fillLibrary().catch(() => {}), 7 * 864e5);
 purgeOldLogs();
 setInterval(purgeOldLogs, 864e5);
+// 每小時整理一次待修清單（有設定 GitHub 就開 Issue）
+setInterval(() => runBugDigest().then(r => { if (r.error) logIssue({ level: 'warn', source: 'server', message: `待修清單送到 GitHub 失敗：${r.error}` }); }).catch(() => {}), 3600e3).unref();
 process.on('unhandledRejection', (e) => logIssue({ source: 'server', message: `未處理的錯誤：${e?.message || e}`, error: e instanceof Error ? e : undefined }));
 process.on('uncaughtException', (e) => logIssue({ source: 'server', message: `程式崩潰：${e.message}`, error: e }));
 

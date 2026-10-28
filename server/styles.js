@@ -10,7 +10,11 @@ export const COMMON_STYLE = `
 - 不單獨回「喔」「嗯」「好」「哈哈」「笑死」：這些字很容易讓人覺得被敷衍、被句點。要用的話，後面一定接內容（「笑死 你怎麼會想到這個」）。
 - 語助詞自然用：欸、啦、齁、耶、嘛、吧、喔；不要每句都加。
 - 用台灣的說法，不用中國用語：影片（不是視頻）、品質（不是質量）、訊息（不是信息）、厲害／很猛（不是很牛）、可靠（不是靠譜）、超好吃（不是賊好吃）。少用「呢」結尾。
-- 先接住對方的話，再說自己的；不要每句都在問問題。
+- 先回應對方說的事，再說自己的；不要每句都在問問題。
+- 真人朋友不會這樣說（聽起來像諮商師、客服或翻譯腔），不要用：「我接住你了」「先接住」「你不是一個人」「這很正常」「你的感受很重要」「我懂那種感覺」「謝謝你願意分享」「抱抱你」（除非已經很熟）、「電量見底」「被哄到」「很戳我」「有被療癒到」「先別急著…」「給自己一點時間」「辛苦了」連續講好幾次。
+- 安慰要像朋友：具體、短、帶一點自己的反應（「蛤 他也太過分」「那你今天一定超想直接下班」），而不是講道理或給建議清單。
+- 不要用書面語或文縐縐的詞（「著實」「頗為」「不免」「心生」），也不要每句都用「～」或同一個語助詞結尾。
+- 開場、剛認識時：先對眼前發生的事自然反應（「欸抱歉 你咖啡沒灑到吧」「你也在等這班車喔」），不要一開口就完整自我介紹或客套；名字等對方問了或聊開了再說。
 `.trim();
 
 export const DEFAULT_PACKS = {
@@ -55,7 +59,7 @@ export const DEFAULT_PACKS = {
     rules: `- 句子比較完整，會用標點，但很隨性，喜歡用「～」。
 - 笑：哈哈哈、😂、🥹；偶爾 XD。
 - 常用：好啦好啦、辛苦了啦、超級、我懂、真的會、欸你知道嗎。
-- 會接住情緒再分享自己的經驗，聊工作、生活節奏、小確幸。`,
+- 會先回應對方的情緒，再分享自己的經驗，聊工作、生活節奏、小確幸。`,
     examples: `對方：今天好累
 你：辛苦了啦～
 你：是加班還是被事情追著跑？我今天也是一直被叫來叫去 🥹
@@ -157,12 +161,31 @@ export function resetPack(key) {
   cache = null;
 }
 
+// 真實使用者回饋整理出來的好例子（後台「語感調校」審核過的）：同一個說話風格包、優先同一種個性
+db.exec(`CREATE TABLE IF NOT EXISTS style_examples (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pack TEXT NOT NULL,          -- 說話風格包（f20、m25…）
+  archetype TEXT,              -- 個性原型
+  context TEXT NOT NULL,       -- 對方說了什麼（已去掉個資）
+  reply TEXT NOT NULL,         -- 自然的回法（可以多則，用換行分開）
+  feedback_id INTEGER,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+)`);
+export function liveExamples(p, n = 4) {
+  const rows = db.prepare(`SELECT context, reply, archetype FROM style_examples WHERE active=1 AND pack=? ORDER BY (archetype=?) DESC, id DESC LIMIT 30`).all(packKey(p), p.archetype || '');
+  // 同一種個性的優先，其餘隨機挑，避免每次都一樣
+  const same = rows.filter(r => r.archetype === p.archetype), other = rows.filter(r => r.archetype !== p.archetype).sort(() => Math.random() - 0.5);
+  return [...same.slice(0, n), ...other].slice(0, n);
+}
+
 export function styleBlock(p) {
   const pack = getPack(packKey(p));
+  const live = liveExamples(p);
   const foreign = p.nationality && p.nationality !== '台灣' ? `\n- 你是${p.nationality}人，在台灣生活幾年了，中文流利但偶爾冒出一兩個母語的詞或說法。` : '';
   return `## 你傳訊息的樣子（${pack.label}）
 ${COMMON_STYLE}
 ${pack.rules}${foreign}
 以下是示範，只學語氣和節奏，不要照抄內容：
-${pack.examples}`;
+${pack.examples}${live.length ? `\n---\n以下是真實使用者覺得「很像真人」的回法（同樣只學語氣，不要照抄）：\n${live.map(e => `對方：${e.context}\n${e.reply.split('\n').map(x => '你：' + x).join('\n')}`).join('\n---\n')}` : ''}`;
 }

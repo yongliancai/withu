@@ -192,7 +192,7 @@ export async function meet(user, { templateId, custom, scenarioId, scenarioText,
   if (scene.implied_lover) addMessage(rel, 'system', 'card', { card: { type: 'hint', text: '戀人關係要靠你們一起慢慢走到，先從朋友開始吧。' } });
 
   logEvent(user.id, 'meet', { rel: relId, origin, scenario: scenarioId || 'free', start: rel.start_type });
-  await runTurn({ user, relId, trigger: `這是你們的第一次相遇（${label}）。${roles.replace(/你（用戶）/g, '對方')}${startFriend ? '你們本來就認識，語氣自然但還只是朋友。' : '你們是陌生人，有禮貌、不叫小名、不說曖昧的話。'}${scene.moodId ? `對方今天的心情是「${scene.mood}」，你看得出來；先輕輕關心，不追問。` : ''}由你先開口，一兩句就好；最後留一個對方很好回答的小問題（例如是不是常來、要不要幫忙、喜不喜歡某個東西），不要只丟一句讓人不知道怎麼接的話。suggestions 給三個符合這個場景的回覆。`, triggerKey: 'FIRST' });
+  await runTurn({ user, relId, trigger: `這是你們的第一次相遇（${label}）。${roles.replace(/你（用戶）/g, '對方')}${startFriend ? '你們本來就認識，語氣自然但還只是朋友。' : '你們是陌生人，有禮貌、不叫小名、不說曖昧的話。'}${scene.moodId ? `對方今天的心情是「${scene.mood}」，你看得出來；先輕輕關心，不追問。` : ''}由你先開口，一兩句就好：先對剛剛發生的事自然反應（例如「欸抱歉，沒撞痛你吧」「你也在等這班車喔」），不用急著自我介紹，名字等聊開了再說；最後留一個對方很好回答的小問題，但不要每次都問「你常來這裡嗎」。suggestions 給三個符合這個場景的回覆。`, triggerKey: 'FIRST' });
   // 第一次報備或小問題：當天稍晚
   db.prepare('INSERT INTO followups (rel_id,due_at,topic) VALUES (?,?,?)').run(relId, now() + (3 + Math.random() * 3) * 3600e3,
     '你們今天剛認識。傳一個小小的報備或小問題，讓對方感覺你真的存在（例如你正要下班、或想到剛剛的事）');

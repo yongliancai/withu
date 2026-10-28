@@ -79,7 +79,7 @@ function formatDetail(d) {
   return s;
 }
 
-const TABS = [['stats', '數據'], ['costs', '費用'], ['settings', '系統設定'], ['announce', '公告'], ['officials', '官方角色'], ['portraits', '角色照片'], ['invites', '邀請碼'], ['testers', '測試者'], ['square', '角色廣場'], ['trends', '流行新品'], ['feedback', '意見回饋'], ['crisis', '危機事件'], ['styles', '說話風格'], ['photos', '照片庫'], ['logs', '系統紀錄']];
+const TABS = [['stats', '數據'], ['costs', '費用'], ['settings', '系統設定'], ['announce', '公告'], ['officials', '官方角色'], ['portraits', '角色照片'], ['invites', '邀請碼'], ['testers', '測試者'], ['square', '角色廣場'], ['trends', '流行新品'], ['feedback', '意見回饋'], ['crisis', '危機事件'], ['tuning', '語感調校'], ['styles', '說話風格'], ['photos', '照片庫'], ['logs', '系統紀錄']];
 function drawTabs() {
   document.getElementById('login').hidden = true;
   const n = document.getElementById('tabs'); n.hidden = false;
@@ -318,6 +318,46 @@ const VIEWS = {
       </tbody></table></div>`;
   },
 
+  // ------------------------------------------------ 語感調校
+  async tuning() {
+    const st = VIEWS._tuneSt || 'new';
+    const d = await api('/tuning?status=' + st);
+    const PK = { f20: '女20', m20: '男20', f25: '女25', m25: '男25', f30: '女30', m30: '男30' };
+    const src = (r) => r.source === 'confused' ? '<span class="tag off">對方說聽不懂</span>' : r.rating === 1 ? '<span class="tag on">👍 很像真人</span>' : '<span class="tag off">👎 怪怪的</span>';
+    const wk = (s, r) => d.bySrc.filter(x => x.source === s && (r == null || x.rating === r)).reduce((a, x) => a + x.n, 0);
+    out.innerHTML = `<p class="muted">只有同意的使用者會被收集，對話已去掉暱稱、稱呼、email、電話。<b>存成示範</b>後立刻生效：同年齡性別、同個性的角色回話時會參考（只學語氣不照抄）。累積夠多（建議 300 句以上）再匯出去微調模型。</p>
+      <p>近 7 天：👍 ${wk('user', 1)}・👎 ${wk('user', -1)}・聽不懂 ${wk('confused')}　<a href="#" id="exp">下載微調訓練檔（${d.examples.filter(e => e.feedback_id && e.active).length} 句）</a></p>
+      <div class="row-form">${[['new', '待審核'], ['example', '已存成示範'], ['ignored', '略過']].map(([k, l]) => `<button class="${st === k ? '' : 'ghost'}" data-st="${k}">${l}（${d.counts[k] || 0}）</button>`).join('')}</div>
+      ${d.list.map(r => `<div class="card" style="margin:10px 0">
+        <div class="small muted">${dt(r.created_at)}・${esc(r.character || '')}・${PK[r.pack] || r.pack || ''}・${esc(r.archetype || '')}　${src(r)}</div>
+        <div style="margin:8px 0;line-height:1.7">${r.context.map(c => `<div><b>${c.who}：</b>${esc(c.text)}</div>`).join('')}<div style="background:#fff3cd;padding:2px 6px;border-radius:6px"><b>你：</b>${esc(r.char_text)}</div></div>
+        ${r.suggestion ? `<div class="small">使用者建議：「${esc(r.suggestion)}」</div>` : ''}
+        ${st === 'new' ? `<label class="small muted">對方說</label><input data-ctx="${r.id}" style="width:100%" value="${esc([...r.context].reverse().find(c => c.who === '對方')?.text || '')}">
+        <label class="small muted">自然的說法</label><input data-rep="${r.id}" style="width:100%" value="${esc(r.rating === 1 ? r.char_text : r.suggestion || '')}" placeholder="改寫成真人會這樣說的版本">
+        <div class="row-form" style="margin-top:6px"><button data-ok="${r.id}">存成示範（同個性）</button><button class="ghost" data-all="${r.id}">存成示範（同年齡性別全部）</button><button class="ghost" data-ign="${r.id}">略過</button></div>`
+        : r.fixed_text ? `<div class="small">→ 示範：「${esc(r.fixed_text)}」</div>` : ''}
+      </div>`).join('') || '<p class="muted">沒有資料</p>'}
+      <h3 style="margin-top:24px">示範例句（${d.examples.length}）</h3>
+      <form id="addEx" class="row-form"><select name="pack">${Object.entries(PK).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select><input name="archetype" placeholder="個性（可空白＝全部）" style="width:140px"><input name="context" placeholder="對方：" required><input name="reply" placeholder="你：" required><button>新增</button></form>
+      <div class="wrap"><table><thead><tr><th>類別</th><th>對方</th><th>你</th><th>來源</th><th></th></tr></thead><tbody>
+      ${d.examples.map(e => `<tr${e.active ? '' : ' style="opacity:.5"'}><td class="nw">${PK[e.pack] || e.pack}${e.archetype ? '・' + esc(e.archetype) : ''}</td><td class="text">${esc(e.context)}</td><td class="text">${esc(e.reply)}</td><td class="nw">${e.feedback_id ? '使用者回饋' : '手動'}</td>
+        <td class="nw"><button class="sm ghost" data-tog="${e.id}" data-on="${e.active ? 0 : 1}">${e.active ? '停用' : '啟用'}</button> <button class="sm danger" data-delx="${e.id}">刪除</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">還沒有</td></tr>'}
+      </tbody></table></div>`;
+    out.querySelectorAll('[data-st]').forEach(b => b.onclick = () => { VIEWS._tuneSt = b.dataset.st; render(); });
+    const save = async (id, scope) => { await api('/tuning/' + id, 'POST', { reply: out.querySelector(`[data-rep="${id}"]`).value, context: out.querySelector(`[data-ctx="${id}"]`).value, scope }); toast('已存成示範，立即生效'); render(); };
+    out.querySelectorAll('[data-ok]').forEach(b => b.onclick = () => save(b.dataset.ok, 'arch'));
+    out.querySelectorAll('[data-all]').forEach(b => b.onclick = () => save(b.dataset.all, 'all'));
+    out.querySelectorAll('[data-ign]').forEach(b => b.onclick = async () => { await api('/tuning/' + b.dataset.ign, 'POST', { action: 'ignore' }); render(); });
+    out.querySelectorAll('[data-tog]').forEach(b => b.onclick = async () => { await api('/tuning-examples/' + b.dataset.tog, 'POST', { active: b.dataset.on === '1' }); render(); });
+    out.querySelectorAll('[data-delx]').forEach(b => b.onclick = async () => { if (confirm('刪除這句示範？')) { await api('/tuning-examples/' + b.dataset.delx, 'POST', { delete: true }); render(); } });
+    document.getElementById('addEx').onsubmit = async (e) => { e.preventDefault(); await api('/tuning-examples', 'POST', Object.fromEntries(new FormData(e.target))); toast('已新增'); render(); };
+    document.getElementById('exp').onclick = async (e) => {
+      e.preventDefault();
+      const r = await fetch('/api/admin/tuning-export', { headers: { Authorization: 'Bearer ' + TOKEN } });
+      const url = URL.createObjectURL(await r.blob()); const a = document.createElement('a'); a.href = url; a.download = 'withu-tuning.jsonl'; a.click(); URL.revokeObjectURL(url);
+    };
+  },
+
   // ------------------------------------------------ 說話風格
   async styles() {
     const packs = await api('/styles');
@@ -385,6 +425,7 @@ const VIEWS = {
         <div class="kpi"><b>${d.counts.report || 0}</b><span>未處理的使用者回報</span></div>
         ${d.sources.map(s => `<div class="kpi"><b>${s.n}</b><span>${SRC[s.source] || s.source}・近 7 天</span></div>`).join('')}
       </div>
+      <details class="card" style="margin-bottom:14px" id="bugBox"><summary><b>待修清單</b>（同一種程式問題歸成一項）<span class="muted small" id="bugSum"></span></summary><div id="bugList" class="small" style="margin-top:8px">載入中…</div></details>
       <div class="row-form">
         ${sel('status', [['open', '未處理'], ['resolved', '已處理'], ['', '全部']])}
         ${sel('level', [['', '所有等級'], ['error', '錯誤'], ['warn', '警告'], ['report', '使用者回報'], ['auto', '已自動修正']])}
@@ -397,6 +438,14 @@ const VIEWS = {
         <td class="nw">${esc(l.nickname || '—')}</td><td class="nw">${esc(l.character || '—')}</td>
         <td class="nw"><button class="sm ${l.resolvedAt ? 'ghost' : ''}" data-log="${l.id}" data-res="${l.resolvedAt ? 0 : 1}">${l.resolvedAt ? '重新開啟' : '標記已處理'}</button></td></tr>`).join('') || '<tr><td colspan="7" class="muted">沒有紀錄</td></tr>'}
       </tbody></table></div>`;
+    (async () => {
+      const b = await api('/bugs').catch(() => null); if (!b) return;
+      document.getElementById('bugSum').textContent = `　${b.list.length} 項・${b.github ? 'GitHub Issue：已連接（' + b.repo + '）' : 'GitHub Issue：未設定（見 docs/auto-fix.md）'}`;
+      document.getElementById('bugList').innerHTML = `<p class="row-form"><button class="sm" id="bugRun">立刻整理${b.github ? '並送到 GitHub' : ''}</button></p>
+        <div class="wrap"><table><thead><tr><th>問題</th><th>來源</th><th>次數</th><th>最近</th><th>Issue</th></tr></thead><tbody>
+        ${b.list.map(x => `<tr><td class="text">${esc(x.title)}</td><td>${SRC[x.source] || esc(x.source)}</td><td>${x.count}</td><td class="nw">${dt(x.last_at)}</td><td>${x.issue_url ? `<a href="${esc(x.issue_url)}" target="_blank" rel="noopener">#${x.issue_number}</a>` : '—'}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">沒有待修的問題</td></tr>'}</tbody></table></div>`;
+      document.getElementById('bugRun').onclick = async () => { const r = await api('/bugs/run', 'POST'); toast(r.error ? '送到 GitHub 失敗：' + r.error : `整理完成：新開 ${r.filed} 個 Issue`); render(); };
+    })();
     out.querySelectorAll('[data-f]').forEach(s => s.onchange = () => { f[s.dataset.f] = s.value; render(); });
     out.querySelectorAll('[data-log]').forEach(b => b.onclick = async () => {
       let note = '';
@@ -521,13 +570,14 @@ Object.assign(VIEWS, {
     const d = await api('/portraits');
     const needMain = d.list.filter(t => !t.photos.some(p => p.kind === 'main')).length;
     const needLife = d.list.filter(t => t.photos.filter(p => p.kind === 'life').length < d.lifeCount).length;
-    out.innerHTML = `<p class="muted">每個角色一張主照＋${d.lifeCount} 張生活照，都是 AI 生成的虛構人物，在 App 上會標示「AI 生成」。每張約 NT$${d.perImageTwd}。
+    out.innerHTML = `<p class="muted">每個角色一張主照＋${d.lifeCount} 張生活照，主照是<b>精緻插畫</b>（二次元角色是動畫風），生活照是<b>寫實但不露臉</b>的手機照片；都是 AI 生成的虛構人物，App 的使用說明和隱私權政策會告知（照片上不另外標示）。每張約 NT$${d.perImageTwd}。
       使用者看到的照片依關係解鎖：還沒認識是很模糊的、認識是有點模糊、朋友看得清楚主照、曖昧以後解鎖生活照、最後一張是付費限定（測試期顯示「即將推出」）。
       自己捏的角色在使用者建立時會自動生成主照；任何角色變曖昧時，缺的生活照也會自動補上。</p>
       ${d.mock ? '<div class="notice">測試模式（沒有接 OpenAI），不能生成照片。</div>' : ''}
       ${d.job.running ? `<div class="notice">生成中（${esc(d.job.note)}）：${d.job.done}/${d.job.total}，可以先離開，晚點回來看。</div>` : (d.job.total ? `<p class="muted small">上一批完成：${d.job.done}/${d.job.total} ${esc(d.job.note)}</p>` : '')}
       <p class="row-form"><button id="allMain" ${needMain ? '' : 'disabled'}>幫 ${needMain} 位角色生成主照（約 NT$${Math.round(needMain * d.perImageTwd)}）</button>
         <button class="ghost" id="allLife" ${needLife ? '' : 'disabled'}>補齊 ${needLife} 位角色的生活照（最多約 NT$${Math.round(needLife * d.lifeCount * d.perImageTwd)}）</button>
+        <button class="ghost" id="allRestyle">全部換成新畫風（約 NT$${Math.round(d.list.filter(t => t.status === 'published').length * (d.lifeCount + 1) * d.perImageTwd)}）</button>
         <button class="ghost" id="refresh">重新整理</button></p>
       ${d.list.map(t => `<div class="card"><div class="row-form" style="justify-content:space-between;margin:0 0 8px"><b>${esc(t.name)} <span class="muted small">${t.gender === 'female' ? '女' : '男'}・${esc(t.jobLabel || '')}</span></b>
         <span><button class="sm ghost" data-gen="${t.id}" data-w="${t.photos.some(p => p.kind === 'main') ? 'regen' : 'main'}">${t.photos.some(p => p.kind === 'main') ? '重新生成主照' : '生成主照'}</button>
@@ -535,6 +585,7 @@ Object.assign(VIEWS, {
         <div class="ph-grid">${t.photos.map(p => `<figure><img src="${p.url}" alt="" loading="lazy"><figcaption><span>${p.kind === 'main' ? '主照' : esc(p.caption || '')}${p.kind === 'life' ? `・${['認識', '朋友', '曖昧', '交往'][p.minStage] || ''}${p.paid ? '・付費' : ''}` : ''}</span><button class="sm danger" data-hide="${p.id}">隱藏</button></figcaption></figure>`).join('') || '<span class="muted small">還沒有照片</span>'}</div></div>`).join('')}`;
     document.getElementById('refresh').onclick = () => render();
     document.getElementById('allMain').onclick = async () => { if (!confirm('開始生成？會在背景跑，可以先離開。')) return; const r = await api('/portraits-all', 'POST', { what: 'main' }); toast(`開始生成 ${r.count} 位`); render(); };
+    document.getElementById('allRestyle').onclick = async () => { if (!confirm('把所有上架角色的舊照片隱藏，重新生成插畫主照和不露臉的生活照？會在背景跑。')) return; const r = await api('/portraits-all', 'POST', { what: 'restyle' }); toast(r.error || `開始重做 ${r.count} 位`); render(); };
     document.getElementById('allLife').onclick = async () => { if (!confirm('開始補生活照？會在背景跑，可以先離開。')) return; const r = await api('/portraits-all', 'POST', { what: 'life' }); toast(`開始補 ${r.count} 位`); render(); };
     out.querySelectorAll('[data-gen]').forEach(b => b.onclick = async () => {
       if (b.dataset.w === 'regen' && !confirm('重新生成主照？舊的主照會隱藏，已經生成的生活照不會跟著換，可能要一起重做。')) return;

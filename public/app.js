@@ -16,12 +16,19 @@ async function api(path, { method = 'GET', body, form } = {}) {
   });
   const data = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
   if (res.status === 401) { S.me = null; if (!/^#\/(welcome|join|recover)$/.test(location.hash)) location.hash = '#/welcome'; throw new Error('unauth'); }
-  if (!res.ok) { const err = new Error(data?.error || '連線有點問題，再試一次'); err.data = data; err.status = res.status; throw err; }
+  if (!res.ok) {
+    const err = new Error(data?.error || '連線有點問題，再試一次'); err.data = data; err.status = res.status;
+    if (res.status >= 500 && path !== '/api/client-log') reportClientError(`伺服器錯誤 ${res.status}：${method} ${path.replace(/[\w-]{16,}|\d+/g, ':id').replace(/\?.*$/, '')}`, null, { kind: 'api', info: { status: res.status, error: String(data?.error || '').slice(0, 200) } });
+    throw err;
+  }
   return data;
 }
 const track = (name, data) => api('/api/events', { method: 'POST', body: { name, data } }).catch(() => {});
 
+// 畫面上不該出現 null／undefined：資料還沒到時就不顯示
+const blank = (v) => v == null || /^\s*(null|undefined|none)?\s*$/i.test(String(v)) || /\b(null|undefined)\b/.test(String(v));
 function toast(msg) {
+  if (blank(msg)) { if (msg !== '' && msg != null) expect(false, '提示訊息是空的', { msg: String(msg).slice(0, 60), route: location.hash.replace(/[\w-]{16,}/g, ':id') }); return; }
   const t = $('#toast'); t.textContent = msg; t.classList.add('on');
   clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('on'), 2400);
 }
@@ -139,6 +146,11 @@ window.addEventListener('hashchange', route);
 // ======================================================================
 // 每次有新功能，在最上面加一筆；看過的人不會再跳出來，「我 → 設定 → 更新內容」可以再看一次。
 const WHATS_NEW = [
+  { v: '2026-10-28c', title: '說話更像真人', items: [
+    { title: '這句怪怪的？告訴我們', text: '長按（電腦按右鍵）他說的話，可以評「很像真人」或「怪怪的」，也能寫他應該怎麼說。你同意的話，大家的回饋會讓所有角色越來越會聊天。', route: '#/chat' },
+    { title: '照片換新畫風', text: '他的大頭照改成精緻插畫；生活照是真實感的手機照片，但不會拍到臉，像他隨手拍給你看的。照片都是 AI 畫的，畫面裡的人並不存在。' },
+    { title: '少一點罐頭話', text: '「我接住你了」「你不是一個人」這類制式安慰會少很多，開場也不會再急著自我介紹。' },
+  ] },
   { v: '2026-10-28b', title: '小更新', items: [
     { title: '點大頭照看個人頁', text: '聊天列表、聊天室裡他的大頭照都可以點，會打開他的個人頁：看他的照片、動態和作息。成為朋友後，大頭照會換成他的照片。', route: '#/chat', sel: '[data-prof-rel]' },
   ] },
@@ -155,6 +167,7 @@ const LATEST_NEWS = WHATS_NEW[0].v;
 
 let tourOn = false;
 function afterRoute(hash) {
+  checkScreen();
   if (!S.me || tourOn) return;
   const st = S.me.settings || {};
   // 新使用者（註冊時 tourDone=false）才看完整導覽；舊使用者只看更新介紹
@@ -173,6 +186,7 @@ const MAIN_TOUR = () => [
   { title: '心情按鈕', text: '不想打字的時候按這裡，選一個心情傳給他；連按越多下代表越強烈。說不出自己是什麼感覺也沒關係，裡面有「說不出來」可以陪你找。', route: '#/chat', sel: '#moodFab' },
   { title: '動態', text: '他們會發自己的生活動態和限時動態；你也可以發，他們看到會留言或私訊關心你。', route: '#/feed', sel: '[data-tab="feed"]' },
   { title: '探索', text: '認識新的人，或自己捏一個。照片一開始是模糊的，你們越熟就看得越清楚。', route: '#/explore', sel: '[data-tab="explore"]' },
+  { title: '關於照片', text: '角色的大頭照、人像和生活照都是 AI 畫的，畫面裡的人並不存在；動態裡的風景照多半來自免費圖庫，需要標示作者的會寫在照片角落。', intro: true },
   { title: '我們的故事', text: '你們一起經歷的事、紀念日，都會慢慢記在這裡。', route: '#/story', sel: '[data-tab="story"]' },
   { title: '我', text: '你的主頁。右上角的齒輪是設定：可以換主題、開「夜貓／輪班」、調通知。', route: '#/me', sel: '[data-tab="me"]' },
   { title: '就這樣！', text: '剩下的，跟他們聊著聊著就會知道了。第一次進聊天室時，我會再帶你看一下裡面的按鈕。', intro: true, route: '#/chat' },
@@ -183,6 +197,7 @@ const ROOM_TOUR = () => [
   { title: '不知道怎麼回？', text: '按這裡才會出現三個回覆方向，幫你寫好一句，可以改了再送。', sel: '.sug-toggle' },
   { title: '心情與電話', text: '笑臉是心情按鈕；電話要等你們變曖昧以後才能打。', sel: '#moodBtn' },
   { title: '更多', text: '相簿、記事本、回憶錄、依主題搜尋聊過的事、換聊天室主題；他說話怪怪的，就從這裡「回報問題」，會馬上修正。', sel: '#more' },
+  { title: '這句怪怪的？', text: '長按（電腦按右鍵）他說的話，可以評「很像真人」或「怪怪的」，也可以寫他應該怎麼說。大家的回饋會讓所有角色說話越來越自然。', sel: '#stream' },
 ];
 
 // 一步一步的導覽：把要介紹的地方圈起來，旁邊放說明和「下一步」
@@ -203,6 +218,7 @@ async function runTour(steps, { key, value = true, after = {}, doneLabel = '完�
   const waitFor = async (sel) => { for (let k = 0; k < 30; k++) { const el = sel && document.querySelector(sel); if (el && el.getBoundingClientRect().width) return el; await sleep(100); } return null; };
   const show = async () => {
     const st = steps[i];
+    if (blank(st.title) || blank(st.text)) { if (i < steps.length - 1) { i++; return show(); } return finish(); }
     if (st.route && location.hash !== st.route) { location.hash = st.route; await sleep(450); }
     const el = st.sel ? await waitFor(st.sel) : null;
     if (st.sel && !el && !st.intro) { if (i < steps.length - 1) { i++; return show(); } return finish(); } // 這一步要介紹的東西不在畫面上，就跳過
@@ -259,6 +275,7 @@ function renderJoin() {
       <p class="small muted">作息、喜好不用填，對方會從聊天裡慢慢認識你。</p>
       <label class="check"><input type="checkbox" name="adult" required><span>我已年滿 18 歲</span></label>
       <label class="check"><input type="checkbox" name="aiAck" required><span>我了解對方是 AI 角色，不是真人；對話會交由 AI 服務（OpenAI，美國）處理。</span></label>
+      <label class="check"><input type="checkbox" name="feedbackConsent"><span>（可不勾）同意把我評價過、或我說「聽不懂」的那幾句對話，去掉名字後用來讓角色說話更自然。</span></label>
       <p class="small muted">繼續即表示你同意<a href="/privacy" target="_blank">隱私權政策與使用條款</a>。</p>
       <button class="btn block" style="margin-top:14px">繼續</button>
     </form></div>`;
@@ -280,7 +297,7 @@ function renderJoin() {
     const fd = Object.fromEntries(new FormData(e.target));
     if (!pick.seeks) return toast('選一下你想遇見誰');
     try {
-      const r = await api('/api/auth/join', { method: 'POST', body: { ...fd, ...pick, adult: !!fd.adult, aiAck: !!fd.aiAck } });
+      const r = await api('/api/auth/join', { method: 'POST', body: { ...fd, ...pick, adult: !!fd.adult, aiAck: !!fd.aiAck, feedbackConsent: !!fd.feedbackConsent } });
       S.me = await api('/api/me');
       app.innerHTML = `<div class="page" style="padding-bottom:32px"><h1>這是你的登入碼</h1>
         <p>換手機或清掉瀏覽器資料時，用它回來。之後也能在「我」裡面找到。</p>
@@ -317,9 +334,9 @@ function catChips(list, cur) {
 }
 const inCat = (t, cat) => !cat || (t.frame.cats || []).includes(cat);
 
-// 角色的 AI 人像（還沒認識時是模糊的），一定標示 AI 生成
+// 角色的 AI 人像（還沒認識時是模糊的）；AI 生成的說明放在使用說明和隱私權政策
 function portraitThumb(url, name, cls = 'pt-tile') {
-  return `<span class="${cls}"><img src="${esc(url)}" alt="${esc(name)}的照片（AI 生成）" loading="lazy"><i class="ai-tag">AI 生成</i></span>`;
+  return `<span class="${cls}"><img src="${esc(url)}" alt="${esc(name)}的照片" loading="lazy"></span>`;
 }
 function personCard(t, pressed = false) {
   const f = t.frame;
@@ -586,7 +603,7 @@ async function renderChatList() {
     // 伴旅的公告（後台發的）：看過、按掉就不再出現
     api('/api/announcements').then(list => {
       let gone = []; try { gone = JSON.parse(localStorage.getItem('annGone') || '[]'); } catch {}
-      const a = list.find(x => !gone.includes(x.id));
+      const a = list.find(x => !gone.includes(x.id) && !blank(x.text));
       if (!a || !$('#sysAnn')) return;
       $('#sysAnn').innerHTML = `<div class="sys-ann" role="status"><span class="sys-ann-art">${moodFace('happy')}</span><span class="grow">${esc(a.text)}</span><button class="icon-btn" aria-label="知道了">${icon('x')}</button></div>`;
       $('#sysAnn button').onclick = () => { try { localStorage.setItem('annGone', JSON.stringify([...gone, a.id].slice(-30))); } catch {} $('#sysAnn').innerHTML = ''; };
@@ -757,12 +774,11 @@ function cardHtml(m, rel) {
   }
 }
 
-// 照片來源標示（Pexels 規定要標示攝影師）
+// 照片來源標示：只有需要標示作者的授權（Openverse 的 CC 授權）才顯示；免費圖庫和 AI 生成的不標
 function creditHtml(p) {
-  if (!p || !p.credit || p.source === 'upload' && !p.credit) return '';
-  const label = { pexels: '・Pexels', pixabay: '・Pixabay', openverse: '' }[p.source] ?? '';
-  const text = `📷 ${esc(p.credit)}${label}`;
-  return p.creditUrl ? `<a class="credit" href="${esc(p.creditUrl)}" target="_blank" rel="noopener">${text}</a>` : `<span class="credit">${p.source === 'ai' ? '✨ AI 生成' : text}</span>`;
+  if (!p || !p.credit || p.source !== 'openverse') return '';
+  const text = `📷 ${esc(p.credit)}`;
+  return p.creditUrl ? `<a class="credit" href="${esc(p.creditUrl)}" target="_blank" rel="noopener">${text}</a>` : `<span class="credit">${text}</span>`;
 }
 // 明信片：你拍的風景照，或他寄來的風景（寫實照片，沒有照片時用插畫）
 function postcardHtml(c, { large = false } = {}) {
@@ -1136,7 +1152,7 @@ async function renderProfile(relId) {
   app.innerHTML = `<div class="profile">
     <div class="cover">${sceneSVG(p.cover, { label: `${f.name}工作的地方` })}
       <a class="icon-btn cover-back" href="#/chat/${p.id}" aria-label="回到聊天">${icon('back')}</a></div>
-    <div class="pf-head">${(() => { const m = p.photos?.find(x => x.kind === 'main' && x.level === 'c'); return m ? `<button class="pf-face" id="pfFace" aria-label="看大張照片"><img src="${esc(m.url)}" alt="${esc(f.name)}（AI 生成）"></button>` : avatar(f, 96, { lover: p.pinned, season: true }); })()}
+    <div class="pf-head">${(() => { const m = p.photos?.find(x => x.kind === 'main' && x.level === 'c'); return m ? `<button class="pf-face" id="pfFace" aria-label="看大張照片"><img src="${esc(m.url)}" alt="${esc(f.name)}的照片"></button>` : avatar(f, 96, { lover: p.pinned, season: true }); })()}
       <h1 class="pf-name">${esc(displayName(f))}</h1>
       ${p.signature ? `<p class="signature">${esc(p.signature)}</p>` : `<p class="signature muted">${P}還沒有寫個性簽名</p>`}
       <p class="pf-pres small">${presenceDot(p.presence)}${esc(presenceText(p.presence))}</p>
@@ -1151,7 +1167,7 @@ async function renderProfile(relId) {
         <div class="row"><span class="muted small" style="width:64px">上班</span><span class="grow">星期${esc(days)}・${esc(f.schedule?.start)}–${esc(f.schedule?.end)}</span></div>
         ${p.weekend ? `<div class="row"><span class="muted small" style="width:64px">休假</span><span class="grow">${esc(p.weekend)}</span></div>` : ''}
       </div>
-      ${p.photos?.length ? `<h2>${P}的照片 <span class="small muted">AI 生成的虛構人物</span></h2>
+      ${p.photos?.length ? `<h2>${P}的照片</h2>
       <div class="pf-photos">${p.photos.map(ph => {
         const lockText = ph.paid ? '付費解鎖・即將推出' : ph.kind === 'main' && ph.level !== 'c' ? '成為朋友後看清楚' : ph.locked ? `${['', '朋友', '曖昧', '交往'][ph.minStage] || ''}後解鎖` : '';
         return `<button class="pf-ph${ph.level !== 'c' ? ' locked' : ''}" data-ph="${ph.id}" data-lv="${ph.level}" data-paid="${ph.paid ? 1 : 0}"><img src="${esc(ph.url)}" alt="${esc(ph.caption || '照片')}" loading="lazy">${lockText ? `<span class="pf-lock">${ph.paid ? '✦' : '🔒'} ${esc(lockText)}</span>` : ''}</button>`;
@@ -1161,7 +1177,7 @@ async function renderProfile(relId) {
         : `<p class="muted small">${P}分享生活的時候，會留在這裡。</p>`}
     </div></div>`;
   $('#pfSet').onclick = async () => openCharSheet(await api(`/api/rels/${relId}`));
-  $('#pfFace') && ($('#pfFace').onclick = () => { const m = p.photos.find(x => x.kind === 'main'); openSheet(`<div class="pf-big"><img src="${esc(m.url)}" alt=""><i class="ai-tag">AI 生成</i></div>`); });
+  $('#pfFace') && ($('#pfFace').onclick = () => { const m = p.photos.find(x => x.kind === 'main'); openSheet(`<div class="pf-big"><img src="${esc(m.url)}" alt=""></div>`); });
   $$('[data-ph]').forEach(b => b.onclick = () => {
     const ph = p.photos.find(x => String(x.id) === b.dataset.ph);
     if (ph.paid) {
@@ -1173,11 +1189,38 @@ async function renderProfile(relId) {
       });
     }
     if (ph.level !== 'c') return toast(ph.kind === 'main' ? `你們成為朋友後，就能看清楚${P}` : `你們的關係再近一點，就能看到這張`);
-    openSheet(`<div class="pf-big"><img src="${esc(ph.url)}" alt="${esc(ph.caption || '')}"><i class="ai-tag">AI 生成</i></div>${ph.caption ? `<p class="muted small" style="text-align:center;margin-top:8px">${esc(ph.caption)}</p>` : ''}`);
+    openSheet(`<div class="pf-big"><img src="${esc(ph.url)}" alt="${esc(ph.caption || '')}"></div>${ph.caption ? `<p class="muted small" style="text-align:center;margin-top:8px">${esc(ph.caption)}</p>` : ''}`);
   });
 }
 
 let currentAudio = null;
+// 語感回饋：讓角色說話更像真人
+function openMsgFeedback(mid, text) {
+  const consent = !!S.me?.settings?.feedbackConsent;
+  openSheet(`<h2 style="margin-top:0">這句話</h2>
+    <p class="quote-line">「${esc(String(text).trim().slice(0, 80))}」</p>
+    ${consent ? '' : `<label class="check" style="margin:8px 0 12px"><input type="checkbox" id="fbOk"><span>同意把這句和前面幾句對話（會去掉你的名字和個資）用來讓角色說話更自然。之後可以在「我 → 隱私與資料」關掉。</span></label>`}
+    <div class="row" style="gap:8px"><button class="btn ghost grow" data-rate="1">👍 很像真人</button><button class="btn ghost grow" data-rate="-1">👎 怪怪的</button></div>
+    <div id="fbMore" hidden style="margin-top:12px"><label class="field"><span>${TA()}應該怎麼說比較自然？（可以不填）</span><textarea class="input" id="fbSug" rows="2" maxlength="200" placeholder="例如：哈哈真的假的，那你後來怎麼辦"></textarea></label>
+      <button class="btn block" id="fbSend">送出</button></div>
+    <p class="small muted" style="margin-top:10px">你的回饋會讓所有角色慢慢學會更自然的說法。</p>`, (sh, close) => {
+    const send = async (rating, suggestion = '') => {
+      if (!S.me.settings.feedbackConsent) {
+        if (!$('#fbOk', sh)?.checked) return toast('先勾選同意才能送出');
+        await api('/api/me', { method: 'PATCH', body: { settings: { feedbackConsent: true } } }).catch(() => {});
+        S.me.settings.feedbackConsent = true;
+      }
+      try { await api(`/api/messages/${mid}/feedback`, { method: 'POST', body: { rating, suggestion } }); close(); toast(rating === 1 ? '收到，謝謝你' : `收到，${TA()}會少這樣說`); }
+      catch (e) { toast(e.message); }
+    };
+    $$('[data-rate]', sh).forEach(b => b.onclick = () => {
+      if (b.dataset.rate === '1') return send(1);
+      $('#fbMore', sh).hidden = false; $('#fbSug', sh).focus();
+    });
+    $('#fbSend', sh).onclick = () => send(-1, $('#fbSug', sh).value);
+  });
+}
+
 function bindStream(root) {
   $$('[data-choice]', root).forEach(b => b.onclick = async () => {
     const relId = S.room?.rel?.id; if (!relId || S.room.sending) return;
@@ -1190,6 +1233,15 @@ function bindStream(root) {
     try { await api(`/api/rels/${relId}/goal`, { method: 'POST', body: { msgId: Number(b.dataset.goal), accept: b.dataset.acc === '1' } }); S.room.sending = false; renderRoom(relId); } catch (e) { toast(e.message); S.room.sending = false; }
   });
   $$('[data-prof]', root).forEach(b => b.onclick = () => { const id = S.room?.rel?.id; if (id) location.hash = `#/profile/${id}`; });
+  // 長按（電腦：按右鍵）角色說的話 → 這句很像真人／怪怪的
+  $$('.msg.him[data-id] > .bubble', root).forEach(b => {
+    const mid = Number(b.parentElement.dataset.id); if (!mid) return;
+    let t = null;
+    const start = () => { t = setTimeout(() => { t = null; navigator.vibrate?.(15); openMsgFeedback(mid, b.textContent); }, 550); };
+    const stop = () => { if (t) { clearTimeout(t); t = null; } };
+    b.addEventListener('pointerdown', start); ['pointerup', 'pointerleave', 'pointercancel', 'pointermove'].forEach(ev => b.addEventListener(ev, ev === 'pointermove' ? (e) => { if (Math.abs(e.movementX) + Math.abs(e.movementY) > 6) stop(); } : stop));
+    b.addEventListener('contextmenu', (e) => { e.preventDefault(); stop(); openMsgFeedback(mid, b.textContent); });
+  });
   $$('[data-audio]', root).forEach(b => b.onclick = () => {
     if (!b.dataset.audio || b.dataset.audio === 'null') return;
     if (currentAudio) { currentAudio.pause(); }
@@ -2042,6 +2094,7 @@ async function renderSettings() {
       <div class="row"><span class="grow">下載我的資料</span><a class="btn ghost sm" href="/api/me/export" download>下載</a></div>
       <div class="row"><span class="grow">刪除帳號與所有資料</span><button class="btn danger sm" id="delAll">刪除</button></div>
       <div class="row"><span class="grow">系統整理的相處偏好<div class="small muted">${S.me.prefs?.likes?.length || S.me.prefs?.dislikes?.length ? [...(S.me.prefs.likes || []).map(x => '喜歡' + x.replace(/^喜歡/, '')), ...(S.me.prefs.dislikes || []).map(x => x.startsWith('不喜歡') ? x : '不喜歡' + x)].map(esc).join('・') : '還沒有。聊久一點，系統會整理你喜歡的聊天方式，讓新認識的人也懂你。'}<br>只記說話方式，不記你的私事。</div></span>${S.me.prefs ? '<button class="btn ghost sm" id="clrPrefs">清除</button>' : ''}</div>
+      <div class="row"><label for="fbc" class="grow">用我的回饋改善角色說話<div class="small muted">長按${TA()}說的話可以評「很像真人／怪怪的」；你說「什麼意思？」時也會記下前一句。只存那幾句、去掉名字</div></label><input type="checkbox" id="fbc" ${st.feedbackConsent ? 'checked' : ''}></div>
       <div class="row"><span class="grow">使用說明<div class="small muted">再帶你逛一次伴旅</div></span><button class="btn ghost sm" id="replayTour">看一次</button></div>
       <div class="row"><span class="grow">更新內容<div class="small muted">最近一次更新：${LATEST_NEWS}</div></span><button class="btn ghost sm" id="replayNews">看一次</button></div>
       <div class="row"><span class="grow">隱私權政策與使用條款</span><a class="btn ghost sm" href="/privacy" target="_blank">查看</a></div>
@@ -2073,6 +2126,7 @@ async function renderSettings() {
   $$('[data-np]').forEach(b => b.onclick = () => { $$('[data-np]').forEach(x => x.setAttribute('aria-pressed', String(x === b))); saveSettings({ notifyPreview: b.dataset.np }); });
   $('#sugg').onchange = (e) => saveSettings({ showSuggestions: e.target.checked });
   $('#rdelay').onchange = (e) => saveSettings({ realisticDelay: e.target.checked });
+  $('#fbc').onchange = (e) => saveSettings({ feedbackConsent: e.target.checked });
   $('#owl').onchange = (e) => {
     const on = e.target.checked;
     const dnd = on ? { dndStart: '09:00', dndEnd: '16:00' } : { dndStart: '23:30', dndEnd: '07:30' };
@@ -2150,17 +2204,40 @@ async function enablePush() {
   return true;
 }
 
-// 手機端錯誤回報到後台「系統紀錄」（同一則錯誤只送一次）
+// 手機端錯誤回報到後台「系統紀錄」（同一則錯誤只送一次）。後台會把同類問題整理成待修清單（有設定的話開成 GitHub Issue）
 const sentErrors = new Set();
-function reportClientError(message, stack) {
-  const key = String(message).slice(0, 120);
-  if (sentErrors.has(key) || sentErrors.size > 20 || /unauth|Failed to fetch|Load failed|NetworkError/.test(key)) return;
+function reportClientError(message, stack, extra = {}) {
+  const key = String(message).slice(0, 160);
+  // 「Script error.」是外掛或別的網站的程式出錯，瀏覽器不給細節，回報了也查不到
+  if (sentErrors.has(key) || sentErrors.size > 30 || /unauth|Failed to fetch|Load failed|NetworkError|^Script error\.?$|ResizeObserver loop|AbortError/.test(key)) return;
   sentErrors.add(key);
   fetch('/api/client-log', { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'same-origin',
-    body: JSON.stringify({ message: key, stack: String(stack || '').slice(0, 2000), url: location.hash, v: appVer || '' }) }).catch(() => {});
+    body: JSON.stringify({ message: key, stack: String(stack || '').slice(0, 2000), url: location.hash.replace(/[\w-]{16,}/g, ':id'), v: (() => { try { return appVer || ''; } catch { return ''; } })(), kind: extra.kind || 'js', check: extra.check || null, info: extra.info || null }) }).catch(() => {});
 }
-window.addEventListener('error', (e) => reportClientError(e.message, e.error?.stack));
+// 功能檢查：條件沒達到就回報（例如畫面上出現 null、照片載不出來、伺服器出錯）
+function expect(ok, check, info) { if (!ok) reportClientError(`功能檢查沒過：${check}`, new Error(check).stack, { kind: 'check', check, info }); return ok; }
+window.addEventListener('error', (e) => {
+  // 圖片、語音載不出來（不會冒泡，要在捕獲階段抓）
+  const t = e.target;
+  if (t && t !== window && (t.tagName === 'IMG' || t.tagName === 'AUDIO')) {
+    const src = String(t.currentSrc || t.src || '');
+    if (src && !src.startsWith('blob:') && !src.startsWith('data:')) expect(false, `${t.tagName === 'IMG' ? '圖片' : '語音'}載不出來`, { src: src.replace(location.origin, '').replace(/\?.*$/, '').slice(0, 160) });
+    return;
+  }
+  reportClientError(e.message, e.error?.stack);
+}, true);
 window.addEventListener('unhandledrejection', (e) => reportClientError(e.reason?.message || String(e.reason), e.reason?.stack));
+// 換頁後檢查：畫面上不該有 null／undefined／NaN／[object Object]
+function checkScreen() {
+  setTimeout(() => {
+    const txt = (document.getElementById('app')?.innerText || '') + ' ' + (document.getElementById('sheet-root')?.innerText || '');
+    const m = txt.match(/(^|[^\w])(null|undefined|NaN|\[object Object\])(?![\w])/);
+    if (m) {
+      const i = txt.indexOf(m[2]);
+      expect(false, `畫面出現「${m[2]}」`, { route: location.hash.replace(/[\w-]{16,}/g, ':id'), around: txt.slice(Math.max(0, i - 30), i + 30).replace(/\s+/g, ' ') });
+    }
+  }, 1500);
+}
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 

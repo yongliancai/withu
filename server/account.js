@@ -29,6 +29,10 @@ export function deleteAccount(uid) {
   db.prepare('DELETE FROM story_views WHERE user_id=?').run(uid);
   db.prepare('DELETE FROM self_topics WHERE rel_id IN (SELECT id FROM relationships WHERE user_id=?)').run(uid);
   db.prepare('DELETE FROM daily_use WHERE user_id=?').run(uid);
+  try {
+    db.prepare('DELETE FROM style_examples WHERE feedback_id IN (SELECT id FROM msg_feedback WHERE user_id=?)').run(uid);
+    db.prepare('DELETE FROM msg_feedback WHERE user_id=?').run(uid);
+  } catch { /* 表格還沒建立 */ }
   db.prepare('DELETE FROM users WHERE id=?').run(uid); // cascades
   return true;
 }
