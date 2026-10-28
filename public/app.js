@@ -139,6 +139,9 @@ window.addEventListener('hashchange', route);
 // ======================================================================
 // 每次有新功能，在最上面加一筆；看過的人不會再跳出來，「我 → 設定 → 更新內容」可以再看一次。
 const WHATS_NEW = [
+  { v: '2026-10-28b', title: '小更新', items: [
+    { title: '點大頭照看個人頁', text: '聊天列表、聊天室裡他的大頭照都可以點，會打開他的個人頁：看他的照片、動態和作息。成為朋友後，大頭照會換成他的照片。', route: '#/chat', sel: '[data-prof-rel]' },
+  ] },
   { v: '2026-10-28', title: '伴旅更新了', items: [
     { title: '看得到他的樣子了', text: '角色有了 AI 生成的照片。還沒認識時是模糊的，成為朋友就看得清楚，越熟解鎖越多生活照。', route: '#/explore', sel: '.tile' },
     { title: '心情按鈕變多了', text: '多了 20 幾種心情，也可以自己寫。不知道自己是什麼感覺時，按「說不出來」，一步一步陪你找。', sel: '#moodFab', route: '#/chat' },
@@ -561,14 +564,14 @@ async function renderChatList() {
     app.innerHTML = `<div class="page">
       ${S.me.mock ? '<div class="banner-test">測試模式：尚未設定 OpenAI 金鑰，回覆為範例</div>' : ''}
       <h1>聊天</h1>${installBanner()}<div id="sysAnn"></div><div id="annBanner"></div>
-      ${lover ? `<a class="lover-card" href="#/chat/${lover.id}">${avatar(lover.frame, 72, { lover: true })}
+      ${lover ? `<a class="lover-card" href="#/chat/${lover.id}"><span data-prof-rel="${lover.id}" role="button" aria-label="看${ta(lover.frame)}的個人頁">${avatar(lover.frame, 72, { lover: true })}</span>
         <span class="grow" style="min-width:0"><span class="name">${esc(displayName(lover.frame))}</span>
         ${lover.statusLine && Date.now() - lover.statusLineAt < 12 * 3600e3
           ? `<span class="status-line">${esc(lover.statusLine)}</span><time class="status-time">${ago(lover.statusLineAt)}・${ta(lover.frame)}告訴你的</time>`
           : `<span class="pres small">${presenceDot(lover.presence)}${esc(presenceText(lover.presence))}</span><span class="muted small last1">${esc(lover.last?.text || '')}</span>`}</span>
         ${lover.unread ? `<span class="badge">${lover.unread}</span>` : ''}</a>` : ''}
       ${others.length ? `<div class="list-label">${lover ? '朋友' : '最近'}</div>` : ''}
-      ${others.map(r => `<a class="conv${r.mode === 'practice' && r.stage === 2 && r.unread ? ' glow' : ''}" href="#/chat/${r.id}"><span class="av-wrap">${avatar(r.frame, 50)}${r.presence?.code === 'online' ? '<span class="pdot online on-av" aria-label="上線中"></span>' : ''}</span>
+      ${others.map(r => `<a class="conv${r.mode === 'practice' && r.stage === 2 && r.unread ? ' glow' : ''}" href="#/chat/${r.id}"><span class="av-wrap" data-prof-rel="${r.id}" role="button" aria-label="看${ta(r.frame)}的個人頁">${avatar(r.frame, 50)}${r.presence?.code === 'online' ? '<span class="pdot online on-av" aria-label="上線中"></span>' : ''}</span>
         <span class="meta"><span class="top"><span class="nm">${esc(displayName(r.frame))}</span>${r.starred ? '<span class="star" aria-label="特別關注">★</span>' : ''}
         ${r.outing ? '<span class="tag">出遊中</span>' : ''}<span class="when">${r.last ? ago(r.last.at) : ''}</span></span>
         <span class="last">${r.last?.sender === 'user' ? '你：' : ''}${esc(r.last?.text || '')}</span></span>
@@ -577,6 +580,8 @@ async function renderChatList() {
     </div>
     <button class="mood-fab" id="moodFab" aria-label="心情按鈕">${moodFace()}</button>`;
     bindInstall();
+    // 點大頭照看個人頁（點其他地方進聊天室）
+    $$('[data-prof-rel]').forEach(a => a.onclick = (e) => { e.preventDefault(); e.stopPropagation(); location.hash = `#/profile/${a.dataset.profRel}`; });
     $('#moodFab').onclick = () => openMoodButton();
     // 伴旅的公告（後台發的）：看過、按掉就不再出現
     api('/api/announcements').then(list => {
@@ -680,6 +685,15 @@ function messageHtml(m, rel, prev) {
     return out + `${art}<div class="scene" data-id="${m.id}">${esc(m.text)}</div>`;
   }
   if (m.kind === 'card') return out + cardHtml(m, rel);
+  // 像 LINE：他連續傳的第一則旁邊放大頭照，點了看他的個人頁
+  if (side === 'him' && ['text', 'voice', 'sticker'].includes(m.kind)) {
+    const first = !prev || prev.sender !== 'char' || !['text', 'voice', 'sticker'].includes(prev.kind) || (m.at - prev.at > 10 * 60000);
+    const av = first ? `<button class="msg-av" data-prof aria-label="看${ta(rel.frame)}的個人頁">${avatar(rel.frame, 34, { season: false })}</button>` : '<span class="msg-av-sp"></span>';
+    return messageBody(m, rel, prev, out, side, glow).replace(/^((?:<div class="day">[^<]*<\/div>)?<div class="msg him[^>]*>)/, `$1${av}`);
+  }
+  return messageBody(m, rel, prev, out, side, glow);
+}
+function messageBody(m, rel, prev, out, side, glow) {
   if (m.kind === 'sticker') {
     const readMark = side === 'me' && typeof m.id === 'number' && m.id <= (S.room?.charReadId || 0) ? '<span class="read">已讀</span>' : '';
     return out + `<div class="msg ${side} stk" data-id="${m.id}">${side === 'me' ? `<span class="time">${readMark}${hhmm(m.at)}</span>` : ''}<div class="stk-img">${stickerSVG(m.card?.id, 112)}</div>${side === 'him' ? `<span class="time">${hhmm(m.at)}</span>` : ''}</div>`;
@@ -1122,7 +1136,7 @@ async function renderProfile(relId) {
   app.innerHTML = `<div class="profile">
     <div class="cover">${sceneSVG(p.cover, { label: `${f.name}工作的地方` })}
       <a class="icon-btn cover-back" href="#/chat/${p.id}" aria-label="回到聊天">${icon('back')}</a></div>
-    <div class="pf-head">${(() => { const m = p.photos?.find(x => x.kind === 'main' && x.level === 'c'); return m ? `<span class="pf-face"><img src="${esc(m.url)}" alt="${esc(f.name)}（AI 生成）"></span>` : avatar(f, 96, { lover: p.pinned, season: true }); })()}
+    <div class="pf-head">${(() => { const m = p.photos?.find(x => x.kind === 'main' && x.level === 'c'); return m ? `<button class="pf-face" id="pfFace" aria-label="看大張照片"><img src="${esc(m.url)}" alt="${esc(f.name)}（AI 生成）"></button>` : avatar(f, 96, { lover: p.pinned, season: true }); })()}
       <h1 class="pf-name">${esc(displayName(f))}</h1>
       ${p.signature ? `<p class="signature">${esc(p.signature)}</p>` : `<p class="signature muted">${P}還沒有寫個性簽名</p>`}
       <p class="pf-pres small">${presenceDot(p.presence)}${esc(presenceText(p.presence))}</p>
@@ -1147,6 +1161,7 @@ async function renderProfile(relId) {
         : `<p class="muted small">${P}分享生活的時候，會留在這裡。</p>`}
     </div></div>`;
   $('#pfSet').onclick = async () => openCharSheet(await api(`/api/rels/${relId}`));
+  $('#pfFace') && ($('#pfFace').onclick = () => { const m = p.photos.find(x => x.kind === 'main'); openSheet(`<div class="pf-big"><img src="${esc(m.url)}" alt=""><i class="ai-tag">AI 生成</i></div>`); });
   $$('[data-ph]').forEach(b => b.onclick = () => {
     const ph = p.photos.find(x => String(x.id) === b.dataset.ph);
     if (ph.paid) {
@@ -1174,6 +1189,7 @@ function bindStream(root) {
     S.room.sending = true; $$('[data-goal]', root).forEach(x => x.disabled = true);
     try { await api(`/api/rels/${relId}/goal`, { method: 'POST', body: { msgId: Number(b.dataset.goal), accept: b.dataset.acc === '1' } }); S.room.sending = false; renderRoom(relId); } catch (e) { toast(e.message); S.room.sending = false; }
   });
+  $$('[data-prof]', root).forEach(b => b.onclick = () => { const id = S.room?.rel?.id; if (id) location.hash = `#/profile/${id}`; });
   $$('[data-audio]', root).forEach(b => b.onclick = () => {
     if (!b.dataset.audio || b.dataset.audio === 'null') return;
     if (currentAudio) { currentAudio.pause(); }

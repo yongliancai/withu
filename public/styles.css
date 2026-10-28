@@ -584,6 +584,10 @@ a { color: inherit; }
 .pt-mini .ai-tag { left:4px; bottom:4px; font-size:9px; }
 .page h2 .small { font: 400 12px var(--sans); letter-spacing: 0; }
 .pf-face { width:96px; height:96px; border-radius:50%; overflow:hidden; box-shadow:0 0 0 4px var(--paper); background:var(--line); } .pf-face img { width:100%; height:100%; object-fit:cover; }
+.msg-av { display:inline-flex; border:0; background:none; padding:0; margin:0 6px 0 0; align-self:flex-start; flex:none; cursor:pointer; }
+.msg-av-sp { width:40px; flex:none; }
+[data-prof-rel] { cursor:pointer; display:inline-flex; }
+button.pf-face { border:0; padding:0; cursor:zoom-in; }
 .pf-photos { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
 .pf-ph { position:relative; aspect-ratio:3/4; border:0; padding:0; border-radius:12px; overflow:hidden; background:var(--line); }
 .pf-ph img { width:100%; height:100%; object-fit:cover; display:block; }
