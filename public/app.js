@@ -582,7 +582,7 @@ function messageHtml(m, rel, prev) {
     return out + `<div class="msg ${side} stk" data-id="${m.id}">${side === 'me' ? `<span class="time">${readMark}${hhmm(m.at)}</span>` : ''}<div class="stk-img">${stickerSVG(m.card?.id, 112)}</div>${side === 'him' ? `<span class="time">${hhmm(m.at)}</span>` : ''}</div>`;
   }
   if (m.kind === 'photo') {
-    return out + `<div class="msg me" data-id="${m.id}"><span class="time">${hhmm(m.at)}</span><div class="photo-bubble"><img src="${m.media}" alt="你分享的照片" loading="lazy">${m.text ? `<div class="cap">${esc(m.text)}</div>` : ''}</div></div>`;
+    return out + `<div class="msg me" data-id="${m.id}"><span class="time">${hhmm(m.at)}</span><div class="photo-bubble"><img src="${esc(S.room?.previews?.[m.id] || m.media)}" alt="你分享的照片" loading="lazy">${m.text ? `<div class="cap">${esc(m.text)}</div>` : ''}</div></div>`;
   }
   if (m.kind === 'voice') {
     return out + `<div class="msg ${side}${glow}" data-id="${m.id}">${side === 'me' ? `<span class="time">${hhmm(m.at)}</span>` : ''}
@@ -659,6 +659,7 @@ async function renderRoom(relId) {
   tabs.hidden = true;
   let rel;
   try { rel = await api(`/api/rels/${relId}`); } catch (e) { toast(e.message); location.hash = '#/chat'; return; }
+  if (location.hash !== `#/chat/${relId}`) return; // 等資料時已經換到別頁了
   S.room = { rel, messages: [], sending: false, recorder: null, charReadId: rel.charReadId || 0, presence: rel.presence };
   const sub = () => rel.status !== 'active' ? '這段關係已經結束了' : `${presenceDot(S.room.presence)}${esc(presenceText(S.room.presence))}`;
   const ACT = { watch: '🎬 一起看', focus: '⏳ 陪你專心', bedtime: '🌙 睡前聊聊' };
@@ -694,6 +695,7 @@ async function renderRoom(relId) {
   const stream = $('#stream');
 
   const msgs = await api(`/api/rels/${relId}/messages`);
+  if (!document.body.contains(stream)) return; // 等資料時已經換到別頁了
   S.room.messages = msgs;
   S.room.firstSceneId = msgs.find(m => m.kind === 'scene')?.id;
   stream.innerHTML = msgs.map((m, i) => messageHtml(m, rel, msgs[i - 1])).join('');
@@ -716,10 +718,18 @@ async function renderRoom(relId) {
     const box = document.createElement('div');
     box.id = 'suggest'; box.className = 'suggest';
     const items = last.suggest.map(x => typeof x === 'string' ? { label: x, text: x } : x);
-    box.innerHTML = items.map((x, i) => `<button class="chip" data-i="${i}" title="${esc(x.text)}">${esc(x.label)}</button>`).join('');
+    // 先只放一顆小按鈕，按了才展開三個方向：不讓人覺得「預設就是要講這些」
+    box.innerHTML = `<button class="chip sug-toggle" aria-expanded="false">💡 不知道怎麼回？</button>`;
     $('#composer').before(box);
+    $('.sug-toggle', box).onclick = () => {
+      box.innerHTML = items.map((x, i) => `<button class="chip" data-i="${i}" title="${esc(x.text)}">${esc(x.label)}</button>`).join('');
+      bindChips();
+      track('suggest_open', {});
+    };
+    function bindChips() {
     // 點方向 → 幫你寫好一句放進輸入框，可以改了再送
     $$('.chip', box).forEach(c => c.onclick = () => { txt.value = items[c.dataset.i].text; sync(); txt.focus(); txt.setSelectionRange(txt.value.length, txt.value.length); track('suggest_pick', { label: items[c.dataset.i].label }); });
+    }
   }
   S.room.drawSuggest = drawSuggest;
   drawSuggest();
@@ -853,7 +863,11 @@ async function renderRoom(relId) {
     queue.push(item);
     lastSendAt = Date.now();
     chain = chain.then(async () => {
-      try { item.id = (await req()).id; }
+      try {
+        item.id = (await req()).id;
+        // 照片：先沿用手機上的預覽，不用等伺服器的圖載完才看得到
+        if (local.kind === 'photo' && local.media && item.id) (S.room.previews ||= {})[item.id] = local.media;
+      }
       catch (e) { node.remove(); { const i = queue.indexOf(item); if (i >= 0) queue.splice(i, 1); } toast(e.message); }
     });
     armFlush();
@@ -905,11 +919,21 @@ async function renderRoom(relId) {
     stream.appendChild(d); stream.scrollTop = stream.scrollHeight;
     return { remove: () => { gone = true; d.remove(); } };
   }
-  async function revealSequential(fresh, { typing = null, typingAt = 0 } = {}) {
+  // 同一時間只跑一個「訊息浮現」流程，而且每則訊息一出現就先登記：
+  // 不然背景輪詢和你送出後的回覆同時在顯示，同一則會出現兩次
+  const claimed = new Set(S.room.messages.map(m => m.id));
+  let revealChain = Promise.resolve();
+  function revealSequential(fresh, opts = {}) {
+    const run = revealChain.then(() => revealNow(fresh, opts));
+    revealChain = run.catch(() => {});
+    return run;
+  }
+  async function revealNow(fresh, { typing = null, typingAt = 0 } = {}) {
     let first = true, gotChar = false;
     for (const m of fresh) {
       const prev = S.room.messages.at(-1);
-      if (S.room.messages.some(x => x.id === m.id)) continue;
+      if (claimed.has(m.id) || S.room.messages.some(x => x.id === m.id)) continue;
+      claimed.add(m.id);
       if (m.sender === 'char' && m.kind !== 'card') {
         gotChar = true;
         $('#pendingNote')?.remove();
@@ -1303,15 +1327,16 @@ function openCharSheet(rel) {
 
 function openReportSheet(rel) {
   openSheet(`<h3>回報問題</h3>
-    <p class="small muted">例如：${ta(rel.frame)}說的話和設定不符、突然沒回應、重複同樣的話、按鈕沒反應。</p>
+    <p class="small muted">例如：${ta(rel.frame)}太常問問題、語氣不像、記錯你的事、重複同樣的話、按鈕沒反應。說話方式和記錯的事會<b>馬上修正</b>，其他問題會交給開發的人。</p>
     <textarea class="input" id="rpText" rows="4" placeholder="發生了什麼事？"></textarea>
     <label class="check"><input type="checkbox" id="rpChat" checked><span>附上最近的 16 則對話，幫助我們找原因（只有負責測試的人看得到）</span></label>
     <button class="btn block" id="rpSend">送出</button>`, (sheet, close) => {
     $('#rpSend', sheet).onclick = async () => {
       const text = $('#rpText', sheet).value.trim();
       if (!text) return toast('寫一下發生了什麼');
-      try { await api(`/api/rels/${rel.id}/report-issue`, { method: 'POST', body: { text, includeChat: $('#rpChat', sheet).checked } }); close(); toast('收到了，謝謝你'); }
-      catch (e) { toast(e.message); }
+      $('#rpSend', sheet).disabled = true;
+      try { const r = await api(`/api/rels/${rel.id}/report-issue`, { method: 'POST', body: { text, includeChat: $('#rpChat', sheet).checked } }); close(); toast(r.applied || '收到了，謝謝你'); }
+      catch (e) { $('#rpSend', sheet).disabled = false; toast(e.message); }
     };
   });
 }

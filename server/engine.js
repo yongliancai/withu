@@ -394,7 +394,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   // 重複偵測：跟他最近說過的話太像就重寫一次
   const rep = findRepeat((out.messages || []).map(m => String(m.text || '')), recentCharTexts(rel.id));
   if (rep) {
-    logIssue({ level: 'warn', source: 'llm', message: '角色重複說了類似的話，已自動重寫', detail: { now: rep.now, before: rep.before, trigger: triggerKey }, userId: rel.user_id, relId: rel.id });
+    logIssue({ level: 'auto', source: 'llm', message: '角色重複說了類似的話，已自動重寫', detail: { now: rep.now, before: rep.before, trigger: triggerKey }, userId: rel.user_id, relId: rel.id });
     input.push({ role: 'developer', content: `你剛剛想說「${rep.now}」，但這跟你之前說過的「${rep.before}」太像了。換一個說法，或聊新的東西、說新的進展。` });
     try { out = await call(); } catch { /* keep the first answer */ }
   }

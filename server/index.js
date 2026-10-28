@@ -1,5 +1,7 @@
 import express from 'express';
 import { S } from './settings.js';
+import { updateUserPrefs } from './prefs.js';
+import { addMemory } from './memory.js';
 import { deleteAccount } from './account.js';
 import { mountAdminMore, activeAnnouncements } from './adminMore.js';
 import { budgetPaused } from './budget.js';
@@ -640,19 +642,48 @@ app.post('/api/rels/:id/activity/end', auth, wrap(async (req, res) => {
 }));
 
 // 使用者在聊天室回報問題（同意的話附上最近的對話，方便找原因）
-app.post('/api/rels/:id/report-issue', auth, (req, res) => {
+app.post('/api/rels/:id/report-issue', auth, wrap(async (req, res) => {
   const rel = ownRel(req, res); if (!rel) return;
   const text = String(req.body?.text || '').trim().slice(0, 1000);
   if (!text) return res.status(400).json({ error: '寫一下發生了什麼' });
-  const recent = req.body?.includeChat
-    ? db.prepare(`SELECT id, sender, kind, text, card, proactive, reason, created_at FROM messages WHERE rel_id=? ORDER BY id DESC LIMIT 16`).all(rel.id).reverse()
-      .map(m => ({ ...m, text: (m.text || '').slice(0, 300), card: m.card ? j(m.card, {}).type : null }))
-    : null;
+  const recentRows = db.prepare(`SELECT id, sender, kind, text, card, proactive, reason, created_at FROM messages WHERE rel_id=? ORDER BY id DESC LIMIT 16`).all(rel.id).reverse()
+    .map(m => ({ ...m, text: (m.text || '').slice(0, 300), card: m.card ? j(m.card, {}).type : null }));
   const p = getPersona(rel);
+  // 即時修正：回報如果是「他說話的方式」或「他記錯了我的事」，馬上改，不用等人工處理
+  const fix = await fixFromReport(req.user, rel, p, text, recentRows).catch(() => null);
   logIssue({ level: 'report', source: 'user', message: text, userId: req.user.id, relId: rel.id,
-    detail: { character: p.name, stage: rel.stage, mode: rel.mode, recent, client: String(req.headers['user-agent'] || '').slice(0, 200) } });
-  res.json({ ok: true });
-});
+    detail: { character: p.name, stage: rel.stage, mode: rel.mode, recent: req.body?.includeChat ? recentRows : null, applied: fix?.applied || null, category: fix?.category || null, client: String(req.headers['user-agent'] || '').slice(0, 200) } });
+  res.json({ ok: true, applied: fix?.ack || null });
+}));
+
+async function fixFromReport(user, rel, persona, text, recent) {
+  const res = await jsonCall({
+    userId: user.id, kind: 'report_fix', tier: 'cheap',
+    instructions: `使用者在和 AI 角色「${persona.name}」聊天時回報了一個問題。判斷能不能馬上修正：
+- category：character（角色說話或相處的方式不對，例如太常問問題、太油、語氣不像、太快曖昧、時間或作息說錯）、fact（角色記錯了使用者的事）、app（App 功能壞掉、按鈕沒反應、訊息不見等）、other。
+- habit：如果是 character，寫一條給角色的相處習慣（30 字內，「對方希望……」開頭，例如「對方希望少問問題，多分享自己的事」）；否則空字串。
+- memory_fix：如果是 fact，寫正確的事（25 字內，「對方……」開頭）；否則空字串。
+- ack：給使用者的一句回覆（25 字內），說明已經做了什麼，例如「收到，${persona.name}之後會少問問題」；app 類就說「已經回報給開發的人」。
+只輸出 JSON。`,
+    input: [{ role: 'user', content: `回報內容：${text}\n\n最近的對話：\n${recent.filter(m => m.text).map(m => `${m.sender === 'user' ? '使用者' : m.sender === 'char' ? persona.name : '系統'}：${m.text}`).join('\n')}` }],
+    schema: { type: 'object', additionalProperties: false, properties: {
+      category: { type: 'string', enum: ['character', 'fact', 'app', 'other'] }, habit: { type: 'string' }, memory_fix: { type: 'string' }, ack: { type: 'string' } },
+      required: ['category', 'habit', 'memory_fix', 'ack'] },
+    schemaName: 'report_fix',
+    mock: { category: 'character', habit: `對方希望：${text.slice(0, 24)}`, memory_fix: '', ack: `收到，${persona.name}之後會注意` },
+  });
+  const applied = [];
+  if (res.category === 'character' && res.habit.trim()) {
+    addMemory(rel, 'style', res.habit.trim().slice(0, 60), 5);
+    applied.push(`相處習慣：${res.habit.trim()}`);
+    updateUserPrefs(user.id, { force: true }).catch(() => {});
+  }
+  if (res.category === 'fact' && res.memory_fix.trim()) {
+    addMemory(rel, 'fact', res.memory_fix.trim().slice(0, 60), 5);
+    applied.push(`記憶更正：${res.memory_fix.trim()}`);
+  }
+  return { category: res.category, applied: applied.join('；') || null, ack: String(res.ack || '').slice(0, 40) };
+}
 
 // 手機端的程式錯誤
 app.post('/api/client-log', (req, res) => {
@@ -838,7 +869,7 @@ app.post('/api/push/unsubscribe', auth, (req, res) => {
   res.json({ ok: true });
 });
 
-const CLIENT_EVENTS = ['app_open', 'coming_soon_click', 'coming_soon_price', 'share_card', 'install_prompt', 'feedback'];
+const CLIENT_EVENTS = ['app_open', 'coming_soon_click', 'coming_soon_price', 'share_card', 'install_prompt', 'feedback', 'suggest_open', 'suggest_pick'];
 app.post('/api/events', auth, (req, res) => {
   const { name, data } = req.body || {};
   if (CLIENT_EVENTS.includes(name)) logEvent(req.user.id, name, data);

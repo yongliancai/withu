@@ -90,6 +90,6 @@ action：send（沒問題）、rewrite（改寫後再送，messages 給改好的
       : { action: 'send', reason: 'ok', messages: [] },
   }).catch(e => ({ action: rule.length && !lateReply ? 'skip' : 'send', reason: `檢查失敗：${e.message}`, messages: [] }));
   if (res.action === 'rewrite' && !res.messages?.length) res.action = rule.length && !lateReply ? 'skip' : 'send';
-  if (res.action !== 'send') logIssue({ level: 'warn', source: 'review', message: `發送前檢查：${res.action === 'skip' ? '取消' : '改寫'}（${res.reason}）`, detail: { draft: texts, rewritten: res.messages, trigger: triggerKey, rule }, userId: rel.user_id, relId: rel.id });
+  if (res.action !== 'send') logIssue({ level: 'auto', source: 'review', message: `發送前檢查：${res.action === 'skip' ? '取消' : '改寫'}（${res.reason}）`, detail: { draft: texts, rewritten: res.messages, trigger: triggerKey, rule }, userId: rel.user_id, relId: rel.id });
   return res;
 }

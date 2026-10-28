@@ -374,8 +374,8 @@ const VIEWS = {
     const f = VIEWS._logFilter || (VIEWS._logFilter = { level: '', source: '', status: 'open' });
     const q = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
     const d = await api('/logs?' + q);
-    const LV = { error: ['錯誤', 'off'], warn: ['警告', 'warn'], report: ['使用者回報', 'on'] };
-    const SRC = { server: '伺服器', budget: '預算', scheduler: '主動訊息', llm: 'AI 模型', tts: '語音合成', stt: '語音轉文字', push: '推播', client: '手機端', user: '使用者回報', scenario: '相遇情境' };
+    const LV = { error: ['錯誤', 'off'], warn: ['警告', 'warn'], report: ['使用者回報', 'on'], auto: ['已自動修正', ''] };
+    const SRC = { server: '伺服器', review: '發送前檢查', budget: '預算', scheduler: '主動訊息', llm: 'AI 模型', tts: '語音合成', stt: '語音轉文字', push: '推播', client: '手機端', user: '使用者回報', scenario: '相遇情境' };
     const sel = (name, opts) => `<select data-f="${name}">${opts.map(([v, l]) => `<option value="${v}" ${f[name] === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
     out.innerHTML = `
       <p class="muted">系統自己解決不了的問題會記在這裡，保留 30 天。同樣的錯誤一分鐘內只記一次。</p>
@@ -387,7 +387,7 @@ const VIEWS = {
       </div>
       <div class="row-form">
         ${sel('status', [['open', '未處理'], ['resolved', '已處理'], ['', '全部']])}
-        ${sel('level', [['', '所有等級'], ['error', '錯誤'], ['warn', '警告'], ['report', '使用者回報']])}
+        ${sel('level', [['', '所有等級'], ['error', '錯誤'], ['warn', '警告'], ['report', '使用者回報'], ['auto', '已自動修正']])}
         ${sel('source', [['', '所有來源'], ...Object.entries(SRC)])}
       </div>
       <div class="wrap"><table><thead><tr><th>時間</th><th>等級</th><th>來源</th><th>內容</th><th>測試者</th><th>角色</th><th></th></tr></thead><tbody>

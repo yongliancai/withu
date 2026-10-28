@@ -180,7 +180,7 @@ export function mountAdmin(app) {
   // ---- 系統紀錄 ----
   A('get', '/logs', (req, res) => {
     const where = [], args = [];
-    if (['error', 'warn', 'report'].includes(req.query.level)) { where.push('level=?'); args.push(req.query.level); }
+    if (['error', 'warn', 'report', 'auto'].includes(req.query.level)) { where.push('level=?'); args.push(req.query.level); }
     if (req.query.source) { where.push('source=?'); args.push(String(req.query.source)); }
     if (req.query.status === 'open') where.push('resolved_at IS NULL');
     if (req.query.status === 'resolved') where.push('resolved_at IS NOT NULL');
