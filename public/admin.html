@@ -458,7 +458,9 @@ Object.assign(VIEWS, {
   async settings() {
     const list = await api('/settings');
     const groups = [...new Set(list.map(x => x.group))];
-    out.innerHTML = `<p class="muted">存檔後立刻生效，不用重啟。標「已修改」的可以按「恢復預設」。</p>
+    out.innerHTML = `<div class="card"><b>AI 功能檢查</b><p class="muted small" style="margin:4px 0 8px">聊天、語音合成、語音辨識、圖片生成各試一次，確認金鑰和模型都能用（約 NT$1）。角色照片或語音通話沒反應時先按這個。</p>
+        <button class="ghost" id="selftest">開始檢查</button><div id="stOut" style="margin-top:10px"></div></div>
+      <p class="muted">存檔後立刻生效，不用重啟。標「已修改」的可以按「恢復預設」。</p>
       <form id="setf">${groups.map(g => `<h2>${esc(g)}</h2><div class="card">${list.filter(x => x.group === g).map(x => `
         <div class="row-form" style="justify-content:space-between;margin:6px 0">
           <label style="flex:1;min-width:240px">${esc(x.label)} ${x.edited ? '<span class="tag on">已修改</span>' : ''}${x.help ? `<br><span class="muted small">${esc(x.help)}</span>` : ''}<br><span class="muted small">預設：${x.type === 'bool' ? (x.def ? '是' : '否') : x.def}</span></label>
@@ -466,6 +468,17 @@ Object.assign(VIEWS, {
           ${x.edited ? `<button type="button" class="sm ghost" data-reset="${x.key}">恢復預設</button>` : ''}</span>
         </div>`).join('')}</div>`).join('')}
         <p style="margin-top:16px"><button>儲存</button></p></form>`;
+    document.getElementById('selftest').onclick = async (e) => {
+      e.target.disabled = true; document.getElementById('stOut').innerHTML = '<p class="muted small">檢查中，大約 30 秒……</p>';
+      try {
+        const r = await api('/selftest', 'POST');
+        document.getElementById('stOut').innerHTML = r.mock ? '<p class="muted">測試模式（沒有 OpenAI 金鑰），沒辦法檢查。</p>' : r.results.map(x => `<div class="row-form" style="align-items:flex-start;margin:6px 0">
+          <span class="tag ${x.ok ? 'on' : 'off'}">${x.ok ? '正常' : '失敗'}</span><b>${esc(x.name)}</b><span class="muted small">${esc(x.model)}・${(x.ms / 1000).toFixed(1)} 秒</span>
+          ${x.sample ? `<span class="small">「${esc(x.sample)}」</span>` : ''}${x.audio ? `<audio controls src="${x.audio}" style="height:32px"></audio>` : ''}${x.image ? `<img src="${x.image}" style="width:120px;border-radius:8px">` : ''}
+          ${x.error ? `<span class="small" style="color:var(--danger)">${esc(x.error)}</span>` : ''}</div>`).join('')
+          + (r.results.some(x => !x.ok) ? '<p class="small muted">常見原因：金鑰沒有這個模型的權限、OpenAI 帳號要先完成「組織驗證」（圖片模型需要）、或模型名稱不對（可以在 .env 用 IMAGE_MODEL、TTS_MODEL、STT_MODEL 換掉，改完 pm2 restart companion）。</p>' : '');
+      } finally { e.target.disabled = false; }
+    };
     document.getElementById('setf').onsubmit = async (e) => {
       e.preventDefault();
       const body = {};

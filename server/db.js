@@ -209,6 +209,23 @@ for (const [table, col, def] of [
   if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
 }
 
+// 清掉舊資料裡模型寫成字串 "null" 的內容（之前會直接顯示給使用者）
+{
+  const N = (col) => `lower(trim(${col})) IN ('null','none','undefined')`;
+  const has = (t) => !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(t);
+  const run = (t, sql) => { try { if (has(t)) db.exec(sql); } catch (e) { console.error('cleanup', t, e.message); } };
+  run('relationships', `UPDATE relationships SET status_line=NULL WHERE ${N('status_line')}`);
+  run('posts', `DELETE FROM posts WHERE ${N('text')}`);
+  run('messages', `DELETE FROM messages WHERE sender='char' AND kind='text' AND ${N('text')}`);
+  run('memories', `DELETE FROM memories WHERE ${N('content')}`);
+  run('told', `DELETE FROM told WHERE ${N('content')}`);
+  run('notes', `DELETE FROM notes WHERE ${N('text')}`);
+  if (has('characters')) for (const c of db.prepare(`SELECT id, persona FROM characters WHERE persona LIKE '%"signature":"null"%' OR persona LIKE '%"signature":"None"%'`).all()) {
+    const p = JSON.parse(c.persona); p.signature = '';
+    db.prepare('UPDATE characters SET persona=? WHERE id=?').run(JSON.stringify(p), c.id);
+  }
+}
+
 export const now = () => Date.now();
 export const j = (s, d = null) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
 

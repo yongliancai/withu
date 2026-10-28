@@ -60,8 +60,11 @@ function seasonMark(d = new Date()) {
 function avatar(frame, size = 48, { lover = false, season = true } = {}) {
   const discreet = S.me?.settings?.discreetNames;
   const f = discreet ? { hue: frame?.hue, name: '' } : frame;
-  const usePhoto = !discreet && S.me?.settings?.portraitStyle === 'photo' && frame?.avatarPhoto;
-  return `<span class="avatar${lover ? ' lover' : ''}${usePhoto ? ' photo' : ''}" style="--s:${size}px">${usePhoto ? `<img src="${esc(frame.avatarPhoto.thumb)}" alt="" loading="lazy">` : portraitSVG(f, size)}
+  const style = S.me?.settings?.portraitStyle || 'auto';
+  // 成為朋友後，大頭照自動換成他的 AI 人像（設定裡選了插畫風就維持插畫）
+  const face = !discreet && style === 'auto' && frame?.portraitUrl;
+  const usePhoto = !discreet && style === 'photo' && frame?.avatarPhoto;
+  return `<span class="avatar${lover ? ' lover' : ''}${usePhoto || face ? ' photo' : ''}" style="--s:${size}px">${face ? `<img src="${esc(frame.portraitUrl)}" alt="" loading="lazy">` : usePhoto ? `<img src="${esc(frame.avatarPhoto.thumb)}" alt="" loading="lazy">` : portraitSVG(f, size)}
     ${season ? `<span class="season">${seasonMark()}</span>` : ''}</span>`;
 }
 // 情境插圖卡片：用在「在哪裡遇見」和「來場偶遇」
@@ -122,12 +125,107 @@ async function route() {
       if (showTabs && tab !== 'feed') refreshFeedDot();
       $$('a', tabs).forEach(a => a.setAttribute('aria-current', a.dataset.tab === (tab === 'settings' ? 'me' : tab) ? 'page' : 'false'));
       window.scrollTo(0, 0);
-      return fn(...m.slice(1));
+      const out = await fn(...m.slice(1));
+      afterRoute(hash);
+      return out;
     }
   }
   location.hash = '#/chat';
 }
 window.addEventListener('hashchange', route);
+
+// ======================================================================
+// 使用說明（新使用者一步一步帶著看）與更新介紹
+// ======================================================================
+// 每次有新功能，在最上面加一筆；看過的人不會再跳出來，「我 → 設定 → 更新內容」可以再看一次。
+const WHATS_NEW = [
+  { v: '2026-10-28', title: '伴旅更新了', items: [
+    { title: '看得到他的樣子了', text: '角色有了 AI 生成的照片。還沒認識時是模糊的，成為朋友就看得清楚，越熟解鎖越多生活照。', route: '#/explore', sel: '.tile' },
+    { title: '心情按鈕變多了', text: '多了 20 幾種心情，也可以自己寫。不知道自己是什麼感覺時，按「說不出來」，一步一步陪你找。', sel: '#moodFab', route: '#/chat' },
+    { title: '可以打電話了', text: '你們變曖昧以後，聊天室右上角的電話可以直接講話，他會用自己的聲音回你。' },
+    { title: '回覆方向收起來了', text: '不知道怎麼回的時候，按輸入框上面的「💡 不知道怎麼回？」才會出現建議，不會再預設要你說什麼。' },
+    { title: '回報問題會馬上改', text: '聊天室右上角 ☰ → 回報問題。說他太常問問題、記錯你的事，會立刻修正。' },
+    { title: '三種風格', text: '我 → 設定 → 系統主題，可以換成溫暖手帳、夜晚電台、清新日光。' },
+  ] },
+];
+const LATEST_NEWS = WHATS_NEW[0].v;
+
+let tourOn = false;
+function afterRoute(hash) {
+  if (!S.me || tourOn) return;
+  const st = S.me.settings || {};
+  // 新使用者（註冊時 tourDone=false）才看完整導覽；舊使用者只看更新介紹
+  const done = st.tourDone !== false;
+  if (hash === '#/chat' && !done) return setTimeout(() => runTour(MAIN_TOUR(), { key: 'tourDone', after: { seenNews: LATEST_NEWS } }), 500);
+  if (/^#\/chat\/[\w-]+$/.test(hash) && done && st.roomTourDone === false) return setTimeout(() => runTour(ROOM_TOUR(), { key: 'roomTourDone' }), 900);
+  if (done && (st.seenNews || '') < LATEST_NEWS && ['#/chat', '#/feed', '#/explore', '#/story', '#/me'].includes(hash)) setTimeout(showWhatsNew, 600);
+}
+function showWhatsNew() {
+  const n = WHATS_NEW[0];
+  runTour([{ title: n.title, text: '花 30 秒看看這次多了什麼。', intro: true }, ...n.items], { key: 'seenNews', value: LATEST_NEWS, doneLabel: '開始使用' });
+}
+const MAIN_TOUR = () => [
+  { title: '歡迎來到伴旅', text: `我是${{ milk: '小糰', night: '小月', forest: '小芽' }[document.documentElement.dataset.app] || '小糰'}，帶你花一分鐘逛一圈。隨時可以按「略過」。`, intro: true },
+  { title: '聊天', text: '你認識的人都在這裡。他們有自己的工作和作息：上班時會晚點回，睡著了就明天早上回你，像真的人一樣。', route: '#/chat', sel: '[data-tab="chat"]' },
+  { title: '心情按鈕', text: '不想打字的時候按這裡，選一個心情傳給他；連按越多下代表越強烈。說不出自己是什麼感覺也沒關係，裡面有「說不出來」可以陪你找。', route: '#/chat', sel: '#moodFab' },
+  { title: '動態', text: '他們會發自己的生活動態和限時動態；你也可以發，他們看到會留言或私訊關心你。', route: '#/feed', sel: '[data-tab="feed"]' },
+  { title: '探索', text: '認識新的人，或自己捏一個。照片一開始是模糊的，你們越熟就看得越清楚。', route: '#/explore', sel: '[data-tab="explore"]' },
+  { title: '我們的故事', text: '你們一起經歷的事、紀念日，都會慢慢記在這裡。', route: '#/story', sel: '[data-tab="story"]' },
+  { title: '我', text: '你的主頁。右上角的齒輪是設定：可以換主題、開「夜貓／輪班」、調通知。', route: '#/me', sel: '[data-tab="me"]' },
+  { title: '就這樣！', text: '剩下的，跟他們聊著聊著就會知道了。第一次進聊天室時，我會再帶你看一下裡面的按鈕。', intro: true, route: '#/chat' },
+];
+const ROOM_TOUR = () => [
+  { title: '這是你們的聊天室', text: '跟 LINE 一樣，可以一直傳；你停下來幾秒，他會一次讀完再回。', sel: '#txt' },
+  { title: '不知道聊什麼？', text: '話題錦囊：讓他帶你聊、問他一件事、玩小遊戲、一起做點什麼。', sel: '#topicBtn' },
+  { title: '不知道怎麼回？', text: '按這裡才會出現三個回覆方向，幫你寫好一句，可以改了再送。', sel: '.sug-toggle' },
+  { title: '心情與電話', text: '笑臉是心情按鈕；電話要等你們變曖昧以後才能打。', sel: '#moodBtn' },
+  { title: '更多', text: '相簿、記事本、回憶錄、依主題搜尋聊過的事、換聊天室主題；他說話怪怪的，就從這裡「回報問題」，會馬上修正。', sel: '#more' },
+];
+
+// 一步一步的導覽：把要介紹的地方圈起來，旁邊放說明和「下一步」
+async function runTour(steps, { key, value = true, after = {}, doneLabel = '完成' } = {}) {
+  if (tourOn) return;
+  tourOn = true;
+  const root = document.createElement('div');
+  root.className = 'tour';
+  document.body.appendChild(root);
+  let i = 0;
+  const finish = async () => {
+    root.remove(); tourOn = false;
+    const patch = { [key]: value, ...after };
+    Object.assign(S.me.settings ||= {}, patch);
+    api('/api/me', { method: 'PATCH', body: { settings: patch } }).catch(() => {});
+    track('tour_done', { key, step: i, total: steps.length });
+  };
+  const waitFor = async (sel) => { for (let k = 0; k < 30; k++) { const el = sel && document.querySelector(sel); if (el && el.getBoundingClientRect().width) return el; await sleep(100); } return null; };
+  const show = async () => {
+    const st = steps[i];
+    if (st.route && location.hash !== st.route) { location.hash = st.route; await sleep(450); }
+    const el = st.sel ? await waitFor(st.sel) : null;
+    if (st.sel && !el && !st.intro) { if (i < steps.length - 1) { i++; return show(); } return finish(); } // 這一步要介紹的東西不在畫面上，就跳過
+    const last = i === steps.length - 1;
+    const r = el?.getBoundingClientRect();
+    const pad = 6;
+    const hole = r ? `<div class="tour-hole" style="left:${r.left - pad}px;top:${r.top - pad}px;width:${r.width + pad * 2}px;height:${r.height + pad * 2}px"></div>` : '<div class="tour-dim"></div>';
+    const below = r ? r.top + r.height / 2 < innerHeight / 2 : true;
+    const pos = r ? (below ? `top:${Math.min(innerHeight - 220, r.bottom + 14)}px` : `bottom:${Math.min(innerHeight - 220, innerHeight - r.top + 14)}px`) : 'top:50%;transform:translateY(-50%)';
+    root.innerHTML = `${hole}<div class="tour-card" style="${pos}" role="dialog" aria-live="polite">
+      <div class="tour-head"><span class="tour-art">${moodFace(i === 0 || last ? 'happy' : 'idle')}</span><b>${esc(st.title)}</b></div>
+      <p>${esc(st.text)}</p>
+      <div class="tour-foot"><span class="tour-dots">${steps.map((_, k) => `<i${k === i ? ' class="on"' : ''}></i>`).join('')}</span>
+        ${last ? '' : '<button class="linkbtn small" data-t="skip">略過</button>'}
+        ${i > 0 ? '<button class="btn ghost sm" data-t="prev">上一步</button>' : ''}
+        <button class="btn sm" data-t="next">${last ? doneLabel : '下一步'}</button></div></div>`;
+    $('[data-t="next"]', root).focus();
+    $$('[data-t]', root).forEach(b => b.onclick = () => {
+      if (b.dataset.t === 'skip') return finish();
+      if (b.dataset.t === 'prev') { i--; return show(); }
+      if (last) return finish();
+      i++; show();
+    });
+  };
+  show();
+}
 
 // ======================================================================
 // Onboarding
@@ -1903,7 +2001,7 @@ async function renderSettings() {
       <div class="row"><label for="sugg" class="grow">顯示回覆方向<div class="small muted">不知道怎麼回的時候，點一下幫你寫好一句</div></label><input type="checkbox" id="sugg" ${st.showSuggestions !== false ? 'checked' : ''}></div>
       <div class="row"><label for="owl" class="grow">我是夜貓／輪班<div class="small muted">打開後角色會比較晚睡、半夜比較常醒著陪你；勿擾時段會改到白天（可以再自己調）</div></label><input type="checkbox" id="owl" ${st.nightOwl ? 'checked' : ''}></div>
       <div class="row"><label for="rdelay" class="grow">忙的時候晚點回<div class="small muted">上班、睡覺時會晚一點才回你，比較像真人</div></label><input type="checkbox" id="rdelay" ${st.realisticDelay !== false ? 'checked' : ''}></div>
-      <div class="row"><span class="grow">頭像畫風</span><div class="seg">${[['auto', '依角色'], ['real', '寫實'], ['anime', '二次元'], ['photo', '生活照']].map(([v, l]) => `<button data-ps="${v}" aria-pressed="${(st.portraitStyle || 'auto') === v}">${l}</button>`).join('')}</div></div>
+      <div class="row"><span class="grow">頭像畫風</span><div class="seg">${[['auto', 'AI 人像'], ['real', '寫實插畫'], ['anime', '二次元'], ['photo', '生活照']].map(([v, l]) => `<button data-ps="${v}" aria-pressed="${(st.portraitStyle || 'auto') === v}">${l}</button>`).join('')}</div></div>
       <div class="row"><span class="grow">通知預覽</span><div class="seg"><button data-np="full" aria-pressed="${st.notifyPreview !== 'discreet'}">顯示內容</button><button data-np="discreet" aria-pressed="${st.notifyPreview === 'discreet'}">只顯示有新訊息</button></div></div>
       <div class="row"><label for="discreet" class="grow">低調模式<div class="small muted">名字和頭像改成被看到也不尷尬的樣子</div></label><input type="checkbox" id="discreet" ${st.discreetNames ? 'checked' : ''}></div>
     </div>
@@ -1928,6 +2026,8 @@ async function renderSettings() {
       <div class="row"><span class="grow">下載我的資料</span><a class="btn ghost sm" href="/api/me/export" download>下載</a></div>
       <div class="row"><span class="grow">刪除帳號與所有資料</span><button class="btn danger sm" id="delAll">刪除</button></div>
       <div class="row"><span class="grow">系統整理的相處偏好<div class="small muted">${S.me.prefs?.likes?.length || S.me.prefs?.dislikes?.length ? [...(S.me.prefs.likes || []).map(x => '喜歡' + x.replace(/^喜歡/, '')), ...(S.me.prefs.dislikes || []).map(x => x.startsWith('不喜歡') ? x : '不喜歡' + x)].map(esc).join('・') : '還沒有。聊久一點，系統會整理你喜歡的聊天方式，讓新認識的人也懂你。'}<br>只記說話方式，不記你的私事。</div></span>${S.me.prefs ? '<button class="btn ghost sm" id="clrPrefs">清除</button>' : ''}</div>
+      <div class="row"><span class="grow">使用說明<div class="small muted">再帶你逛一次伴旅</div></span><button class="btn ghost sm" id="replayTour">看一次</button></div>
+      <div class="row"><span class="grow">更新內容<div class="small muted">最近一次更新：${LATEST_NEWS}</div></span><button class="btn ghost sm" id="replayNews">看一次</button></div>
       <div class="row"><span class="grow">隱私權政策與使用條款</span><a class="btn ghost sm" href="/privacy" target="_blank">查看</a></div>
     </div>
     <p class="small muted">${TA()}看得到的記憶不會顯示成清單；${TA()}記錯時直接告訴${TA()}就好，請${TA()}「忘掉」某件事，${TA()}也會真的刪除。對話會傳送到 OpenAI（美國）處理以產生回覆。</p>
@@ -1983,6 +2083,8 @@ async function renderSettings() {
       $$('[data-price]', sheet).forEach(c => c.onclick = () => { track('coming_soon_price', { item: item.key, price: Number(c.dataset.price) }); close(); toast('謝謝你告訴我們'); });
     });
   });
+  $('#replayTour').onclick = () => runTour(MAIN_TOUR(), { key: 'tourDone' });
+  $('#replayNews').onclick = () => showWhatsNew();
   $('#delAll').onclick = async () => {
     if (!confirm('會刪除你的帳號、所有角色、聊天、回憶與照片，不能復原。確定嗎？')) return;
     if (prompt('輸入「刪除」確認') !== '刪除') return;

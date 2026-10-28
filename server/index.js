@@ -94,7 +94,7 @@ app.post('/api/auth/join', rateLimit('註冊', 20, 3600e3), (req, res) => {
   const uid = id('u_');
   const code = recoveryCode();
   db.prepare('INSERT INTO users (id,nickname,call_name,recovery_code,invite_code,cohort,gender,seeks,settings,created_at,last_active_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-    .run(uid, nick, String(callName || nick).trim().slice(0, 16), code, code0, cohort, g, sk, JSON.stringify({ dailyCap: 6, proactiveLevel: 'normal', dndStart: '23:30', dndEnd: '07:30', notifyPreview: 'full' }), now(), now());
+    .run(uid, nick, String(callName || nick).trim().slice(0, 16), code, code0, cohort, g, sk, JSON.stringify({ dailyCap: 6, proactiveLevel: 'normal', dndStart: '23:30', dndEnd: '07:30', notifyPreview: 'full', tourDone: false, roomTourDone: false }), now(), now());
   startSession(res, uid);
   logEvent(uid, 'join', { cohort });
   res.json({ ok: true, recoveryCode: code, cohort });
@@ -132,7 +132,7 @@ app.get('/api/me', auth, (req, res) => {
 app.patch('/api/me', auth, (req, res) => {
   const b = req.body || {};
   const settings = { ...j(req.user.settings, {}), ...(b.settings || {}) };
-  const allowed = ['dailyCap', 'proactiveLevel', 'dndStart', 'dndEnd', 'notifyPreview', 'lunchAt', 'dinnerAt', 'discreetNames', 'portraitStyle', 'showSuggestions', 'realisticDelay', 'notifyAsked', 'appTheme', 'nightOwl', 'customMoods'];
+  const allowed = ['dailyCap', 'proactiveLevel', 'dndStart', 'dndEnd', 'notifyPreview', 'lunchAt', 'dinnerAt', 'discreetNames', 'portraitStyle', 'showSuggestions', 'realisticDelay', 'notifyAsked', 'appTheme', 'nightOwl', 'customMoods', 'tourDone', 'roomTourDone', 'seenNews'];
   for (const k of Object.keys(settings)) if (!allowed.includes(k)) delete settings[k];
   const seeks = ['male', 'female', 'any'].includes(b.seeks) ? b.seeks : req.user.seeks;
   const gender = ['female', 'male', 'other'].includes(b.gender) ? b.gender : req.user.gender;
@@ -311,7 +311,7 @@ function relSummary(rel) {
     outing: !!rel.outing_active, activity: j(rel.activity), theme: rel.theme || 'default', pendingReplyAt: rel.pending_reply_at || null, charReadId: rel.char_read_id || 0,
     presence: (() => { const pr = presenceOf(rel, p); return { code: pr.code, label: pr.label, lastSeen: pr.lastSeen || null }; })(), statusLine: rel.status_line, statusLineAt: rel.status_line_at, blocked: !!rel.blocked,
     startType: rel.start_type, origin: p._char.origin, canShare: p._char.origin === 'custom' && rel.user_msg_count >= 10,
-    frame: publicFrame({ ...p, look: p.look || templateLook(p._char.template_id) }), voice: p.voice, now: charStatus(p).code,
+    frame: { ...publicFrame({ ...p, look: p.look || templateLook(p._char.template_id) }), portraitUrl: (() => { if (rel.stage < 1) return null; const m = mainOf(ownerOfCharacter(p._char)); return m ? `/api/portrait/${m.id}/c` : null; })() }, voice: p.voice, now: charStatus(p).code,
     last: last ? { text: last.kind === 'voice' ? '［語音訊息］' : last.kind === 'photo' ? '［照片］' : last.kind === 'sticker' ? '［貼圖］' : last.text, at: last.created_at, sender: last.sender } : null,
     unread, endedAt: rel.ended_at, createdAt: rel.created_at,
     scenarioId: (() => { const sc = j(rel.scenario, {}); return sc.id || SCENARIOS.find(x => x.label === sc.label)?.id || null; })(),

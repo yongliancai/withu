@@ -18,7 +18,7 @@ export function securityHeaders(req, res, next) {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com data:",
     "img-src 'self' data: blob: https:",
-    "media-src 'self' blob:",
+    "media-src 'self' blob: data:",
     "connect-src 'self'",
     "worker-src 'self'",
     "manifest-src 'self'",

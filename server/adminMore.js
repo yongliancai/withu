@@ -144,6 +144,39 @@ export function mountAdminMore(app) {
     res.json({ ok: true });
   });
 
+  // ---- AI 功能檢查：聊天、語音合成、語音辨識、圖片生成各試一次（約 NT$1）----
+  A('post', '/selftest', async (req, res) => {
+    if (config.mock) return res.json({ mock: true, results: [] });
+    const { openai, tts, stt } = await import('./llm.js');
+    const results = [];
+    const run = async (name, model, fn) => {
+      const t0 = Date.now();
+      try { const extra = await fn(); results.push({ name, model, ok: true, ms: Date.now() - t0, ...extra }); }
+      catch (e) { results.push({ name, model, ok: false, ms: Date.now() - t0, error: `${e.status ? e.status + ' ' : ''}${e.message}`.slice(0, 300) }); }
+    };
+    await run('聊天', config.modelCheap, async () => {
+      const r = await openai.responses.create({ model: config.modelCheap, input: '用一句繁體中文打招呼', store: false });
+      return { sample: String(r.output_text || '').slice(0, 60) };
+    });
+    let mp3 = null;
+    await run('語音合成', config.ttsModel, async () => {
+      mp3 = await tts({ userId: null, text: '你好，今天辛苦了，晚上早點休息。', voice: 'cedar', instructions: '台灣口音的中文，溫柔' });
+      return { audio: `data:audio/mpeg;base64,${mp3.toString('base64')}` };
+    });
+    await run('語音辨識', config.sttModel, async () => {
+      if (!mp3) throw new Error('語音合成失敗，沒有聲音可以辨識');
+      return { sample: await stt({ userId: null, buffer: mp3, filename: 'test.mp3', durationSec: 3 }) };
+    });
+    await run('圖片生成', config.imageModel, async () => {
+      const r = await openai.images.generate({ model: config.imageModel, size: '1024x1024', quality: 'low', output_format: 'jpeg', n: 1, prompt: 'A cup of latte on a wooden cafe table, natural light, realistic photo. No people, no text.' });
+      db.prepare('INSERT INTO usage (user_id,kind,model,units,created_at) VALUES (?,?,?,?,?)').run(null, 'image', config.imageModel, 1, now());
+      const b64 = r.data?.[0]?.b64_json;
+      if (!b64) throw new Error('沒有拿到圖片');
+      return { image: `data:image/jpeg;base64,${b64}` };
+    });
+    res.json({ results });
+  });
+
   // ---- 角色人像 ----
   // 後台的 <img> 帶不了權杖：用權杖簽一個網址
   const sign = (id) => crypto.createHmac('sha256', config.adminToken || 'x').update(String(id)).digest('hex').slice(0, 20);

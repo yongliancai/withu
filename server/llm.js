@@ -19,6 +19,15 @@ function logUsage(userId, kind, model, usage, units = 0) {
  * Call the Responses API and get JSON back that matches `schema`.
  * tier: 'cheap' | 'good'
  */
+// 模型有時會把「沒有」寫成字串 "null"／"None"，直接顯示給使用者就變成 null：一律換成空字串
+const NULLISH = /^\s*(null|none|undefined|n\/a|nil)\s*$/i;
+export function cleanNulls(v) {
+  if (typeof v === 'string') return NULLISH.test(v) ? '' : v;
+  if (Array.isArray(v)) return v.map(cleanNulls).filter(x => x !== '');
+  if (v && typeof v === 'object') { for (const k of Object.keys(v)) v[k] = cleanNulls(v[k]); return v; }
+  return v;
+}
+
 export async function jsonCall({ userId, kind, tier = 'cheap', instructions, input, schema, schemaName, cacheKey, mock, essential = false }) {
   // 超過預算且設定為暫停：除了危機時的回覆，其他 AI 呼叫都先停下來
   if (!essential && budgetPaused()) throw Object.assign(new Error('超過預算，AI 暫停中'), { code: 'budget_paused' });
@@ -47,7 +56,7 @@ export async function jsonCall({ userId, kind, tier = 'cheap', instructions, inp
   }
   logUsage(userId, kind, model, res.usage);
   try {
-    return JSON.parse(res.output_text);
+    return cleanNulls(JSON.parse(res.output_text));
   } catch (e) {
     logIssue({ source: 'llm', message: `AI 回傳的格式不正確（${kind}）`, detail: { kind, model, status: res.status, incomplete: res.incomplete_details, output: String(res.output_text).slice(0, 1500) }, userId });
     throw new Error('LLM returned invalid JSON: ' + String(res.output_text).slice(0, 200));
