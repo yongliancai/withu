@@ -10,6 +10,8 @@ function costTwd(rows) {
   for (const r of rows) {
     if (r.kind === 'tts') { usd += r.units * p.ttsPerChar; continue; }
     if (r.kind === 'stt') { usd += (r.units / 60) * p.sttPerMin; continue; }
+    if (r.kind === 'image') { usd += r.units * p.imageLow; continue; }
+    if (r.kind === 'portrait') { usd += r.units * p.imageHigh; continue; }
     const good = r.model === config.modelGood;
     const inP = good ? p.goodIn : p.cheapIn, cP = good ? p.goodCached : p.cheapCached, oP = good ? p.goodOut : p.cheapOut;
     usd += ((r.input_tokens - r.cached_tokens) * inP + r.cached_tokens * cP + r.output_tokens * oP) / 1e6;

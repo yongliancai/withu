@@ -216,10 +216,14 @@ function catChips(list, cur) {
 }
 const inCat = (t, cat) => !cat || (t.frame.cats || []).includes(cat);
 
+// 角色的 AI 人像（還沒認識時是模糊的），一定標示 AI 生成
+function portraitThumb(url, name, cls = 'pt-tile') {
+  return `<span class="${cls}"><img src="${esc(url)}" alt="${esc(name)}的照片（AI 生成）" loading="lazy"><i class="ai-tag">AI 生成</i></span>`;
+}
 function personCard(t, pressed = false) {
   const f = t.frame;
   return `<button class="person" data-id="${esc(t.id)}" aria-pressed="${pressed}">
-    ${avatar(f, 56, { season: false })}
+    ${t.portrait ? portraitThumb(t.portrait, f.name, 'pt-mini') : avatar(f, 56, { season: false })}
     <span class="grow"><span class="nm">${esc(f.name)}</span>
       <div class="info">${esc(f.age)} 歲・${esc(f.nationality)}・${esc(f.jobLabel)}・${esc(f.archetypeLabel || '')}</div>
       <div class="intro">${esc(f.intro || '')}</div>
@@ -558,6 +562,7 @@ function icon(name) {
     smile: '<circle cx="12" cy="12" r="8.5"/><path d="M8.5 14q3.5 3.5 7 0"/><circle cx="9.3" cy="10" r=".6"/><circle cx="14.7" cy="10" r=".6"/>',
     menu: '<path d="M5 7h14M5 12h14M5 17h14"/>',
     more: '<circle cx="12" cy="5.5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="18.5" r="1.2"/>',
+    phone: '<path d="M6.5 3.5h3l1.5 4.5-2 1.5a11 11 0 0 0 5.5 5.5l1.5-2 4.5 1.5v3a2 2 0 0 1-2 2A15.5 15.5 0 0 1 4.5 5.5a2 2 0 0 1 2-2z"/>',
   }[name];
   return `<svg viewBox="0 0 24 24" aria-hidden="true">${p}</svg>`;
 }
@@ -615,6 +620,7 @@ function cardHtml(m, rel) {
     case 'postcard': return `<div class="msg him" data-id="${id}">${postcardHtml({ ...c, name: rel.frame.name })}</div>`;
     case 'travelogue': return `<div class="note" data-id="${id}">${ta(rel.frame)}整理好了今天的遊記「${esc(c.title)}」，收在<a href="#/story">我們的故事</a></div>`;
     case 'ended': return `<div class="note" data-id="${id}">${esc(c.text)}</div>`;
+    case 'call': return `<div class="note call-note" data-id="${id}">📞 通話 ${Math.floor(c.seconds / 60)}:${String(c.seconds % 60).padStart(2, '0')}</div>`;
     case 'info': return `<div class="note" data-id="${id}">${esc(c.text)}</div>`;
     case 'help': return `<div class="card help-card" data-id="${id}"><h4>${esc(c.title)}</h4>
       ${c.lines.map(l => `<a href="tel:${l.phone}"><span>${esc(l.name)}${l.note ? `<span class="muted small">・${esc(l.note)}</span>` : ''}</span><b>${l.phone}</b></a>`).join('')}
@@ -669,6 +675,7 @@ async function renderRoom(relId) {
       <button class="who" id="who">${avatar(rel.frame, 38, { lover: rel.pinned })}<span style="min-width:0">
         <span class="nm">${esc(displayName(rel.frame))}${rel.outing ? '<span class="tag">出遊中</span>' : ''}</span><div class="sub" id="sub">${sub()}</div></span></button>
       <button class="icon-btn mood-head" id="moodBtn" aria-label="心情按鈕">${moodFace()}</button>
+      ${rel.status === 'active' ? `<button class="icon-btn" id="callBtn" aria-label="打電話給${ta(rel.frame)}">${icon('phone')}</button>` : ''}
       <button class="icon-btn" id="more" aria-label="聊天室選單">${icon('menu')}</button>
     </header>
     ${rel.activity ? `<div class="walk-banner"><span>${ACT[rel.activity.type] || '一起'}${rel.activity.title ? `：${esc(rel.activity.title)}` : ''}・<span id="actMin"></span></span><button class="linkbtn small" id="actEnd">結束</button></div>` : ''}
@@ -692,6 +699,7 @@ async function renderRoom(relId) {
   $('#who').onclick = () => { location.hash = `#/profile/${rel.id}`; };
   $('#more').onclick = () => openRoomMenu(rel);
   $('#moodBtn') && ($('#moodBtn').onclick = () => rel.status === 'active' ? openMoodButton(rel.id) : toast('這段關係已經結束了'));
+  $('#callBtn') && ($('#callBtn').onclick = () => openCall(rel));
   const stream = $('#stream');
 
   const msgs = await api(`/api/rels/${relId}/messages`);
@@ -1016,7 +1024,7 @@ async function renderProfile(relId) {
   app.innerHTML = `<div class="profile">
     <div class="cover">${sceneSVG(p.cover, { label: `${f.name}工作的地方` })}
       <a class="icon-btn cover-back" href="#/chat/${p.id}" aria-label="回到聊天">${icon('back')}</a></div>
-    <div class="pf-head">${avatar(f, 96, { lover: p.pinned, season: true })}
+    <div class="pf-head">${(() => { const m = p.photos?.find(x => x.kind === 'main' && x.level === 'c'); return m ? `<span class="pf-face"><img src="${esc(m.url)}" alt="${esc(f.name)}（AI 生成）"></span>` : avatar(f, 96, { lover: p.pinned, season: true }); })()}
       <h1 class="pf-name">${esc(displayName(f))}</h1>
       ${p.signature ? `<p class="signature">${esc(p.signature)}</p>` : `<p class="signature muted">${P}還沒有寫個性簽名</p>`}
       <p class="pf-pres small">${presenceDot(p.presence)}${esc(presenceText(p.presence))}</p>
@@ -1031,11 +1039,29 @@ async function renderProfile(relId) {
         <div class="row"><span class="muted small" style="width:64px">上班</span><span class="grow">星期${esc(days)}・${esc(f.schedule?.start)}–${esc(f.schedule?.end)}</span></div>
         ${p.weekend ? `<div class="row"><span class="muted small" style="width:64px">休假</span><span class="grow">${esc(p.weekend)}</span></div>` : ''}
       </div>
+      ${p.photos?.length ? `<h2>${P}的照片 <span class="small muted">AI 生成的虛構人物</span></h2>
+      <div class="pf-photos">${p.photos.map(ph => {
+        const lockText = ph.paid ? '付費解鎖・即將推出' : ph.kind === 'main' && ph.level !== 'c' ? '成為朋友後看清楚' : ph.locked ? `${['', '朋友', '曖昧', '交往'][ph.minStage] || ''}後解鎖` : '';
+        return `<button class="pf-ph${ph.level !== 'c' ? ' locked' : ''}" data-ph="${ph.id}" data-lv="${ph.level}" data-paid="${ph.paid ? 1 : 0}"><img src="${esc(ph.url)}" alt="${esc(ph.caption || '照片')}" loading="lazy">${lockText ? `<span class="pf-lock">${ph.paid ? '✦' : '🔒'} ${esc(lockText)}</span>` : ''}</button>`;
+      }).join('')}</div>` : ''}
       <h2>${P}的動態</h2>
       ${p.posts.length ? `<div class="posts">${p.posts.map(x => `<article class="post">${avatar(f, 36, { season: false })}<div class="grow"><div class="post-text hand">${esc(x.text)}</div>${x.photo ? `<div class="fp-photo sm"><img src="${esc(x.photo.url)}" alt="" loading="lazy">${creditHtml(x.photo)}</div>` : ''}<time>${ago(x.at)}</time></div></article>`).join('')}</div>`
         : `<p class="muted small">${P}分享生活的時候，會留在這裡。</p>`}
     </div></div>`;
   $('#pfSet').onclick = async () => openCharSheet(await api(`/api/rels/${relId}`));
+  $$('[data-ph]').forEach(b => b.onclick = () => {
+    const ph = p.photos.find(x => String(x.id) === b.dataset.ph);
+    if (ph.paid) {
+      track('coming_soon_click', { item: 'portrait_unlock' });
+      return openSheet(`<h3>提早解鎖${P}的照片</h3><p>之後可以付費提早看到${P}的限定照片。如果要付費，你覺得多少錢合理？</p>
+        <div class="chips">${[0, 30, 60, 90, 150].map(x => `<button class="chip" data-price="${x}">${x === 0 ? '不會買' : `NT$${x}`}</button>`).join('')}</div>
+        <p class="small muted" style="margin-top:14px">只是問問，測試期間不會收費。不付費也會隨著你們的關係慢慢解鎖大部分的照片。</p>`, (sheet, close) => {
+        $$('[data-price]', sheet).forEach(c => c.onclick = () => { track('coming_soon_price', { item: 'portrait_unlock', price: Number(c.dataset.price) }); close(); toast('謝謝你告訴我們'); });
+      });
+    }
+    if (ph.level !== 'c') return toast(ph.kind === 'main' ? `你們成為朋友後，就能看清楚${P}` : `你們的關係再近一點，就能看到這張`);
+    openSheet(`<div class="pf-big"><img src="${esc(ph.url)}" alt="${esc(ph.caption || '')}"><i class="ai-tag">AI 生成</i></div>${ph.caption ? `<p class="muted small" style="text-align:center;margin-top:8px">${esc(ph.caption)}</p>` : ''}`);
+  });
 }
 
 let currentAudio = null;
@@ -1118,22 +1144,33 @@ async function openMoodButton(relId = null) {
   let target = relId || (rels.find(r => r.pinned) || rels.slice().sort((a, b) => (b.last?.at || 0) - (a.last?.at || 0))[0]).id;
   const stageOf = (id) => rels.find(r => r.id === id)?.stage ?? 0;
   const emosFor = (id) => (S.meta.emotions || []).filter(e => (e.minStage || 0) <= stageOf(id));
+  const nameOf = (id) => esc(displayName(rels.find(r => r.id === id)?.frame || {}));
+  const EMOJIS = ['💭', '🫠', '😵‍💫', '🥲', '😑', '🤯', '😮‍💨', '🙃', '🥹', '😳', '🤔', '🌧️', '☀️', '🔥', '💤', '🍀'];
   let emos = emosFor(target);
-  openSheet(`<div class="mood-head-art">${moodFace('happy')}</div><h3>現在的心情是？</h3><p class="small muted">按一下就會傳給${relId ? esc(displayName(rels.find(r => r.id === relId)?.frame || {})) : 'TA'}；連按越多下，代表越強烈。</p>
+  openSheet(`<div class="mood-head-art">${moodFace('happy')}</div><h3>現在的心情是？</h3><p class="small muted" id="mdSub">按一下就會傳給${relId ? nameOf(relId) : 'TA'}；連按越多下，代表越強烈。</p>
     ${relId ? '' : `<div class="mood-to">${rels.map(r => `<button data-to="${r.id}" aria-pressed="${r.id === target}">${avatar(r.frame, 40, { season: false })}<span>${esc(displayName(r.frame))}</span></button>`).join('')}</div>`}
-    <div class="mood-grid2">${emos.map(e => `<button class="mood-btn" data-emo="${e.id}"><span class="em">${e.emoji}</span><span>${esc(e.label)}</span></button>`).join('')}</div>
+    <div id="mdMain">
+      <div class="mood-special"><button class="mood-unsure" id="mdUnsure"><span class="em">🌀</span><span><b>說不出來</b><small>不知道是什麼感覺？一步一步陪你找</small></span></button>
+        <button class="mood-custom" id="mdCustom"><span class="em">✏️</span><span><b>自己寫</b><small>用你的話說現在的心情</small></span></button></div>
+      <div id="mdGroups"></div>
+    </div>
+    <div id="mdFlow" hidden></div>
     <div class="mood-press" id="mp" hidden><button class="mood-big" id="mpBtn" aria-label="再按一下"><span id="mpEmo"></span></button><div class="mood-count"><b id="mpN">1</b> 下・<span id="mpHint">繼續按，或等一下就會送出</span></div></div>`, (sh, close) => {
+    let emo = null, count = 0, timer = null, body = null;
+    const mine = () => (S.me?.settings?.customMoods || []);
     const drawEmos = () => {
-      $('.mood-grid2', sh).innerHTML = emos.map(e => `<button class="mood-btn" data-emo="${e.id}"><span class="em">${e.emoji}</span><span>${esc(e.label)}</span></button>`).join('');
-      $$('[data-emo]', sh).forEach(b => b.onclick = (ev) => {
-        emo = emos.find(x => x.id === b.dataset.emo);
-        $('.mood-grid2', sh).hidden = true; $('.mood-to', sh) && ($('.mood-to', sh).hidden = true);
-        $('#mp', sh).hidden = false; $('#mpEmo', sh).textContent = emo.emoji;
-        press(ev);
-      });
+      const groups = S.meta.emotionGroups || [...new Set(emos.map(e => e.group))];
+      $('#mdGroups', sh).innerHTML = (mine().length ? `<div class="mood-group"><div class="mg-title">我的心情</div><div class="mood-grid2">${mine().map((m, i) => `<button class="mood-btn" data-mine="${i}"><span class="em">${esc(m.emoji)}</span><span>${esc(m.label)}</span></button>`).join('')}</div></div>` : '')
+        + groups.map(g => { const list = emos.filter(e => e.group === g); return list.length ? `<div class="mood-group"><div class="mg-title">${esc(g)}</div><div class="mood-grid2">${list.map(e => `<button class="mood-btn" data-emo="${e.id}"><span class="em">${e.emoji}</span><span>${esc(e.label)}</span></button>`).join('')}</div></div>` : ''; }).join('');
+      $$('[data-emo]', sh).forEach(b => b.onclick = (ev) => { emo = emos.find(x => x.id === b.dataset.emo); body = { emotion: emo.id }; startPress(ev); });
+      $$('[data-mine]', sh).forEach(b => b.onclick = (ev) => { const m = mine()[b.dataset.mine]; emo = { emoji: m.emoji, label: m.label }; body = { custom: m }; startPress(ev); });
+    };
+    const startPress = (ev) => {
+      $('#mdMain', sh).hidden = true; $('#mdFlow', sh).hidden = true; $('.mood-to', sh) && ($('.mood-to', sh).hidden = true);
+      $('#mp', sh).hidden = false; $('#mpEmo', sh).textContent = emo.emoji;
+      press(ev);
     };
     $$('[data-to]', sh).forEach(b => b.onclick = () => { target = b.dataset.to; emos = emosFor(target); drawEmos(); $$('[data-to]', sh).forEach(x => x.setAttribute('aria-pressed', String(x === b))); });
-    let emo = null, count = 0, timer = null;
     const burst = (x, y) => {
       for (let i = 0; i < 6; i++) {
         const p = document.createElement('span');
@@ -1143,12 +1180,13 @@ async function openMoodButton(relId = null) {
         document.body.appendChild(p); setTimeout(() => p.remove(), 900);
       }
     };
-    const send = async () => {
+    const send = async (extra = {}) => {
       close();
       const r = rels.find(x => x.id === target);
       try {
-        const res = await api(`/api/rels/${target}/poke`, { method: 'POST', body: { emotion: emo.id, count } });
-        track('poke', { emotion: emo.id, count });
+        const res = await api(`/api/rels/${target}/poke`, { method: 'POST', body: { ...body, ...extra, count } });
+        if (body.custom && S.me?.settings) S.me.settings.customMoods = [body.custom, ...mine().filter(x => x.label !== body.custom.label)].slice(0, 6);
+        track('poke', { emotion: body.emotion || (body.custom ? 'custom' : 'unsure'), count });
         if (location.hash === `#/chat/${target}` && S.room?.reveal) { await S.room.reveal(res.messages || []); if (res.pending) toast(`${displayName(r.frame)}現在不在線上，看到會回你`); }
         else toast(res.pending ? `${displayName(r.frame)}現在${res.pending.presence?.code === 'dnd' ? '睡了' : '在忙'}，看到會回你` : `已經讓${displayName(r.frame)}知道了`);
       } catch (e) { toast(e.message); }
@@ -1161,11 +1199,125 @@ async function openMoodButton(relId = null) {
       burst(ev?.clientX || rect.left + rect.width / 2, ev?.clientY || rect.top + rect.height / 2);
       try { navigator.vibrate?.(12); } catch {}
       $('#mpHint', sh).textContent = count >= 15 ? '爆表了！' : count >= 6 ? '很強烈喔' : '繼續按，或等一下就會送出';
-      clearTimeout(timer); timer = setTimeout(send, 1600);
+      clearTimeout(timer); timer = setTimeout(() => send(), 1600);
+    };
+    const flow = (html) => { $('#mdMain', sh).hidden = true; $('.mood-to', sh) && ($('.mood-to', sh).hidden = true); const f = $('#mdFlow', sh); f.hidden = false; f.innerHTML = html; return f; };
+    const backBtn = '<button class="linkbtn small" id="mdBack">← 回到心情</button>';
+    const bindBack = (f) => { $('#mdBack', f).onclick = () => { $('#mdFlow', sh).hidden = true; $('#mdMain', sh).hidden = false; $('.mood-to', sh) && ($('.mood-to', sh).hidden = false); $('#mdSub', sh).textContent = '按一下就會傳出去；連按越多下，代表越強烈。'; }; };
+
+    // 自己寫心情
+    $('#mdCustom', sh).onclick = () => {
+      let pick = EMOJIS[0];
+      const f = flow(`${backBtn}<p class="mg-title" style="margin-top:10px">選一個表情</p><div class="emoji-row">${EMOJIS.map((e, i) => `<button data-em="${i}" aria-pressed="${i === 0}">${e}</button>`).join('')}</div>
+        <input class="input" id="mdText" maxlength="12" placeholder="例如：被會議淹沒、想吃甜的" style="margin-top:12px"><button class="btn block" id="mdGo" style="margin-top:12px">傳給${nameOf(target)}</button>`);
+      bindBack(f);
+      $$('[data-em]', f).forEach(b => b.onclick = () => { pick = EMOJIS[b.dataset.em]; $$('[data-em]', f).forEach(x => x.setAttribute('aria-pressed', String(x === b))); });
+      $('#mdText', f).focus();
+      $('#mdGo', f).onclick = () => { const label = $('#mdText', f).value.trim(); if (!label) return toast('寫一下現在的心情'); body = { custom: { emoji: pick, label } }; emo = { emoji: pick, label }; count = 1; send(); };
+    };
+
+    // 說不出來：身體 → 強度與方向 → 候選詞
+    $('#mdUnsure', sh).onclick = () => {
+      const st = { body: [], level: 3, dir: null };
+      $('#mdSub', sh).textContent = '說不出來很正常。我們先從身體開始，一步一步來。';
+      const step1 = () => {
+        const f = flow(`${backBtn}<p class="mg-title" style="margin-top:10px">1／3　身體哪裡最有感覺？（可以選幾個）</p>
+          <div class="chips wrap">${(S.meta.bodyFeelings || []).map(x => `<button class="chip" data-body="${esc(x)}" aria-pressed="${st.body.includes(x)}">${esc(x)}</button>`).join('')}</div>
+          <button class="btn block" id="s1" style="margin-top:14px">下一步</button>`);
+        bindBack(f);
+        $$('[data-body]', f).forEach(b => b.onclick = () => { const x = b.dataset.body; st.body = st.body.includes(x) ? st.body.filter(y => y !== x) : [...st.body, x].slice(0, 4); b.setAttribute('aria-pressed', String(st.body.includes(x))); });
+        $('#s1', f).onclick = () => st.body.length ? step2() : toast('選一個最接近的就好');
+      };
+      const step2 = () => {
+        const f = flow(`<button class="linkbtn small" id="b2">← 上一步</button><p class="mg-title" style="margin-top:10px">2／3　有多強烈？</p>
+          <div class="level-row">${[1, 2, 3, 4, 5].map(n => `<button data-lv="${n}" aria-pressed="${n === st.level}">${n}</button>`).join('')}</div><div class="small muted level-cap"><span>一點點</span><span>快受不了</span></div>
+          <p class="mg-title" style="margin-top:16px">現在比較想……</p>
+          <div class="dir-list">${(S.meta.directions || []).map(d => `<button class="choice" data-dir="${d.id}"><b>${esc(d.label)}</b></button>`).join('')}</div>`);
+        $('#b2', f).onclick = step1;
+        $$('[data-lv]', f).forEach(b => b.onclick = () => { st.level = Number(b.dataset.lv); $$('[data-lv]', f).forEach(x => x.setAttribute('aria-pressed', String(x === b))); });
+        $$('[data-dir]', f).forEach(b => b.onclick = () => { st.dir = b.dataset.dir; step3(); });
+      };
+      const step3 = async () => {
+        let words = [];
+        try { words = await api(`/api/mood/words?body=${encodeURIComponent(st.body.join(','))}&dir=${st.dir}`); } catch {}
+        const f = flow(`<button class="linkbtn small" id="b3">← 上一步</button><p class="mg-title" style="margin-top:10px">3／3　哪一個比較像現在的你？</p>
+          <p class="small muted">不用很準，選最接近的。都不像也沒關係。</p>
+          <div class="chips wrap">${words.map(w => `<button class="chip" data-word="${esc(w)}">${esc(w)}</button>`).join('')}<button class="chip ghost" data-word="">都不太像</button></div>`);
+        $('#b3', f).onclick = step2;
+        $$('[data-word]', f).forEach(b => b.onclick = () => {
+          emo = { emoji: '🌀', label: '說不出來' }; count = 1;
+          body = { unsure: { body: st.body, level: st.level, dir: st.dir, word: b.dataset.word || null } };
+          send();
+        });
+      };
+      step1();
     };
     drawEmos();
     $('#mpBtn', sh).onclick = press;
   });
+}
+
+// ---------- 語音通話：你說完 → 他想一下 → 用他的聲音回你 ----------
+async function openCall(rel) {
+  const P = ta(rel.frame), name = displayName(rel.frame);
+  let st;
+  try { st = await api(`/api/rels/${rel.id}/call/start`, { method: 'POST' }); }
+  catch (e) { return toast(e.message); }
+  const el = document.createElement('div');
+  el.className = 'call-screen';
+  el.innerHTML = `<div class="call-top"><div class="call-av">${avatar(rel.frame, 112, { season: false })}</div><h2>${esc(name)}</h2>
+      <p class="call-time"><span id="ctT">0:00</span>・今天還能講 <span id="ctLeft">${Math.ceil(st.leftSec / 60)}</span> 分鐘</p></div>
+    <p class="call-sub" id="ctSub">接通了。點下面的按鈕開始說話，說完再點一次。</p>
+    <div class="call-bottom"><button class="call-mic" id="ctMic" aria-label="開始說話">${icon('mic')}</button>
+      <button class="call-end" id="ctEnd" aria-label="掛斷">${icon('phone')}</button></div>`;
+  document.body.appendChild(el);
+  const t0 = Date.now();
+  const tick = setInterval(() => { const sec = Math.round((Date.now() - t0) / 1000); $('#ctT', el).textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`; }, 1000);
+  let rec = null, stream = null, chunks = [], recAt = 0, busy = false, audio = null, ended = false;
+  const setSub = (t) => { $('#ctSub', el).textContent = t; };
+  const mic = $('#ctMic', el);
+  const hang = async (reason) => {
+    if (ended) return; ended = true;
+    clearInterval(tick); try { rec?.stop(); } catch {} stream?.getTracks().forEach(t => t.stop()); audio?.pause();
+    try { await api(`/api/rels/${rel.id}/call/end`, { method: 'POST' }); } catch {}
+    el.remove(); if (reason) toast(reason);
+    if (location.hash === `#/chat/${rel.id}`) renderRoom(rel.id);
+  };
+  $('#ctEnd', el).onclick = () => hang();
+  mic.onclick = async () => {
+    if (busy) return;
+    if (!rec) {
+      if (!navigator.mediaDevices?.getUserMedia) return toast('這個瀏覽器不能錄音');
+      try { stream = stream || await navigator.mediaDevices.getUserMedia({ audio: true }); } catch { return toast('需要麥克風權限才能講電話'); }
+      audio?.pause();
+      const type = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm'].find(t => window.MediaRecorder?.isTypeSupported?.(t)) || '';
+      rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+      chunks = []; recAt = Date.now();
+      rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+      rec.onstop = () => send(new Blob(chunks, { type: rec.mimeType || 'audio/webm' }), rec.mimeType);
+      rec.start(); mic.classList.add('on'); setSub('在聽你說……說完點一下');
+    } else { rec.stop(); }
+  };
+  const send = async (blob, mime) => {
+    const dur = Math.round((Date.now() - recAt) / 1000);
+    rec = null; mic.classList.remove('on');
+    if (blob.size < 1500) return setSub('太短了，再說一次');
+    busy = true; mic.disabled = true; setSub(`${P}在聽……`);
+    const fd = new FormData();
+    fd.append('voice', blob, (mime || '').includes('mp4') ? 'voice.m4a' : 'voice.webm');
+    fd.append('duration', String(dur));
+    try {
+      const r = await api(`/api/rels/${rel.id}/call/turn`, { method: 'POST', form: fd });
+      if (r.ended) return hang(r.reason || '通話結束了');
+      if (typeof r.leftSec === 'number') $('#ctLeft', el).textContent = Math.max(0, Math.ceil(r.leftSec / 60));
+      const said = (r.texts || []).join(' ');
+      if (!said) { setSub('沒聽清楚，再說一次'); return; }
+      setSub(`「${said}」`);
+      if (r.audio) { audio = new Audio(r.audio); mic.classList.add('speaking'); await audio.play().catch(() => {}); await new Promise(res => { audio.onended = res; audio.onerror = res; }); mic.classList.remove('speaking'); }
+      setSub('換你說。點一下開始');
+    } catch (e) { setSub(e.message); }
+    finally { busy = false; mic.disabled = false; }
+  };
 }
 
 // ---------- 聊天室選單（像 LINE）----------
@@ -1448,7 +1600,7 @@ async function renderExplore() {
   const draw = () => {
   const official = list.filter(t => t.kind === 'official' && inCat(t, cat));
   const shared = list.filter(t => t.kind === 'shared' && inCat(t, cat));
-  const tile = (t) => `<button class="tile" data-id="${esc(t.id)}">${avatar(t.frame, 52, { season: false })}
+  const tile = (t) => `<button class="tile${t.portrait ? ' has-photo' : ''}" data-id="${esc(t.id)}">${t.portrait ? portraitThumb(t.portrait, t.frame.name) : avatar(t.frame, 52, { season: false })}
     <span class="nm">${esc(t.frame.name)}</span><span class="info">${esc(t.frame.jobLabel)}・${esc(t.frame.archetypeLabel || '')}</span>
     <span class="intro">${esc(t.frame.intro || '')}</span><span class="by">${t.kind === 'official' ? '官方角色' : `${esc(t.creator)} 塑造`}</span></button>`;
   const catInfo = (S.meta.categories || []).find(c => c.id === cat);

@@ -201,6 +201,7 @@ for (const [table, col, def] of [
   ['relationships', 'char_read_id', 'INTEGER NOT NULL DEFAULT 0'], // 他讀到哪一則（已讀）
   ['memories', 'tags', 'TEXT'],                       // 記憶的主題標籤（逗號分隔，例如「工作,心情」）
   ['relationships', 'mem_upto', 'INTEGER NOT NULL DEFAULT 0'], // 記憶整理做到哪一則訊息
+  ['daily_use', 'call_sec', 'INTEGER NOT NULL DEFAULT 0'], // 今天講了幾秒電話
   ['relationships', 'aff_day', 'TEXT'],                // 好感每日上限：哪一天
   ['relationships', 'aff_gain', 'INTEGER NOT NULL DEFAULT 0'], // 那一天已經加了多少好感
 ]) {

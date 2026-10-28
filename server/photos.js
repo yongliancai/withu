@@ -43,6 +43,28 @@ export const PHOTO_TAGS = {
   chess: ['圍棋', 'board game chess'], record_player: ['黑膠', 'vinyl record player'], fabric: ['布料', 'fabric textile sewing'],
   school: ['校園', 'school campus tree'], office_night: ['夜晚辦公室', 'office at night window'], nail: ['美甲', 'nail art manicure'],
   pharmacy: ['藥局', 'pharmacy shelves'], desk: ['書桌', 'desk laptop coffee'], window: ['窗邊', 'window light curtain'],
+  // 職業場景：讓每個角色的動態更像他的工作
+  clinic: ['診間', 'doctor clinic stethoscope desk'], classroom: ['教室', 'empty classroom desks blackboard'], studio_mic: ['錄音室', 'radio studio microphone'],
+  bar_counter: ['酒吧吧台', 'cocktail bar counter bottles'], cocktail: ['調酒', 'cocktail glass bar'], florist_table: ['花藝工作台', 'florist workbench flowers'],
+  sewing: ['縫紉', 'sewing machine tailor'], tattoo_studio: ['刺青工作室', 'tattoo studio'], camera: ['相機', 'film camera photography'],
+  laptop_code: ['寫程式', 'laptop code screen night'], lab: ['研究室', 'science laboratory bench'], vet_clinic: ['動物醫院', 'veterinary clinic dog'],
+  kindergarten: ['幼兒園', 'kindergarten toys classroom'], meeting_room: ['會議室', 'meeting room office'], stage_lights: ['舞台燈光', 'concert stage lights'],
+  makeup: ['化妝台', 'makeup vanity table'], kitchen_pro: ['專業廚房', 'restaurant kitchen chef'], dessert_shop: ['甜點櫃', 'dessert shop display'],
+  // 台灣在地
+  breakfast_shop: ['早餐店', 'taiwanese breakfast egg pancake soy milk'], street_food: ['路邊小吃', 'taiwan street food'], beef_noodle: ['牛肉麵', 'beef noodle soup'],
+  hotpot: ['火鍋', 'hot pot dinner'], mrt: ['捷運站', 'metro station platform taipei'], scooter: ['機車街景', 'scooters street taiwan'],
+  temple: ['廟宇', 'taiwan temple lanterns'], old_street: ['老街', 'old street lanterns taiwan'], harbor: ['漁港', 'fishing harbor boats'],
+  rice_field: ['稻田', 'rice field countryside'], hot_spring: ['溫泉', 'hot spring steam'], tea: ['茶', 'tea cup teapot'],
+  convenience_food: ['超商美食', 'convenience store food snacks'], alley: ['巷弄', 'quiet alley plants'], rooftop: ['頂樓', 'rooftop city view'],
+  // 季節與節日
+  mooncake: ['中秋月餅', 'mooncake moon festival'], bbq: ['中秋烤肉', 'barbecue grill night friends'], fireworks: ['跨年煙火', 'new year fireworks city'],
+  cherry_blossom: ['櫻花', 'cherry blossom'], typhoon: ['颱風天', 'storm rain window wind'], christmas: ['聖誕市集', 'christmas market lights'],
+  lunar_new_year: ['過年', 'chinese new year red decorations'], lantern: ['燈會', 'lantern festival'], summer_ice: ['剉冰', 'shaved ice dessert summer'],
+  autumn_leaves: ['秋天落葉', 'autumn leaves path'], winter_coat: ['冬天', 'winter scarf coffee cold'],
+  // 氛圍
+  rainy_window: ['雨天窗邊', 'rain on window cozy'], night_desk: ['深夜書桌', 'desk lamp night study'], morning_balcony: ['清晨陽台', 'morning balcony sunlight'],
+  sunset_train: ['車窗夕陽', 'train window sunset'], cozy_bed: ['被窩', 'cozy bed blanket morning'], bookshelf_home: ['家裡的書架', 'home bookshelf plants'],
+  stars: ['星空', 'starry night sky'], ocean_night: ['夜晚海邊', 'ocean at night moon'], walk_path: ['散步小路', 'park walking path trees'],
 };
 
 const MIN_PER_TAG = 6;

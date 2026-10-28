@@ -22,6 +22,9 @@ export const SETTING_DEFS = [
   // 主動訊息
   { key: 'proactiveMult', group: '主動訊息', label: '角色主動找人的頻率（倍數）', type: 'num', min: 0, max: 3, def: 1, help: '1 = 預設；0.5 = 減半；0 = 完全不主動' },
   { key: 'stickerGapTurns', group: '主動訊息', label: '貼圖：至少隔幾輪才再傳', type: 'int', min: 1, max: 30, def: 5 },
+  // 語音通話
+  { key: 'callMinStage', group: '語音通話', label: '關係到哪個階段才能打電話（0 認識 1 朋友 2 曖昧 3 交往）', type: 'int', min: 0, max: 4, def: 2 },
+  { key: 'callDailyMinutes', group: '語音通話', label: '每人每天最多講幾分鐘', type: 'int', min: 0, max: 240, def: 10 },
   // 其他
   { key: 'maxActive', group: '其他', label: '每人同時最多認識幾個角色', type: 'int', min: 1, max: 20, def: n(env.MAX_ACTIVE_RELATIONSHIPS, 5) },
   { key: 'memoryEvery', group: '其他', label: '每聊幾輪整理一次記憶', type: 'int', min: 2, max: 20, def: 4 },

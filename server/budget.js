@@ -8,8 +8,11 @@ import { logIssue } from './logger.js';
 /** 一列 usage 的花費（美元）。 */
 export function rowUsd(r) {
   const p = config.price;
+  if (r.model === 'mock') return 0;
   if (r.kind === 'tts') return r.units * p.ttsPerChar;
   if (r.kind === 'stt') return (r.units / 60) * p.sttPerMin;
+  if (r.kind === 'image') return r.units * p.imageLow;
+  if (r.kind === 'portrait') return r.units * p.imageHigh;
   if (r.model === 'mock') return 0;
   const good = r.model === config.modelGood;
   const inP = good ? p.goodIn : p.cheapIn, cP = good ? p.goodCached : p.cheapCached, oP = good ? p.goodOut : p.cheapOut;

@@ -1,5 +1,7 @@
 import express from 'express';
 import { S } from './settings.js';
+import { securityHeaders, adminGuard, rateLimit } from './security.js';
+import { mainOf, photosForViewer, portraitFile, ownerOfCharacter } from './portraits.js';
 import { updateUserPrefs } from './prefs.js';
 import { addMemory } from './memory.js';
 import { deleteAccount } from './account.js';
@@ -13,14 +15,15 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { db, now, j, logEvent } from './db.js';
-import { stt, jsonCall } from './llm.js';
+import { stt, tts, jsonCall } from './llm.js';
+import { looksLikeImage, looksLikeAudio } from './uploads.js';
 import { JOBS, ARCHETYPES, PROACTIVITY, VOICES, SCENARIOS, AVATAR_HUES, charStatus, MOODS, CATEGORIES } from './characters.js';
 import { STAGES } from './prompt.js';
 import { id, runTurn, addMessage, getPersona, endRelationship, addStory, ta, startActivity, endActivity, STICKERS, milestone } from './engine.js';
 import { presenceOf, replyDelayMs } from './presence.js';
 import { crisisSignal } from './safety.js';
 import { episodesList } from './memory.js';
-import { topicsFor, GAMES, ACTIVITIES, LEAD_REASON, EMOTIONS, pokeReason } from './topics.js';
+import { topicsFor, GAMES, ACTIVITIES, LEAD_REASON, EMOTIONS, pokeReason , EMOTION_GROUPS, BODY_FEELINGS, DIRECTIONS, candidateWords, unsureReason} from './topics.js';
 import { seedOfficial, meet, sharePreview, publishShare, cleanupOrphans } from './meet.js';
 import { startScheduler, tick } from './scheduler.js';
 import { pushEnabled } from './push.js';
@@ -37,6 +40,9 @@ import { LIB_DIR, pickPhoto, photoById, fillLibrary, generatePhotos, photoSource
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
+app.use(securityHeaders);
+app.use('/api/admin', adminGuard);
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -74,7 +80,7 @@ const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch(e => {
 
 const recoveryCode = () => Array.from(crypto.randomBytes(8)).map(b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('').replace(/(.{4})/, '$1-');
 
-app.post('/api/auth/join', (req, res) => {
+app.post('/api/auth/join', rateLimit('註冊', 20, 3600e3), (req, res) => {
   const { invite, nickname, callName, adult, aiAck, gender, seeks } = req.body || {};
   const code0 = String(invite || '').trim();
   const cohort = cohortForCode(code0);
@@ -94,12 +100,12 @@ app.post('/api/auth/join', (req, res) => {
   res.json({ ok: true, recoveryCode: code, cohort });
 });
 
-app.get('/api/auth/cohort', (req, res) => {
+app.get('/api/auth/cohort', rateLimit('邀請碼查詢', 30, 15 * 60000), (req, res) => {
   const c = String(req.query.code || '').trim();
   res.json({ cohort: cohortForCode(c) });
 });
 
-app.post('/api/auth/recover', (req, res) => {
+app.post('/api/auth/recover', rateLimit('登入碼', 10, 15 * 60000), (req, res) => {
   const code = String(req.body?.code || '').trim().toUpperCase();
   const u = db.prepare('SELECT id, disabled FROM users WHERE recovery_code=?').get(code);
   if (!u) return res.status(400).json({ error: '找不到這組登入碼' });
@@ -126,7 +132,7 @@ app.get('/api/me', auth, (req, res) => {
 app.patch('/api/me', auth, (req, res) => {
   const b = req.body || {};
   const settings = { ...j(req.user.settings, {}), ...(b.settings || {}) };
-  const allowed = ['dailyCap', 'proactiveLevel', 'dndStart', 'dndEnd', 'notifyPreview', 'lunchAt', 'dinnerAt', 'discreetNames', 'portraitStyle', 'showSuggestions', 'realisticDelay', 'notifyAsked', 'appTheme', 'nightOwl'];
+  const allowed = ['dailyCap', 'proactiveLevel', 'dndStart', 'dndEnd', 'notifyPreview', 'lunchAt', 'dinnerAt', 'discreetNames', 'portraitStyle', 'showSuggestions', 'realisticDelay', 'notifyAsked', 'appTheme', 'nightOwl', 'customMoods'];
   for (const k of Object.keys(settings)) if (!allowed.includes(k)) delete settings[k];
   const seeks = ['male', 'female', 'any'].includes(b.seeks) ? b.seeks : req.user.seeks;
   const gender = ['female', 'male', 'other'].includes(b.gender) ? b.gender : req.user.gender;
@@ -139,6 +145,7 @@ app.patch('/api/me', auth, (req, res) => {
 // ---------- 你的主頁 ----------
 app.post('/api/me/avatar', auth, upload.single('photo'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: '沒有收到照片' });
+  if (!looksLikeImage(req.file.buffer)) return res.status(400).json({ error: '只能上傳照片（JPG、PNG、HEIC）' });
   const f = `${id('av_')}.jpg`;
   fs.writeFileSync(path.join(config.dataDir, 'uploads', f), req.file.buffer);
   db.prepare('UPDATE users SET avatar=? WHERE id=?').run(f, req.user.id);
@@ -155,6 +162,7 @@ app.get('/api/me/posts', auth, (req, res) => res.json(userPostsOut(req.user.id))
 app.post('/api/me/posts', auth, upload.single('photo'), (req, res) => {
   const text = String(req.body?.text || '').trim();
   if (!text && !req.file) return res.status(400).json({ error: '寫點什麼，或放一張照片' });
+  if (req.file && !looksLikeImage(req.file.buffer)) return res.status(400).json({ error: '只能上傳照片（JPG、PNG、HEIC）' });
   let media = null;
   if (req.file) { media = `${id('up_')}.jpg`; fs.writeFileSync(path.join(config.dataDir, 'uploads', media), req.file.buffer); }
   let audience = req.body?.audience || 'all';
@@ -204,12 +212,14 @@ import { execSync } from 'node:child_process';
 const APP_VERSION = (() => { try { return execSync('git rev-parse --short HEAD', { cwd: path.join(__dirname, '..'), stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { return String(Date.now()); } })();
 app.get('/api/version', (req, res) => { res.setHeader('Cache-Control', 'no-store'); res.json({ v: APP_VERSION }); });
 
-app.get('/api/meta', (req, res) => res.json({ jobs: JOBS, archetypes: ARCHETYPES, proactivity: PROACTIVITY, voices: VOICES, scenarios: SCENARIOS, hues: AVATAR_HUES, stages: STAGES, moods: MOODS, categories: CATEGORIES, emotions: EMOTIONS }));
+app.get('/api/meta', (req, res) => res.json({ jobs: JOBS, archetypes: ARCHETYPES, proactivity: PROACTIVITY, voices: VOICES, scenarios: SCENARIOS, hues: AVATAR_HUES, stages: STAGES, moods: MOODS, categories: CATEGORIES, emotions: EMOTIONS, emotionGroups: EMOTION_GROUPS, bodyFeelings: BODY_FEELINGS, directions: DIRECTIONS }));
 
 const publicFrame = (f) => ({ name: f.name, gender: f.gender, age: f.age, nationality: f.nationality, jobLabel: f.jobLabel, job: f.job,
   archetype: f.archetype, archetypeLabel: ARCHETYPES[f.archetype]?.label, look: f.look, proactivity: f.proactivity, appearance: f.appearance,
   traits: f.traits, catchphrases: f.catchphrases, intro: f.intro, hue: f.hue, schedule: f.schedule, workplace: f.workplace, signature: f.signature, cats: f.cats || (f.style === 'anime' || f.look?.style === 'anime' ? ['anime'] : []), photo: f.photo || null,
   avatarPhoto: f.photo ? pickPhoto(f.photo, f.name) : null });
+
+const portraitUrl = (tid) => { const m = mainOf(tid); return m ? `/api/portrait/${m.id}/h` : null; };
 
 // Who she/he wants to meet (set at sign-up, changeable in 我).
 const wanted = (user, frame) => user.seeks === 'any' || frame.gender === user.seeks;
@@ -219,7 +229,7 @@ app.get('/api/templates', auth, (req, res) => {
     AND id NOT IN (SELECT template_id FROM characters WHERE user_id=? AND template_id IS NOT NULL)
     ORDER BY kind='official' DESC, uses DESC, created_at DESC LIMIT 200`).all(req.user.id)
     .filter(t => wanted(req.user, j(t.data)));
-  res.json(rows.map(t => ({ id: t.id, kind: t.kind, creator: t.creator_name, frame: publicFrame(j(t.data)) })));
+  res.json(rows.map(t => ({ id: t.id, kind: t.kind, creator: t.creator_name, frame: publicFrame(j(t.data)), portrait: portraitUrl(t.id) })));
 });
 
 app.post('/api/templates/:id/report', auth, (req, res) => {
@@ -231,6 +241,7 @@ app.post('/api/templates/:id/report', auth, (req, res) => {
 // 拍照偶遇：看照片判斷是哪種地方（照片不保存）
 app.post('/api/encounter/photo', auth, upload.single('photo'), wrap(async (req, res) => {
   if (!req.file) return res.status(400).json({ error: '沒有收到照片' });
+  if (!looksLikeImage(req.file.buffer)) return res.status(400).json({ error: '只能上傳照片（JPG、PNG、HEIC）' });
   const ids = SCENARIOS.map(s => s.id);
   const r = await jsonCall({
     userId: req.user.id, kind: 'scene_photo', tier: 'cheap',
@@ -253,7 +264,7 @@ app.get('/api/mood-picks', auth, (req, res) => {
     .map(t => ({ ...t, f: j(t.data) })).filter(t => wanted(req.user, t.f));
   let pool = all.filter(t => ARCHETYPES[t.f.archetype]?.moods?.includes(mood.id));
   if (pool.length < 2) pool = pool.concat(all.filter(t => !pool.includes(t)).slice(0, 3 - pool.length));
-  const picks = pool.sort(() => Math.random() - 0.5).slice(0, 3).map(t => ({ id: t.id, kind: t.kind, creator: t.creator_name, frame: publicFrame(t.f) }));
+  const picks = pool.sort(() => Math.random() - 0.5).slice(0, 3).map(t => ({ id: t.id, kind: t.kind, creator: t.creator_name, frame: publicFrame(t.f), portrait: portraitUrl(t.id) }));
   res.json({ mood, picks });
 });
 
@@ -265,7 +276,7 @@ app.get('/api/encounter', auth, (req, res) => {
     .map(t => ({ ...t, f: j(t.data) })).filter(t => wanted(req.user, t.f));
   let pool = sc ? all.filter(t => sc.jobs.includes(t.f.job)) : all;
   if (pool.length < 3) pool = pool.concat(all.filter(t => !pool.includes(t)));
-  const picks = pool.sort(() => Math.random() - 0.5).slice(0, 3).map(t => ({ id: t.id, kind: t.kind, creator: t.creator_name, frame: publicFrame(t.f) }));
+  const picks = pool.sort(() => Math.random() - 0.5).slice(0, 3).map(t => ({ id: t.id, kind: t.kind, creator: t.creator_name, frame: publicFrame(t.f), portrait: portraitUrl(t.id) }));
   let reunion = null;
   const ended = db.prepare(`SELECT r.id, c.persona FROM relationships r JOIN characters c ON c.id=r.character_id WHERE r.user_id=? AND r.status='ended' AND r.blocked=0`).all(req.user.id);
   if (ended.length && Math.random() < 0.25) {
@@ -345,6 +356,8 @@ app.post('/api/rels/:id/messages', auth, upload.fields([{ name: 'photo', maxCoun
     let imageMedia = null;
     const photo = req.files?.photo?.[0];
     const voice = req.files?.voice?.[0];
+    if (photo && !looksLikeImage(photo.buffer)) return res.status(400).json({ error: '只能上傳照片（JPG、PNG、HEIC）' });
+    if (voice && !looksLikeAudio(voice.buffer)) return res.status(400).json({ error: '聲音格式不支援' });
     if (photo) {
       imageMedia = `${id('p_')}.jpg`;
       fs.writeFileSync(path.join(config.dataDir, 'uploads', imageMedia), photo.buffer);
@@ -489,6 +502,89 @@ app.get('/api/rels/:id/search', auth, (req, res) => {
 });
 app.get('/api/announcements', auth, (req, res) => res.json(activeAnnouncements()));
 
+// ---------- 語音通話（輪流講話：你說完 → 他想一下 → 用他的聲音回你）----------
+const calls = new Map(); // relId → { start, last, user }
+function callUsedSec(userId) {
+  // 沒掛電話就關掉 App：5 分鐘沒說話、或超過 1 小時，自動結束
+  for (const [relId, c] of calls) if (now() - c.last > 5 * 60000 || now() - c.start > 3600e3) {
+    const rel = db.prepare('SELECT * FROM relationships WHERE id=?').get(relId);
+    const sec = endCall(relId, true);
+    if (rel && sec) addMessage(rel, 'system', 'card', { card: { type: 'call', seconds: sec } });
+  }
+  const day = taipeiDay();
+  const used = db.prepare('SELECT call_sec FROM daily_use WHERE user_id=? AND day=?').get(userId, day)?.call_sec || 0;
+  let live = 0;
+  for (const c of calls.values()) if (c.user === userId) live += Math.round((now() - c.start) / 1000);
+  return used + live;
+}
+function endCall(relId, stale = false) {
+  const c = calls.get(relId);
+  if (!c) return 0;
+  calls.delete(relId);
+  const sec = Math.max(1, Math.round(((stale ? Math.min(now(), c.last + 60000) : now()) - c.start) / 1000));
+  db.prepare('INSERT OR IGNORE INTO daily_use (user_id, day) VALUES (?, ?)').run(c.user, taipeiDay());
+  db.prepare('UPDATE daily_use SET call_sec=call_sec+? WHERE user_id=? AND day=?').run(sec, c.user, taipeiDay());
+  return sec;
+}
+app.post('/api/rels/:id/call/start', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const p = getPersona(rel), P = ta(p);
+  if (rel.status !== 'active') return res.status(400).json({ error: '這段關係已經結束了' });
+  if (rel.stage < S('callMinStage')) return res.status(400).json({ error: `你們再熟一點，就可以打電話給${P}了` });
+  if (budgetPaused()) return res.status(503).json({ error: '伴旅暫時休息中，晚一點再打' });
+  const left = S('callDailyMinutes') * 60 - callUsedSec(req.user.id);
+  if (left <= 5) return res.status(400).json({ error: '今天的通話時間用完了，明天再打給' + P });
+  const pr = presenceOf(rel, p);
+  if (pr.code === 'dnd') return res.status(409).json({ error: `${P}睡了，沒有接`, missed: true });
+  if (pr.code === 'busy' && !pr.label.includes('偷空')) return res.status(409).json({ error: `${P}在上班，沒辦法接`, missed: true });
+  calls.set(rel.id, { start: now(), last: now(), user: req.user.id });
+  logEvent(req.user.id, 'call_start', { rel: rel.id });
+  res.json({ ok: true, leftSec: left, voice: p.voice });
+});
+app.post('/api/rels/:id/call/turn', auth, upload.single('voice'), wrap(async (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  if (!calls.has(rel.id)) return res.status(400).json({ error: '通話已經結束了', ended: true });
+  calls.get(rel.id).last = now();
+  const left = S('callDailyMinutes') * 60 - callUsedSec(req.user.id);
+  if (left <= 0) { const sec = endCall(rel.id); addMessage(rel, 'system', 'card', { card: { type: 'call', seconds: sec } }); return res.json({ ended: true, reason: '今天的通話時間用完了' }); }
+  if (!req.file) return res.status(400).json({ error: '沒有收到聲音' });
+  if (!looksLikeAudio(req.file.buffer)) return res.status(400).json({ error: '聲音格式不支援' });
+  if (busyRels.has(rel.id)) return res.status(429).json({ error: '等一下，還在回' });
+  busyRels.add(rel.id);
+  try {
+    const before = db.prepare('SELECT MAX(id) m FROM messages WHERE rel_id=?').get(rel.id).m || 0;
+    const ext = (req.file.mimetype || '').includes('mp4') ? 'm4a' : 'webm';
+    const media = `${id('v_')}.${ext}`;
+    fs.writeFileSync(path.join(config.dataDir, 'audio', media), req.file.buffer);
+    const text = await stt({ userId: req.user.id, buffer: req.file.buffer, filename: `voice.${ext}`, durationSec: Number(req.body?.duration) || 0 });
+    if (!String(text || '').trim()) return res.json({ texts: [], audio: null, leftSec: left });
+    addMessage(rel, 'user', 'voice', { text, media });
+    db.prepare('UPDATE relationships SET user_msg_count=user_msg_count+1, last_user_msg_at=?, unanswered=0 WHERE id=?').run(now(), rel.id);
+    await runTurn({ user: req.user, relId: rel.id, userText: text, callMode: true });
+    const rows = db.prepare(`SELECT * FROM messages WHERE rel_id=? AND id>? AND sender='char' AND kind='text' ORDER BY id`).all(rel.id, before);
+    const said = rows.map(r => r.text).join(' ');
+    let audio = null;
+    if (said) {
+      const p = getPersona(rel);
+      try {
+        const buf = await tts({ userId: req.user.id, text: said, voice: p.voice || 'cedar', instructions: `用台灣口音的中文，${p.gender === 'female' ? '女性' : '男性'}，像在講電話，自然、放鬆，語氣符合：${p.traits}` });
+        if (buf) { const f = `${id('a_')}.mp3`; fs.writeFileSync(path.join(config.dataDir, 'audio', f), buf); audio = `/api/media/${f}`;
+          // 把他這段話存成語音訊息，聊天室裡也聽得到
+          db.prepare(`UPDATE messages SET kind='voice', media=? WHERE id=?`).run(f, rows[0].id);
+          if (rows.length > 1) { db.prepare(`UPDATE messages SET text=? WHERE id=?`).run(said, rows[0].id); db.prepare(`DELETE FROM messages WHERE id IN (${rows.slice(1).map(r => r.id).join(',')})`).run(); }
+        }
+      } catch { /* 合成失敗就只回文字 */ }
+    }
+    res.json({ heard: text, texts: rows.map(r => r.text), audio, leftSec: S('callDailyMinutes') * 60 - callUsedSec(req.user.id) });
+  } finally { busyRels.delete(rel.id); }
+}));
+app.post('/api/rels/:id/call/end', auth, (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const sec = endCall(rel.id);
+  if (sec) { addMessage(rel, 'system', 'card', { card: { type: 'call', seconds: sec } }); logEvent(req.user.id, 'call_end', { rel: rel.id, sec }); }
+  res.json({ ok: true, seconds: sec });
+});
+
 // 依主題找聊天片段：每幾輪整理出來、有標籤的對話摘要
 app.get('/api/rels/:id/episodes', auth, (req, res) => {
   const rel = ownRel(req, res); if (!rel) return;
@@ -614,20 +710,50 @@ app.post('/api/rels/:id/goals/:gid/done', auth, (req, res) => {
 });
 
 // 心情按鈕
+// 「說不出來」引導：依身體感覺和方向給候選的情緒詞
+app.get('/api/mood/words', auth, (req, res) => {
+  const body = String(req.query.body || '').split(',').filter(x => BODY_FEELINGS.includes(x));
+  res.json(candidateWords(body, String(req.query.dir || 'none')));
+});
+
 app.post('/api/rels/:id/poke', auth, wrap(async (req, res) => {
   const rel = ownRel(req, res); if (!rel) return;
   if (rel.status !== 'active') return res.status(400).json({ error: '這段關係已經結束了' });
-  const e = EMOTIONS.find(x => x.id === req.body?.emotion);
-  if (!e || (e.minStage || 0) > rel.stage) return res.status(400).json({ error: '沒有這個心情' });
+  const b = req.body || {};
+  let e = null, reason = null, cardExtra = {};
+  if (b.unsure) {
+    // 「說不出來」引導
+    const body = (Array.isArray(b.unsure.body) ? b.unsure.body : []).filter(x => BODY_FEELINGS.includes(x)).slice(0, 4);
+    const level = Math.max(1, Math.min(5, Number(b.unsure.level) || 3));
+    const dir = DIRECTIONS.some(d => d.id === b.unsure.dir) ? b.unsure.dir : 'none';
+    const word = candidateWords(body, dir).includes(b.unsure.word) ? b.unsure.word : null;
+    if (!body.length) return res.status(400).json({ error: '先選一個身體的感覺' });
+    e = { id: 'unsure', emoji: '🌀', label: word ? `說不太出來，比較像${word}` : '說不太出來的感覺' };
+    reason = unsureReason({ body, level, dir, word });
+    cardExtra = { body, level, dir, word };
+  } else if (b.custom) {
+    // 自己寫的心情
+    const label = String(b.custom.label || '').replace(/\s+/g, ' ').trim().slice(0, 12);
+    const emoji = [...String(b.custom.emoji || '💭')].slice(0, 2).join('') || '💭';
+    if (!label) return res.status(400).json({ error: '寫一下現在的心情' });
+    e = { id: 'custom', emoji, label, custom: true };
+    // 常用的自訂心情留下來（最多 6 個）
+    const st = j(req.user.settings, {});
+    const list = [{ emoji, label }, ...(st.customMoods || []).filter(x => x.label !== label)].slice(0, 6);
+    db.prepare('UPDATE users SET settings=? WHERE id=?').run(JSON.stringify({ ...st, customMoods: list }), req.user.id);
+  } else {
+    e = EMOTIONS.find(x => x.id === b.emotion);
+    if (!e || (e.minStage || 0) > rel.stage) return res.status(400).json({ error: '沒有這個心情' });
+  }
   if (busyRels.has(rel.id)) return res.status(429).json({ error: `${ta(getPersona(rel))}還在回上一則` });
-  const count = Math.max(1, Math.min(99, Number(req.body?.count) || 1));
+  const count = e.id === 'unsure' ? 1 : Math.max(1, Math.min(99, Number(b.count) || 1));
   busyRels.add(rel.id);
   try {
     const before = db.prepare('SELECT MAX(id) m FROM messages WHERE rel_id=?').get(rel.id).m || 0;
-    addMessage(rel, 'user', 'card', { text: `${e.emoji} ${e.label}${count > 1 ? ` ×${count}` : ''}`, card: { type: 'poke', emotion: e.id, emoji: e.emoji, label: e.label, count } });
+    addMessage(rel, 'user', 'card', { text: `${e.emoji} ${e.label}${count > 1 ? ` ×${count}` : ''}`, card: { type: 'poke', emotion: e.id, emoji: e.emoji, label: e.label, count, ...cardExtra } });
     db.prepare('UPDATE relationships SET last_user_msg_at=?, unanswered=0 WHERE id=?').run(now(), rel.id);
-    logEvent(req.user.id, 'poke', { rel: rel.id, emotion: e.id, count });
-    const out = await replyOrDefer(req.user, rel, { trigger: pokeReason(e, count), triggerKey: 'nudge_poke' });
+    logEvent(req.user.id, 'poke', { rel: rel.id, emotion: e.id, count, ...(e.id === 'unsure' ? { level: cardExtra.level, dir: cardExtra.dir, picked: !!cardExtra.word } : {}) });
+    const out = await replyOrDefer(req.user, rel, { trigger: reason || pokeReason(e, count), triggerKey: 'nudge_poke' });
     const rows = db.prepare('SELECT * FROM messages WHERE rel_id=? AND id>? ORDER BY id').all(rel.id, before);
     res.json({ messages: rows.map(msgOut), ...out });
   } finally { busyRels.delete(rel.id); }
@@ -686,7 +812,7 @@ async function fixFromReport(user, rel, persona, text, recent) {
 }
 
 // 手機端的程式錯誤
-app.post('/api/client-log', (req, res) => {
+app.post('/api/client-log', rateLimit('手機端紀錄', 60, 60000), (req, res) => {
   const s = req.cookies.sid && db.prepare('SELECT user_id FROM sessions WHERE token=?').get(req.cookies.sid);
   const b = req.body || {};
   logIssue({ level: 'error', source: 'client', message: String(b.message || 'client error').slice(0, 300), userId: s?.user_id,
@@ -705,7 +831,26 @@ app.get('/api/rels/:id/profile', auth, (req, res) => {
   const posts = db.prepare('SELECT id, text, photo_id, created_at FROM posts WHERE rel_id=? ORDER BY id DESC LIMIT 30').all(rel.id)
     .map(x => ({ id: x.id, text: x.text, at: x.created_at, photo: x.photo_id ? photoById(x.photo_id) : null }));
   res.json({ ...relSummary(rel), signature: p.signature || '', signatureAt: p.signature_at || null,
-    cover: JOBS[p.job]?.scene || 'city', weekend: p.weekend, values: p.values, posts });
+    cover: JOBS[p.job]?.scene || 'city', weekend: p.weekend, values: p.values, posts,
+    photos: photosForViewer(ownerOfCharacter(p._char), rel.stage) });
+});
+
+// 角色人像：依關係階段決定能拿到清楚、輕度模糊還是重度模糊的版本
+const LEVEL_RANK = { h: 0, m: 1, c: 2 };
+app.get('/api/portrait/:id/:level', auth, (req, res) => {
+  const ph = db.prepare('SELECT * FROM char_photos WHERE id=? AND hidden=0').get(Number(req.params.id));
+  const level = ['h', 'm', 'c'].includes(req.params.level) ? req.params.level : 'h';
+  if (!ph) return res.status(404).end();
+  // 這張照片屬於誰：自己捏的角色 → 只有本人；官方角色 → 看你跟他的關係
+  const mine = db.prepare(`SELECT r.stage FROM characters c JOIN relationships r ON r.character_id=c.id WHERE c.user_id=? AND (c.id=? OR c.template_id=?) ORDER BY r.stage DESC LIMIT 1`).get(req.user.id, ph.owner, ph.owner);
+  const isTemplate = !!db.prepare('SELECT 1 FROM templates WHERE id=?').get(ph.owner);
+  if (!mine && !isTemplate) return res.status(404).end();
+  const allowed = photosForViewer(ph.owner, mine ? mine.stage : null).find(x => x.id === ph.id)?.level || 'h';
+  if (LEVEL_RANK[level] > LEVEL_RANK[allowed]) return res.status(403).end();
+  const f = portraitFile(ph, level);
+  if (!f || !fs.existsSync(f)) return res.status(404).end();
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  res.sendFile(f);
 });
 
 app.post('/api/rels/:id/read', auth, (req, res) => {
@@ -917,6 +1062,7 @@ app.post('/api/admin/photos', upload.single('photo'), (req, res) => {
   if (!adminOk(req)) return res.status(401).json({ error: 'unauthorized' });
   const tag = String(req.body?.tag || '');
   if (!PHOTO_TAGS[tag] || !req.file) return res.status(400).json({ error: '請選類別和照片' });
+  if (!looksLikeImage(req.file.buffer)) return res.status(400).json({ error: '只能上傳照片' });
   res.json({ id: saveUpload(tag, req.file.buffer, req.file.mimetype, String(req.body?.credit || '').slice(0, 40)) });
 });
 app.post('/api/admin/photos/:id/hide', (req, res) => {

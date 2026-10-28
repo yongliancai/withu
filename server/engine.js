@@ -1,6 +1,7 @@
 // 對話編排層：assemble persona + relationship + memories + recent chat, call the model,
 // then apply everything the model decided (memories, stage, meal card, outing, follow-ups…).
 import fs from 'node:fs';
+import { ensurePortraits } from './portraits.js';
 import { lifeContext } from './lifelog.js';
 import { S } from './settings.js';
 import path from 'node:path';
@@ -149,6 +150,8 @@ function setStage(rel, persona, user, stage) {
   db.prepare('UPDATE relationships SET stage=?, stage_changed_at=? WHERE id=?').run(stage, now(), rel.id);
   rel.stage = stage;
   if (STAGE_MILESTONE[stage]) milestone(rel, STAGE_MILESTONE[stage]);
+  // 變曖昧了：他的生活照開始解鎖，還沒生成的在背景生成（官方角色共用，只做一次）
+  if (stage === 2) ensurePortraits(persona._char, rel.user_id, { life: true });
   if (stage >= 2 && !persona._char.persona_locked) {
     // 定型：the shaped personality is locked into the core persona.
     db.prepare('UPDATE characters SET persona_locked=1 WHERE id=?').run(persona._char.id);
@@ -342,7 +345,7 @@ function findRepeat(texts, recent) {
  * One exchange. Either `userText`/`imageMedia` (she sent something) or `trigger` (he reaches out).
  * Returns the list of new message ids.
  */
-export async function runTurn({ user, relId, userText = '', imageMedia = null, trigger = null, triggerKey = null, voiceMoment = false, lateReply = null, notifyUser = false }) {
+export async function runTurn({ user, relId, userText = '', imageMedia = null, trigger = null, triggerKey = null, voiceMoment = false, lateReply = null, notifyUser = false, callMode = false }) {
   let rel = refreshRel(relId);
   if (!rel || rel.status !== 'active') throw new Error('relationship not active');
   const persona = getPersona(rel);
@@ -361,7 +364,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const lover = loverOf(rel.user_id, rel.id);
   const canConfess = rel.stage === 2 && rel.affection >= 70 && !lover;
   const todayMealProposed = rel.meal_proposed_date === t.date;
-  const voiceAllowed = rel.stage >= 1 && voicesToday(rel.user_id) < config.voiceDailyCap &&
+  const voiceAllowed = !callMode && rel.stage >= 1 && voicesToday(rel.user_id) < config.voiceDailyCap &&
     (voiceMoment || crisis || SAD.test(userText) || /語音/.test(userText));
 
   const tier = (crisis || canConfess || triggerKey === 'FIRST' || (rel.stage >= 2 && userText.length > 60) || SAD.test(userText)) ? 'good' : 'cheap';
@@ -376,7 +379,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     world, arc, goals: db.prepare(`SELECT title, days, done FROM goals WHERE rel_id=? AND status='active'`).all(rel.id).map(g => `${g.title}（做到 ${j(g.done, []).length}/${g.days} 天）`),
     episodes: episodesFor(rel.id, userText).map(e => `${new Date(e.created_at).toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric' })}${e.tags ? `（${e.tags}）` : ''} ${e.summary}`),
     selfTopics: selfTopicsToday(rel.id),
-    life: lifeContext(rel.id),
+    life: lifeContext(rel.id), callMode,
     habits: habitsOf(rel.id), notes: db.prepare('SELECT text FROM notes WHERE rel_id=? AND done=0 ORDER BY id DESC LIMIT 10').all(rel.id).map(n => n.text), told: toldOf(rel.id), summary: rel.summary || '', lateReply, activity,
     lowEffort: !trigger && lowEffortStreak(rel.id),
     userStatus: statusLine(db.prepare('SELECT * FROM users WHERE id=?').get(rel.user_id) || user), userPosts: postsVisibleTo(rel),
@@ -411,6 +414,9 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
       if (rv.action === 'rewrite') { out.messages = rv.messages.slice(0, 3).map(text => ({ text })); out.sticker = null; }
     }
   }
+
+  // 講電話時：不傳語音檔、貼圖、建議回覆、點餐卡（由通話自己把文字念出來）
+  if (callMode) { out.voice = false; out.sticker = null; out.suggestions = []; out.meal = null; out.choice = null; out.goal = null; out.postcard = null; }
 
   // ---------- apply ----------
   rel = refreshRel(relId);

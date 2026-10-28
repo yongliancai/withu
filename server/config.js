@@ -35,6 +35,8 @@ export const config = {
     goodIn: num(env.PRICE_GOOD_IN, 5), goodCached: num(env.PRICE_GOOD_CACHED, 0.5), goodOut: num(env.PRICE_GOOD_OUT, 30),
     ttsPerChar: num(env.PRICE_TTS_PER_1K_CHARS, 0.015) / 1000,
     sttPerMin: num(env.PRICE_STT_PER_MIN, 0.003),
+    imageLow: num(env.PRICE_IMAGE_LOW, 0.02),     // 一張風景照（低畫質）
+    imageHigh: num(env.PRICE_IMAGE_HIGH, 0.07),   // 一張角色人像（中畫質）
     usdToTwd: num(env.USD_TWD, 32),
   },
   // 每人每天的上限（控制費用）：他回你的次數、他看照片的張數

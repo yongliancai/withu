@@ -1,4 +1,5 @@
 import OpenAI, { toFile } from 'openai';
+export { toFile };
 import { config } from './config.js';
 import { db, now } from './db.js';
 import { logIssue } from './logger.js';

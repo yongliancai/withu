@@ -60,16 +60,51 @@ export function topicsFor(persona) {
   };
 }
 
-// 心情按鈕：不想打字時按一下（連按代表越強烈），他會看到並用自己的方式回應
+// 心情按鈕：不想打字時按一下（連按代表越強烈），他會看到並用自己的方式回應。依類別分組；親暱的要關係到了才出現。
+export const EMOTION_GROUPS = ['累', '低落', '不安', '生氣', '開心', '想念'];
 export const EMOTIONS = [
-  { id: 'stress', emoji: '😫', label: '壓力好大' }, { id: 'tired', emoji: '😮‍💨', label: '好累' },
-  { id: 'bored', emoji: '🥱', label: '好無聊' }, { id: 'happy', emoji: '🥳', label: '好開心' },
-  { id: 'sad', emoji: '😢', label: '有點難過' }, { id: 'angry', emoji: '😤', label: '好生氣' },
+  { id: 'tired', group: '累', emoji: '😮‍💨', label: '好累' }, { id: 'stress', group: '累', emoji: '😫', label: '壓力好大' },
+  { id: 'drained', group: '累', emoji: '🫠', label: '被榨乾了' }, { id: 'sleepy', group: '累', emoji: '😪', label: '好睏' },
+  { id: 'sad', group: '低落', emoji: '😢', label: '有點難過' }, { id: 'wronged', group: '低落', emoji: '🥲', label: '好委屈' },
+  { id: 'lonely', group: '低落', emoji: '🫥', label: '有點寂寞' }, { id: 'empty', group: '低落', emoji: '😶', label: '空空的' },
+  { id: 'lost', group: '低落', emoji: '😵‍💫', label: '好迷惘' }, { id: 'disappointed', group: '低落', emoji: '😞', label: '好失望' },
+  { id: 'anxious', group: '不安', emoji: '😰', label: '好焦慮' }, { id: 'nervous', group: '不安', emoji: '😬', label: '好緊張' },
+  { id: 'misunderstood', group: '不安', emoji: '😣', label: '被誤會了' },
+  { id: 'angry', group: '生氣', emoji: '😤', label: '好生氣' }, { id: 'annoyed', group: '生氣', emoji: '🙄', label: '好煩' },
+  { id: 'unfair', group: '生氣', emoji: '😠', label: '覺得不公平' },
+  { id: 'happy', group: '開心', emoji: '🥳', label: '好開心' }, { id: 'relieved', group: '開心', emoji: '😌', label: '鬆一口氣' },
+  { id: 'proud', group: '開心', emoji: '😎', label: '有成就感' }, { id: 'excited', group: '開心', emoji: '🤩', label: '好期待' },
+  { id: 'praise', group: '開心', emoji: '🥹', label: '想被稱讚' }, { id: 'bored', group: '開心', emoji: '🥱', label: '好無聊' },
   // 比較親暱的：關係到了才出現（曖昧、交往）
-  { id: 'miss', emoji: '🥺', label: '想你', minStage: 2 }, { id: 'hug', emoji: '🤗', label: '想要抱抱', minStage: 2 },
-  { id: 'clingy', emoji: '🥰', label: '想撒嬌', minStage: 3 }, { id: 'see', emoji: '💭', label: '想見你', minStage: 3 },
+  { id: 'miss', group: '想念', emoji: '🥺', label: '想你', minStage: 2 }, { id: 'hug', group: '想念', emoji: '🤗', label: '想要抱抱', minStage: 2 },
+  { id: 'clingy', group: '想念', emoji: '🥰', label: '想撒嬌', minStage: 3 }, { id: 'see', group: '想念', emoji: '💭', label: '想見你', minStage: 3 },
 ];
+
+// 「說不出來」引導：先問身體、再問強度和方向、最後給候選的情緒詞（情緒標記／情緒細緻度的鷹架）
+export const BODY_FEELINGS = ['胸口悶悶的', '喉嚨緊緊的', '肩膀很重', '胃不舒服', '全身沒力', '心跳很快', '頭很脹', '靜不下來', '想哭'];
+export const DIRECTIONS = [{ id: 'hide', label: '想躲起來、什麼都不想做' }, { id: 'act', label: '想做點什麼、想發洩' }, { id: 'none', label: '都不是，就是怪怪的' }];
+export function candidateWords(body = [], dir = 'none') {
+  const has = (...xs) => xs.some(x => body.includes(x));
+  const out = [];
+  if (dir === 'hide' && has('胸口悶悶的', '想哭', '喉嚨緊緊的')) out.push('委屈', '失落', '難過', '被忽略');
+  if (dir === 'hide' && has('全身沒力', '肩膀很重', '胃不舒服')) out.push('心累', '無力', '空虛', '提不起勁');
+  if (dir === 'act' && has('心跳很快', '頭很脹', '靜不下來')) out.push('焦慮', '煩躁', '生氣', '不甘心');
+  if (dir === 'act' && has('胸口悶悶的', '喉嚨緊緊的', '想哭')) out.push('生氣', '委屈', '不被理解');
+  if (dir === 'act' && has('全身沒力', '肩膀很重', '胃不舒服')) out.push('壓力很大', '煩躁', '想逃');
+  if (dir === 'none' || !out.length) out.push('不安', '混亂', '說不上來的累', '有點孤單');
+  return [...new Set(out)].slice(0, 6);
+}
+export function unsureReason({ body, level, dir, word }) {
+  const d = DIRECTIONS.find(x => x.id === dir)?.label || '';
+  return `對方說不太出自己現在的感覺，用心情按鈕的引導選了：身體的感覺是「${body.join('、')}」，強度 ${level}/5，${d ? `比較「${d}」` : ''}${word ? `，最後覺得最像「${word}」` : '，看了幾個詞都覺得不太像'}。
+照你的個性回應，像一個懂得陪伴的人：
+1. 先讓對方知道說不出來也沒關係，你有接收到。
+2. ${word ? `用對方選的「${word}」` : '從對方的身體感覺出發'}，溫柔地幫對方把感覺說出來，用問句確認，例如「聽起來比較像是有點委屈，不太像生氣，對嗎？」。
+3. 最後給一個很好回答的問題（是／不是，或二選一），幫對方再分辨一點點（例如「是跟今天發生的事有關，還是累積很久了？」）。
+不要分析、不要診斷、不要說教、不要一次給很多建議，也不要急著讓對方變好。短短的、2–3 則就好。`;
+}
+
 export function pokeReason(e, count) {
   const level = count >= 15 ? '非常非常強烈' : count >= 6 ? '很強烈' : '有一點';
-  return `對方沒有打字，按了心情按鈕「${e.label}」${count > 1 ? `，連按了 ${count} 下（${level}）` : ''}。依你的個性和你們的關係回應這個情緒：先接住（壓力、累、難過、生氣就先陪伴、不要說教；無聊就陪玩或丟個好玩的話題；想你、想抱抱就依關係階段回應，還不熟時溫暖但有分寸；開心就一起開心、問發生什麼好事）。短短的、像真人看到朋友傳這個時會回的樣子；可以搭配貼圖。`;
+  return `對方沒有打字，按了心情按鈕「${e.emoji} ${e.label}」${e.custom ? '（這是對方自己寫的心情）' : ''}${count > 1 ? `，連按了 ${count} 下（${level}）` : ''}。依你的個性和你們的關係回應這個情緒：先接住（壓力、累、難過、生氣就先陪伴、不要說教；無聊就陪玩或丟個好玩的話題；想你、想抱抱就依關係階段回應，還不熟時溫暖但有分寸；開心就一起開心、問發生什麼好事）。短短的、像真人看到朋友傳這個時會回的樣子；可以搭配貼圖。`;
 }

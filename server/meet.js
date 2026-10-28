@@ -1,5 +1,6 @@
 // 新用戶流程與相遇：scenario structuring, character creation, the opening scene, and 角色廣場 sharing.
 import { db, now, j, logEvent } from './db.js';
+import { ensurePortraits } from './portraits.js';
 import { writeToday } from './lifelog.js';
 import { S } from './settings.js';
 import { config } from './config.js';
@@ -204,6 +205,8 @@ export async function meet(user, { templateId, custom, scenarioId, scenarioText,
   // 他今天的生活日誌：在背景寫，不讓使用者等
   const relRow = db.prepare('SELECT * FROM relationships WHERE id=?').get(relId);
   writeToday(relRow, getPersona(relRow)).catch(() => {});
+  // 自己捏的角色：在背景生成他的寫實人像（官方角色的照片由後台先準備好）
+  if (origin === 'custom') ensurePortraits(db.prepare('SELECT * FROM characters WHERE id=?').get(charId), user.id);
   return { relId };
 }
 

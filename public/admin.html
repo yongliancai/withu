@@ -79,7 +79,7 @@ function formatDetail(d) {
   return s;
 }
 
-const TABS = [['stats', '數據'], ['costs', '費用'], ['settings', '系統設定'], ['announce', '公告'], ['officials', '官方角色'], ['invites', '邀請碼'], ['testers', '測試者'], ['square', '角色廣場'], ['trends', '流行新品'], ['feedback', '意見回饋'], ['crisis', '危機事件'], ['styles', '說話風格'], ['photos', '照片庫'], ['logs', '系統紀錄']];
+const TABS = [['stats', '數據'], ['costs', '費用'], ['settings', '系統設定'], ['announce', '公告'], ['officials', '官方角色'], ['portraits', '角色照片'], ['invites', '邀請碼'], ['testers', '測試者'], ['square', '角色廣場'], ['trends', '流行新品'], ['feedback', '意見回饋'], ['crisis', '危機事件'], ['styles', '說話風格'], ['photos', '照片庫'], ['logs', '系統紀錄']];
 function drawTabs() {
   document.getElementById('login').hidden = true;
   const n = document.getElementById('tabs'); n.hidden = false;
@@ -375,7 +375,7 @@ const VIEWS = {
     const q = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
     const d = await api('/logs?' + q);
     const LV = { error: ['錯誤', 'off'], warn: ['警告', 'warn'], report: ['使用者回報', 'on'], auto: ['已自動修正', ''] };
-    const SRC = { server: '伺服器', review: '發送前檢查', budget: '預算', scheduler: '主動訊息', llm: 'AI 模型', tts: '語音合成', stt: '語音轉文字', push: '推播', client: '手機端', user: '使用者回報', scenario: '相遇情境' };
+    const SRC = { server: '伺服器', security: '安全', review: '發送前檢查', budget: '預算', scheduler: '主動訊息', llm: 'AI 模型', tts: '語音合成', stt: '語音轉文字', push: '推播', client: '手機端', user: '使用者回報', scenario: '相遇情境' };
     const sel = (name, opts) => `<select data-f="${name}">${opts.map(([v, l]) => `<option value="${v}" ${f[name] === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
     out.innerHTML = `
       <p class="muted">系統自己解決不了的問題會記在這裡，保留 30 天。同樣的錯誤一分鐘內只記一次。</p>
@@ -499,6 +499,35 @@ Object.assign(VIEWS, {
       toast(f.push.checked ? `已發布，推播送出 ${r.sent} 個裝置` : '已發布'); render();
     };
     out.querySelectorAll('[data-a]').forEach(b => b.onclick = async () => { await api('/announcements/' + b.dataset.a, 'PATCH', { active: b.dataset.v === '1' }); render(); });
+  },
+});
+
+Object.assign(VIEWS, {
+  // ------------------------------------------------ 角色照片
+  async portraits() {
+    const d = await api('/portraits');
+    const needMain = d.list.filter(t => !t.photos.some(p => p.kind === 'main')).length;
+    const needLife = d.list.filter(t => t.photos.filter(p => p.kind === 'life').length < d.lifeCount).length;
+    out.innerHTML = `<p class="muted">每個角色一張主照＋${d.lifeCount} 張生活照，都是 AI 生成的虛構人物，在 App 上會標示「AI 生成」。每張約 NT$${d.perImageTwd}。
+      使用者看到的照片依關係解鎖：還沒認識是很模糊的、認識是有點模糊、朋友看得清楚主照、曖昧以後解鎖生活照、最後一張是付費限定（測試期顯示「即將推出」）。
+      自己捏的角色在使用者建立時會自動生成主照；任何角色變曖昧時，缺的生活照也會自動補上。</p>
+      ${d.mock ? '<div class="notice">測試模式（沒有接 OpenAI），不能生成照片。</div>' : ''}
+      ${d.job.running ? `<div class="notice">生成中（${esc(d.job.note)}）：${d.job.done}/${d.job.total}，可以先離開，晚點回來看。</div>` : (d.job.total ? `<p class="muted small">上一批完成：${d.job.done}/${d.job.total} ${esc(d.job.note)}</p>` : '')}
+      <p class="row-form"><button id="allMain" ${needMain ? '' : 'disabled'}>幫 ${needMain} 位角色生成主照（約 NT$${Math.round(needMain * d.perImageTwd)}）</button>
+        <button class="ghost" id="allLife" ${needLife ? '' : 'disabled'}>補齊 ${needLife} 位角色的生活照（最多約 NT$${Math.round(needLife * d.lifeCount * d.perImageTwd)}）</button>
+        <button class="ghost" id="refresh">重新整理</button></p>
+      ${d.list.map(t => `<div class="card"><div class="row-form" style="justify-content:space-between;margin:0 0 8px"><b>${esc(t.name)} <span class="muted small">${t.gender === 'female' ? '女' : '男'}・${esc(t.jobLabel || '')}</span></b>
+        <span><button class="sm ghost" data-gen="${t.id}" data-w="${t.photos.some(p => p.kind === 'main') ? 'regen' : 'main'}">${t.photos.some(p => p.kind === 'main') ? '重新生成主照' : '生成主照'}</button>
+        <button class="sm ghost" data-gen="${t.id}" data-w="life">補生活照</button></span></div>
+        <div class="ph-grid">${t.photos.map(p => `<figure><img src="${p.url}" alt="" loading="lazy"><figcaption><span>${p.kind === 'main' ? '主照' : esc(p.caption || '')}${p.kind === 'life' ? `・${['認識', '朋友', '曖昧', '交往'][p.minStage] || ''}${p.paid ? '・付費' : ''}` : ''}</span><button class="sm danger" data-hide="${p.id}">隱藏</button></figcaption></figure>`).join('') || '<span class="muted small">還沒有照片</span>'}</div></div>`).join('')}`;
+    document.getElementById('refresh').onclick = () => render();
+    document.getElementById('allMain').onclick = async () => { if (!confirm('開始生成？會在背景跑，可以先離開。')) return; const r = await api('/portraits-all', 'POST', { what: 'main' }); toast(`開始生成 ${r.count} 位`); render(); };
+    document.getElementById('allLife').onclick = async () => { if (!confirm('開始補生活照？會在背景跑，可以先離開。')) return; const r = await api('/portraits-all', 'POST', { what: 'life' }); toast(`開始補 ${r.count} 位`); render(); };
+    out.querySelectorAll('[data-gen]').forEach(b => b.onclick = async () => {
+      if (b.dataset.w === 'regen' && !confirm('重新生成主照？舊的主照會隱藏，已經生成的生活照不會跟著換，可能要一起重做。')) return;
+      await api('/portraits/' + b.dataset.gen, 'POST', { what: b.dataset.w }); toast('開始生成，等一下按「重新整理」'); render();
+    });
+    out.querySelectorAll('[data-hide]').forEach(b => b.onclick = async () => { if (!confirm('隱藏這張照片？')) return; await api(`/portrait-photos/${b.dataset.hide}/hide`, 'POST'); render(); });
   },
 });
 

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { db } from './db.js';
 import { config } from './config.js';
+import './portraits.js'; // char_photos 資料表
 
 export function deleteAccount(uid) {
   const req = { user: db.prepare('SELECT * FROM users WHERE id=?').get(uid) };
@@ -13,6 +14,11 @@ export function deleteAccount(uid) {
     ...(req.user.avatar ? [req.user.avatar] : []),
   ];
   for (const f of files) for (const dir of ['uploads', 'audio']) fs.rmSync(path.join(config.dataDir, dir, path.basename(f)), { force: true });
+  // 自己捏的角色的 AI 人像
+  for (const ph of db.prepare('SELECT * FROM char_photos WHERE owner IN (SELECT id FROM characters WHERE user_id=?)').all(uid)) {
+    for (const f of [ph.file, ph.blur_m, ph.blur_h]) if (f) fs.rmSync(path.join(config.dataDir, 'portraits', path.basename(f)), { force: true });
+  }
+  db.prepare('DELETE FROM char_photos WHERE owner IN (SELECT id FROM characters WHERE user_id=?)').run(uid);
   db.prepare('DELETE FROM templates WHERE creator_user_id=?').run(uid);
   db.prepare('DELETE FROM events WHERE user_id=?').run(uid);
   db.prepare('DELETE FROM usage WHERE user_id=?').run(uid);

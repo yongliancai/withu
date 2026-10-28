@@ -10,6 +10,8 @@ import { broadcast, pushEnabled } from './push.js';
 import { JOBS, ARCHETYPES, CATEGORIES, VOICES, PROACTIVITY, frameFromOfficial, taipeiParts } from './characters.js';
 import { STAGES } from './prompt.js';
 import { pastLife } from './lifelog.js';
+import { mainOf, photosOf, makeMain, makeLife, portraitFile, LIFE_COUNT } from './portraits.js';
+import fs from 'node:fs';
 
 db.exec(`CREATE TABLE IF NOT EXISTS announcements (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,6 +141,64 @@ export function mountAdminMore(app) {
   });
   A('patch', '/announcements/:id', (req, res) => {
     db.prepare('UPDATE announcements SET active=? WHERE id=?').run(req.body?.active ? 1 : 0, req.params.id);
+    res.json({ ok: true });
+  });
+
+  // ---- 角色人像 ----
+  // 後台的 <img> 帶不了權杖：用權杖簽一個網址
+  const sign = (id) => crypto.createHmac('sha256', config.adminToken || 'x').update(String(id)).digest('hex').slice(0, 20);
+  app.get('/api/admin/pf/:id', (req, res) => {
+    if (!config.adminToken || req.query.t !== sign(req.params.id)) return res.status(403).end();
+    const ph = db.prepare('SELECT * FROM char_photos WHERE id=?').get(Number(req.params.id));
+    const f = ph && portraitFile(ph, 'c');
+    if (!f || !fs.existsSync(f)) return res.status(404).end();
+    res.sendFile(f);
+  });
+  const jobs = { running: false, done: 0, total: 0, note: '' };
+  async function runPortraitJob(list, what) {
+    if (jobs.running) return false;
+    Object.assign(jobs, { running: true, done: 0, total: list.length, note: what === 'life' ? '生活照' : '主照' });
+    (async () => {
+      for (const t of list) {
+        const frame = j(t.data, {});
+        try {
+          if (what === 'regen') await makeMain(t.id, frame, { force: true });
+          else if (what === 'main') await makeMain(t.id, frame);
+          else { if (!mainOf(t.id)) await makeMain(t.id, frame); await makeLife(t.id, frame); }
+        } catch (e) { jobs.note = `有失敗：${e.message}`; }
+        jobs.done++;
+      }
+      jobs.running = false;
+    })();
+    return true;
+  }
+  A('get', '/portraits', (req, res) => {
+    const list = db.prepare(`SELECT id, data, status FROM templates WHERE kind='official' ORDER BY created_at, id`).all().map(t => {
+      const f = j(t.data, {});
+      const ph = photosOf(t.id);
+      return { id: t.id, name: f.name, gender: f.gender, jobLabel: f.jobLabel, status: t.status,
+        photos: ph.map(p => ({ id: p.id, kind: p.kind, caption: p.caption, minStage: p.min_stage, paid: !!p.paid, url: `/api/admin/pf/${p.id}?t=${sign(p.id)}` })) };
+    });
+    res.json({ list, job: jobs, mock: config.mock, lifeCount: LIFE_COUNT, perImageTwd: Math.round(config.price.imageHigh * config.price.usdToTwd * 10) / 10 });
+  });
+  A('post', '/portraits/:id', async (req, res) => {
+    const t = db.prepare(`SELECT id, data FROM templates WHERE id=?`).get(req.params.id);
+    if (!t) return res.status(404).json({ error: '找不到' });
+    if (config.mock) return res.status(400).json({ error: '測試模式（沒有 OpenAI 金鑰）不能生成' });
+    const ok = await runPortraitJob([t], ['main', 'regen', 'life'].includes(req.body?.what) ? req.body.what : 'main');
+    res.json(ok ? { ok: true } : { error: '還有其他照片在生成中，等一下再試' });
+  });
+  A('post', '/portraits-all', async (req, res) => {
+    if (config.mock) return res.status(400).json({ error: '測試模式（沒有 OpenAI 金鑰）不能生成' });
+    const what = req.body?.what === 'life' ? 'life' : 'main';
+    const list = db.prepare(`SELECT id, data FROM templates WHERE kind='official' AND status='published'`).all()
+      .filter(t => what === 'main' ? !mainOf(t.id) : photosOf(t.id).filter(p => p.kind === 'life').length < LIFE_COUNT);
+    if (!list.length) return res.json({ ok: true, count: 0 });
+    const ok = await runPortraitJob(list, what);
+    res.json(ok ? { ok: true, count: list.length } : { error: '還有其他照片在生成中' });
+  });
+  A('post', '/portrait-photos/:id/hide', (req, res) => {
+    db.prepare('UPDATE char_photos SET hidden=1 WHERE id=?').run(Number(req.params.id));
     res.json({ ok: true });
   });
 

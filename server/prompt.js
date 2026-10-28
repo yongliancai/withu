@@ -144,7 +144,7 @@ function meetLine(rel) {
   return `你們的相遇：${sc.label || '（未記錄）'}${rel.start_type === 'friend' ? '（本來就認識）' : ''}，${days === 0 ? '就是今天' : `${days} 天前`}${sad}`;
 }
 
-export function contextBlock({ life = [], episodes = [], selfTopics = [], prefs = null, goals = [], world = [], arc = null, lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
+export function contextBlock({ callMode = false, life = [], episodes = [], selfTopics = [], prefs = null, goals = [], world = [], arc = null, lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
   const st = charStatus(persona);
   // 剛認識的這幾個小時：他的狀態以相遇場景為準，不然會變成「剛剛在咖啡廳上班、下一句說今天休假」
   let sc0 = {}; try { sc0 = JSON.parse(rel.scenario || '{}'); } catch {}
@@ -201,6 +201,7 @@ export function contextBlock({ life = [], episodes = [], selfTopics = [], prefs 
     photoAttached ? '對方剛傳了一張照片給你（附在訊息裡）。' : '',
     voiceAllowed ? '這是適合傳語音的特別時刻（早安、晚安、安慰對方、下班報備、重要日子），你可以把 voice 設為 true。' : 'voice 請設為 false。',
     crisis ? '⚠️ 對方的訊息可能有危機訊號：crisis 設 true，切換到支持模式。' : '',
+    callMode ? '## 你們正在講電話\n對方是用說的，你也是用說的：口語、自然、短，messages 只要 1–2 句（每句 30 字內），像真的在講電話會說的話，可以有「嗯」「欸」「哈哈」這種語氣詞。不要表情符號、不要貼圖（sticker 填 null）、不要提到「訊息」「打字」。voice 填 false。' : '',
     trigger ? `## 這是一則你主動傳的訊息\n理由：${trigger}\n對方沒有剛傳訊息給你，所以不要回應不存在的訊息；簡短、自然、有理由。` : '',
   ];
   return lines.filter(Boolean).join('\n\n');
