@@ -57,10 +57,19 @@ const NAT = { 台灣: 'Taiwanese', 日本: 'Japanese', 韓國: 'Korean' };
 const HAIR = { short: 'short neat hair', curly: 'short wavy hair', side: 'side-parted hair', part: 'middle-parted hair', messy: 'tousled hair',
   long: 'long straight hair', wavy: 'long wavy hair', bob: 'chin-length bob', ponytail: 'high ponytail', bun: 'loose bun' };
 
+// 使用者捏臉的選項（自己創的角色）：蓋過系統隨機挑的臉型、眼型，再加上髮色和氣質
+const PICK = {
+  faceShape: { oval: 'oval face', round: 'round soft face', long: 'long slim face', angular: 'defined angular jawline and cheekbones' },
+  eyes: { mono: 'monolid eyes', double: 'double-eyelid almond eyes', droopy: 'gentle downturned eyes', sharp: 'sharp upturned eyes', big: 'large round eyes' },
+  vibe: { warm: 'a warm, approachable aura', cool: 'a cool, aloof and handsome aura', cute: 'a cute, youthful aura', mature: 'a mature, composed aura', artsy: 'an artsy, bookish aura' },
+};
+const HAIR_COLOR = { '#1F1D24': 'black', '#3A2A22': 'dark brown', '#7A4B33': 'chestnut brown', '#B07A4A': 'light ash-brown', '#8C8A93': 'ash grey', '#2A2421': 'black' };
 function personLine(frame, face) {
   const who = `${frame.age || 27}-year-old ${NAT[frame.nationality] || 'East Asian'} ${frame.gender === 'female' ? 'woman' : 'man'}`;
-  const hair = HAIR[frame.look?.hair] || '';
-  return `a fictional ${who}, ${face.shape}, ${face.eyes}, ${face.nose}, ${face.brows}, ${face.mark}${hair ? `, ${hair}` : ''}`;
+  const l = frame.look || {};
+  const hair = [HAIR_COLOR[l.hairColor], HAIR[l.hair]].filter(Boolean).join(' ');
+  const shape = PICK.faceShape[l.faceShape] || face.shape, eyes = PICK.eyes[l.eyes] || face.eyes;
+  return `a fictional ${who}, ${shape}, ${eyes}, ${face.nose}, ${face.brows}, ${face.mark}${hair ? `, ${hair}` : ''}${l.glasses ? ', wearing glasses' : ''}${PICK.vibe[l.vibe] ? `, ${PICK.vibe[l.vibe]}` : ''}`;
 }
 const RULES = 'This is an original fictional character who must not resemble any celebrity, idol, actor or real person. Fully clothed, everyday modest outfit. No text, no logos, no watermark, no signature.';
 // 主照的畫風：一般角色是半寫實的韓漫／日系插畫；二次元角色是動畫風

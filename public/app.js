@@ -146,6 +146,9 @@ window.addEventListener('hashchange', route);
 // ======================================================================
 // 每次有新功能，在最上面加一筆；看過的人不會再跳出來，「我 → 設定 → 更新內容」可以再看一次。
 const WHATS_NEW = [
+  { v: '2026-10-30', title: '可以捏臉了', items: [
+    { title: '自己捏的角色可以選長相', text: '在「探索 → 自己捏一個」裡，打開「捏臉」可以選臉型、眼睛和氣質，他的照片會照你選的畫成插畫。不選也沒關係，系統會幫他長得獨一無二。', route: '#/explore' },
+  ] },
   { v: '2026-10-28c', title: '說話更像真人', items: [
     { title: '這句怪怪的？告訴我們', text: '長按（電腦按右鍵）他說的話，可以評「很像真人」或「怪怪的」，也能寫他應該怎麼說。你同意的話，大家的回饋會讓所有角色越來越會聊天。', route: '#/chat' },
     { title: '照片換新畫風', text: '他的大頭照改成精緻插畫；生活照是真實感的手機照片，但不會拍到臉，像他隨手拍給你看的。照片都是 AI 畫的，畫面裡的人並不存在。' },
@@ -407,7 +410,7 @@ function renderCustom(prev) {
   const defGender = S.me?.seeks === 'female' ? 'female' : 'male';
   const st = prev || { gender: defGender, age: '28', nationality: '台灣', job: defGender === 'female' ? 'designer' : 'engineer',
     proactivity: 'slow', voice: '', hue: meta.hues[Math.floor(Math.random() * meta.hues.length)],
-    hairColor: LOOK_OPTIONS.hairColor[1][0], top: LOOK_OPTIONS.top[0][0], glasses: '0' };
+    hairColor: LOOK_OPTIONS.hairColor[1][0], top: LOOK_OPTIONS.top[0][0], glasses: '0', faceShape: '', eyes: '', vibe: '' };
   const P = st.gender === 'female' ? '她' : '他';
   const voices = meta.voices[st.gender] || meta.voices.male;
   if (!voices.find(v => v.id === st.voice)) st.voice = voices[0].id;
@@ -417,7 +420,7 @@ function renderCustom(prev) {
   if (!hairs.find(([k]) => k === st.hair)) st.hair = hairs[0][0];
   const jobs = Object.entries(meta.jobs).map(([k, v]) => [k, v.label]);
   const pro = Object.entries(meta.proactivity).map(([k, v]) => [k, v.label]);
-  const look = () => ({ hair: st.hair, hairColor: st.hairColor, top: st.top, skin: '#F1C9A6', accessory: 'collar', accent: '#9AA7B8', glasses: st.glasses === '1', style: st.style === 'anime' ? 'anime' : undefined });
+  const look = () => ({ hair: st.hair, hairColor: st.hairColor, top: st.top, skin: '#F1C9A6', accessory: 'collar', accent: '#9AA7B8', glasses: st.glasses === '1', style: st.style === 'anime' ? 'anime' : undefined, faceShape: st.faceShape || undefined, eyes: st.eyes || undefined, vibe: st.vibe || undefined });
   app.innerHTML = `<div class="page" style="padding-bottom:32px"><a class="icon-btn back" href="#/meet/person" aria-label="返回">${icon('back')}</a>
     <h1>${P}是什麼樣的人？</h1>
     <div class="builder-face" id="face">${portraitSVG({ hue: st.hue, look: look(), gender: st.gender }, 132)}</div>
@@ -428,6 +431,12 @@ function renderCustom(prev) {
     <div class="field"><span>穿著</span>${chipGroup('top', LOOK_OPTIONS.top, st.top)}</div>
     <div class="field"><span>眼鏡</span>${chipGroup('glasses', [['0', '不戴'], ['1', '戴眼鏡']], st.glasses)}</div>
     <div class="field"><span>畫風</span>${chipGroup('style', LOOK_OPTIONS.style, st.style || 'real')}</div>
+    <details class="field face-more" ${st.faceShape || st.eyes || st.vibe ? 'open' : ''}><summary>捏臉（選填）</summary>
+      <p class="small muted" style="margin:6px 0 8px">${P}的照片會照這些畫成插畫；認識之後會慢慢看清楚。沒選的交給系統，讓每個人長得不一樣。</p>
+      <div class="field"><span>臉型</span>${chipGroup('faceShape', LOOK_OPTIONS.faceShape, st.faceShape || '')}</div>
+      <div class="field"><span>眼睛</span>${chipGroup('eyes', LOOK_OPTIONS.eyes, st.eyes || '')}</div>
+      <div class="field"><span>氣質</span>${chipGroup('vibe', LOOK_OPTIONS.vibe, st.vibe || '')}</div>
+    </details>
     <div class="field"><span>年齡</span>${chipGroup('age', [['24', '24'], ['28', '28'], ['32', '32'], ['36', '36'], ['42', '42']], st.age)}</div>
     <div class="field"><span>國籍</span>${chipGroup('nationality', [['台灣', '台灣'], ['日本', '日本'], ['韓國', '韓國'], ['香港', '香港'], ['法國', '法國']], st.nationality)}</div>
     <div class="field"><span>職業（決定${P}的作息）</span>${chipGroup('job', jobs, st.job)}</div>

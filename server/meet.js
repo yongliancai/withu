@@ -37,6 +37,9 @@ function sanitizeLook(l = {}, gender) {
     hair: [...HAIRS.male, ...HAIRS.female].includes(l.hair) ? l.hair : HAIRS[gender][0],
     hairColor: hex(l.hairColor, '#2A2421'), skin: hex(l.skin, '#F1C9A6'), top: hex(l.top, '#E9EEF5'),
     accent: hex(l.accent, '#9AA7B8'), accessory: 'collar', glasses: !!l.glasses, style: l.style === 'anime' ? 'anime' : undefined,
+    faceShape: ['oval', 'round', 'long', 'angular'].includes(l.faceShape) ? l.faceShape : undefined,
+    eyes: ['mono', 'double', 'droopy', 'sharp', 'big'].includes(l.eyes) ? l.eyes : undefined,
+    vibe: ['warm', 'cool', 'cute', 'mature', 'artsy'].includes(l.vibe) ? l.vibe : undefined,
   };
 }
 
