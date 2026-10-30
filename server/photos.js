@@ -105,7 +105,7 @@ async function pixabaySearch(query) {
 }
 async function openverseSearch(query) {
   // 只拿可商用、可改作的 CC 授權；不含成人內容
-  const r = await fetch(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}&license_type=commercial,modification&mature=false&page_size=10&aspect_ratio=wide`, { headers: UA });
+  const r = await fetch(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}&license_type=commercial,modification&mature=false&page_size=10&aspect_ratio=wide`, { headers: UA, signal: AbortSignal.timeout(20000) });
   if (!r.ok) throw Object.assign(new Error(`Openverse ${r.status}`), { status: r.status });
   return ((await r.json()).results || []).filter(p => p.url && !/\.gif$/i.test(p.url)).map(p => ({
     extId: String(p.id), src: p.url, credit: [p.creator || '佚名', `${(p.license || '').toUpperCase()} ${p.license_version || ''}`.trim()].join('・'), creditUrl: p.foreign_landing_url, alt: p.title, license: p.license,
@@ -129,6 +129,9 @@ async function download(src) {
 }
 
 let filling = false;
+// 圖庫暫時連不上（5xx、逾時）：同一個類別 12 小時內不再重試，也不當成需要處理的問題
+const cooldown = new Map();
+const COOL_MS = 12 * 3600e3;
 /** Fill every tag up to MIN_PER_TAG from the first source that works. */
 export async function fillLibrary({ force = false, only } = {}) {
   if (filling) return { ok: false, reason: 'busy' };
@@ -143,6 +146,7 @@ export async function fillLibrary({ force = false, only } = {}) {
       for (const [tag, [, query]] of Object.entries(PHOTO_TAGS)) {
         const have = photoCount()[tag] || 0;
         if (!force && have >= MIN_PER_TAG) continue;
+        if (!force && (cooldown.get(`${name}|${tag}`) || 0) > Date.now()) continue;
         try {
           let n = 0;
           for (const p of await search(query)) {
@@ -156,7 +160,11 @@ export async function fillLibrary({ force = false, only } = {}) {
           if (name === 'openverse') await new Promise(r => setTimeout(r, 1200)); // 匿名使用：每秒一次
         } catch (e) {
           failures++;
-          logIssue({ level: 'warn', source: 'photos', message: `${name} 搜尋失敗（${tag}）：${e.message}`, error: e });
+          const temporary = e.status >= 500 || e.name === 'TimeoutError' || e.name === 'AbortError' || /fetch failed|timeout/i.test(e.message);
+          if (temporary) {
+            cooldown.set(`${name}|${tag}`, Date.now() + COOL_MS);
+            logIssue({ level: 'auto', source: 'photos', message: `${name} 圖庫暫時連不上（${tag}），12 小時後自動再試`, detail: { status: e.status || null } });
+          } else logIssue({ level: 'warn', source: 'photos', message: `${name} 搜尋失敗（${tag}）：${e.message}`, error: e });
           if (e.status === 401 || e.status === 403 || e.status === 429 || failures >= 3) break;
         }
       }

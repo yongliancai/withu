@@ -37,6 +37,13 @@ function toast(msg) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('on');
   clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('on'), 2400);
 }
+// 錯誤要給人看的話：伺服器的錯誤（有 status）照原文；程式本身的錯（TypeError 等）換成看得懂的話，並把完整堆疊回報後台
+function errMsg(e) {
+  if (!e) return '';
+  if (e.status || !(e instanceof Error) || !/^(TypeError|ReferenceError|RangeError|SyntaxError)$/.test(e.name)) return e.message || String(e);
+  reportClientError(`程式錯誤：${e.message}`, e.stack, { kind: 'js', info: { route: location.hash.replace(/[\w-]{16,}/g, ':id') } });
+  return '出了一點小問題，我們已經收到通知，等一下再試試';
+}
 function clearTimers() { S.timers.forEach(clearInterval); S.timers = []; }
 
 // ---------- small helpers ----------
@@ -87,7 +94,7 @@ function sceneCards(list, picked) {
 // 代名詞：ta(frame) 依角色性別；TA() 依使用者想遇見的人
 const ta = (f) => (f?.gender === 'female' ? '她' : '他');
 const TA = () => (S.me?.seeks === 'female' ? '她' : S.me?.seeks === 'any' ? 'TA' : '他');
-const displayName = (frame) => S.me?.settings?.discreetNames ? (frame.name || '').slice(0, 1) + (frame.gender === 'female' ? '小姐' : '先生') : frame.name;
+const displayName = (frame) => { frame ||= {}; const n = frame.name || ''; return S.me?.settings?.discreetNames ? n.slice(0, 1) + (frame.gender === 'female' ? '小姐' : '先生') : (n || (frame.gender === 'female' ? '她' : '他')); };
 
 // ---------- sheet ----------
 // 非同步打開的視窗：等資料回來時，如果使用者已經開了別的視窗，就不要蓋掉它
@@ -335,7 +342,7 @@ function renderJoin() {
       $('#copyCode').onclick = () => copyText(r.recoveryCode);
       $('#keepCode').onclick = async () => toast(await keepLoginCode(S.me.nickname, r.recoveryCode) ? '已經存好了' : '這個瀏覽器不支援直接存；按下面的按鈕時，瀏覽器問要不要儲存密碼，選「儲存」');
       $('#saveF').onsubmit = (ev) => { ev.preventDefault(); keepLoginCode(S.me.nickname, r.recoveryCode, true); location.hash = '#/taste'; };
-    } catch (err) { toast(err.message); }
+    } catch (err) { toast(errMsg(err)); }
   };
 }
 
@@ -401,7 +408,7 @@ function renderRecover() {
       keepLoginCode(S.me.nickname, S.me.recoveryCode || code, true);
       location.hash = '#/chat';
     }
-    catch (err) { toast(err.message); }
+    catch (err) { toast(errMsg(err)); }
   };
 }
 
@@ -588,7 +595,7 @@ function renderScenePick() {
       M.scenarioId = r.scenario; M.scenarioText = '';
       toast(r.label ? `看起來像是：${r.label}` : '找到了');
       location.hash = '#/meet/who';
-    } catch (err) { toast(err.message); $('#snap').innerHTML = '<b>📷 拍一張你現在在的地方</b><span>再試一次，或直接選下面的情境</span>'; }
+    } catch (err) { toast(errMsg(err)); $('#snap').innerHTML = '<b>📷 拍一張你現在在的地方</b><span>再試一次，或直接選下面的情境</span>'; }
   };
   $('#go').onclick = () => {
     M.scenarioText = $('#free').value.trim(); M.scenarioId = picked;
@@ -685,7 +692,7 @@ async function doMeet() {
       });
       return;
     }
-    toast(e.message);
+    toast(errMsg(e));
     setTimeout(() => history.back(), 600);
   }
 }
@@ -697,7 +704,7 @@ async function doMeet() {
 async function peekChat(r) {
   const ok = sheetGuard();
   let msgs = [];
-  try { msgs = await api(`/api/rels/${r.id}/messages`); } catch (e) { return toast(e.message); }
+  try { msgs = await api(`/api/rels/${r.id}/messages`); } catch (e) { return toast(errMsg(e)); }
   if (!ok()) return;
   const last = msgs.filter(m => m.kind !== 'scene').slice(-8);
   openSheet(`<h3 style="margin-top:0">${esc(displayName(r.frame))}</h3>
@@ -955,7 +962,7 @@ async function renderRoom(relId) {
   const gen = S.roomGen = (S.roomGen || 0) + 1;
   const live = () => S.roomGen === gen;
   let rel;
-  try { rel = await api(`/api/rels/${relId}`); } catch (e) { toast(e.message); location.hash = '#/chat'; return; }
+  try { rel = await api(`/api/rels/${relId}`); } catch (e) { toast(errMsg(e)); location.hash = '#/chat'; return; }
   if (location.hash !== `#/chat/${relId}`) return; // 等資料時已經換到別頁了
   S.room = { rel, messages: [], sending: false, recorder: null, charReadId: rel.charReadId || 0, presence: rel.presence };
   const sub = () => rel.status !== 'active' ? '這段關係已經結束了' : `${presenceDot(S.room.presence)}${esc(presenceText(S.room.presence))}`;
@@ -1051,7 +1058,7 @@ async function renderRoom(relId) {
   $('#actEnd') && ($('#actEnd').onclick = async () => {
     if (S.room.sending) return toast(`等${ta(rel.frame)}回完這一則`);
     S.room.sending = true;
-    try { const r = await api(`/api/rels/${relId}/activity/end`, { method: 'POST' }); await revealSequential(r.messages || []); } catch (e) { toast(e.message); }
+    try { const r = await api(`/api/rels/${relId}/activity/end`, { method: 'POST' }); await revealSequential(r.messages || []); } catch (e) { toast(errMsg(e)); }
     S.room.sending = false;
     renderRoom(relId);
   });
@@ -1063,7 +1070,7 @@ async function renderRoom(relId) {
 
   async function openTopicBag() {
     let t;
-    try { t = await api(`/api/rels/${relId}/topics`); } catch (e) { return toast(e.message); }
+    try { t = await api(`/api/rels/${relId}/topics`); } catch (e) { return toast(errMsg(e)); }
     const P = ta(rel.frame);
     openSheet(`<h3>話題錦囊</h3>
       <button class="choice" id="tbLead"><b>💬 ${P}帶我聊</b><span>不知道要說什麼？讓${P}開個話題</span></button>
@@ -1128,7 +1135,7 @@ async function renderRoom(relId) {
       await revealSequential(res.messages || [], { typing, typingAt });
     } catch (e) {
       clearTimeout(readTimer); typing?.remove(); ok = e.status === 429 ? 'busy' : false;
-      if (ok !== 'busy') { toast(e.message); setTimeout(() => pollNow(), 2500); } // 連線斷掉但伺服器可能已經回了：馬上再對一次
+      if (ok !== 'busy') { toast(errMsg(e)); setTimeout(() => pollNow(), 2500); } // 連線斷掉但伺服器可能已經回了：馬上再對一次
     } finally { S.room.sending = false; }
     return ok;
   }
@@ -1169,7 +1176,7 @@ async function renderRoom(relId) {
         // 照片：先沿用手機上的預覽，不用等伺服器的圖載完才看得到
         if (local.kind === 'photo' && local.media && item.id) (S.room.previews ||= {})[item.id] = local.media;
       }
-      catch (e) { node.remove(); { const i = queue.indexOf(item); if (i >= 0) queue.splice(i, 1); } toast(e.message); }
+      catch (e) { node.remove(); { const i = queue.indexOf(item); if (i >= 0) queue.splice(i, 1); } toast(errMsg(e)); }
     });
     armFlush();
   }
@@ -1325,7 +1332,7 @@ async function renderRoom(relId) {
 async function renderProfile(relId) {
   tabs.hidden = true;
   let p;
-  try { p = await api(`/api/rels/${relId}/profile`); } catch (e) { toast(e.message); location.hash = '#/chat'; return; }
+  try { p = await api(`/api/rels/${relId}/profile`); } catch (e) { toast(errMsg(e)); location.hash = '#/chat'; return; }
   const f = p.frame, P = ta(f);
   const days = (f.schedule?.days || []).map(d => '日一二三四五六'[d]).join('、');
   app.innerHTML = `<div class="profile">
@@ -1383,7 +1390,7 @@ function openOwnMsgMenu(mid, node) {
     $('#omCopy', sh) && ($('#omCopy', sh).onclick = () => { close(); copyText(m.text); });
     $('#omRetract', sh) && ($('#omRetract', sh).onclick = async () => {
       try { await api(`/api/messages/${mid}/retract`, { method: 'POST' }); close(); S.room.markRetracted?.(mid); }
-      catch (e) { toast(e.message); }
+      catch (e) { toast(errMsg(e)); }
     });
   });
 }
@@ -1404,7 +1411,7 @@ function openMsgFeedback(mid, text) {
         S.me.settings.feedbackConsent = true;
       }
       try { await api(`/api/messages/${mid}/feedback`, { method: 'POST', body: { rating, suggestion } }); close(); toast(rating === 1 ? '收到，謝謝你' : `收到，${TA()}會少這樣說`); }
-      catch (e) { toast(e.message); }
+      catch (e) { toast(errMsg(e)); }
     };
     $$('[data-rate]', sh).forEach(b => b.onclick = () => {
       if (b.dataset.rate === '1') return send(1);
@@ -1418,12 +1425,12 @@ function bindStream(root) {
   $$('[data-choice]', root).forEach(b => b.onclick = async () => {
     const relId = S.room?.rel?.id; if (!relId || S.room.sending) return;
     S.room.sending = true; $$('[data-choice]', root).forEach(x => x.disabled = true);
-    try { const r = await api(`/api/rels/${relId}/choice`, { method: 'POST', body: { msgId: Number(b.dataset.choice), idx: Number(b.dataset.idx) } }); S.room.sending = false; renderRoom(relId); } catch (e) { toast(e.message); S.room.sending = false; }
+    try { const r = await api(`/api/rels/${relId}/choice`, { method: 'POST', body: { msgId: Number(b.dataset.choice), idx: Number(b.dataset.idx) } }); S.room.sending = false; renderRoom(relId); } catch (e) { toast(errMsg(e)); S.room.sending = false; }
   });
   $$('[data-goal]', root).forEach(b => b.onclick = async () => {
     const relId = S.room?.rel?.id; if (!relId || S.room.sending) return;
     S.room.sending = true; $$('[data-goal]', root).forEach(x => x.disabled = true);
-    try { await api(`/api/rels/${relId}/goal`, { method: 'POST', body: { msgId: Number(b.dataset.goal), accept: b.dataset.acc === '1' } }); S.room.sending = false; renderRoom(relId); } catch (e) { toast(e.message); S.room.sending = false; }
+    try { await api(`/api/rels/${relId}/goal`, { method: 'POST', body: { msgId: Number(b.dataset.goal), accept: b.dataset.acc === '1' } }); S.room.sending = false; renderRoom(relId); } catch (e) { toast(errMsg(e)); S.room.sending = false; }
   });
   $$('[data-prof]', root).forEach(b => b.onclick = () => { const id = S.room?.rel?.id; if (id) location.hash = `#/profile/${id}`; });
   // 長按（電腦：按右鍵）自己的訊息 → 收回／複製
@@ -1466,7 +1473,7 @@ function bindStream(root) {
       card.querySelectorAll('[data-meal]').forEach(x => x.remove());
       b.closest('.meal-opt')?.classList.add('chosen');
       card.querySelector('.actions')?.replaceWith(Object.assign(document.createElement('p'), { className: 'small muted', textContent: '已經幫你打開 Uber Eats 了' }));
-    } catch (e) { w?.close(); toast(e.message); }
+    } catch (e) { w?.close(); toast(errMsg(e)); }
   });
   $$('[data-meal-no]', root).forEach(b => b.onclick = async () => {
     await api(`/api/meal/${b.dataset.mealNo}/decline`, { method: 'POST' }).catch(() => {});
@@ -1480,7 +1487,7 @@ function bindStream(root) {
     try {
       await api(`/api/rels/${relId}/pin`, { method: 'POST', body: { accept: b.dataset.pin === 'yes', msgId: Number(b.dataset.msg) } });
       renderRoom(relId);
-    } catch (e) { toast(e.message); }
+    } catch (e) { toast(errMsg(e)); }
   });
 }
 
@@ -1507,7 +1514,10 @@ const moodFace = (face = 'idle') => mascotSVG(document.documentElement.dataset.a
 // ---------- 心情按鈕：不想打字時按一按，連按越多下代表越強烈 ----------
 async function openMoodButton(relId = null) {
   const ok = sheetGuard();
-  const rels = (S.rels.length ? S.rels : await api('/api/rels')).filter(r => r.status === 'active');
+  // 名單可能是舊的（剛認識新的人、或直接打開聊天室）：找不到這個人就重新抓
+  let all = S.rels || [];
+  if (!all.length || (relId && !all.some(r => r.id === relId))) { try { all = S.rels = await api('/api/rels'); } catch (e) { return toast(errMsg(e)); } }
+  const rels = all.filter(r => r.status === 'active');
   if (!ok()) return;
   if (!rels.length) return toast('先去認識一個人吧');
   let target = relId || (rels.find(r => r.pinned) || rels.slice().sort((a, b) => (b.last?.at || 0) - (a.last?.at || 0))[0]).id;
@@ -1551,14 +1561,14 @@ async function openMoodButton(relId = null) {
     };
     const send = async (extra = {}) => {
       close();
-      const r = rels.find(x => x.id === target);
+      const r = rels.find(x => x.id === target) || { frame: S.room?.rel?.frame || {} };
       try {
         const res = await api(`/api/rels/${target}/poke`, { method: 'POST', body: { ...body, ...extra, count } });
         if (body.custom && S.me?.settings) S.me.settings.customMoods = [body.custom, ...mine().filter(x => x.label !== body.custom.label)].slice(0, 6);
         track('poke', { emotion: body.emotion || (body.custom ? 'custom' : 'unsure'), count });
         if (location.hash === `#/chat/${target}` && S.room?.reveal) { await S.room.reveal(res.messages || []); if (res.pending) toast(`${displayName(r.frame)}現在不在線上，看到會回你`); }
         else toast(res.pending ? `${displayName(r.frame)}現在${res.pending.presence?.code === 'dnd' ? '睡了' : '在忙'}，看到會回你` : `已經讓${displayName(r.frame)}知道了`);
-      } catch (e) { toast(e.message); }
+      } catch (e) { toast(errMsg(e)); }
     };
     const press = (ev) => {
       count++;
@@ -1631,7 +1641,7 @@ async function openCall(rel) {
   const P = ta(rel.frame), name = displayName(rel.frame);
   let st;
   try { st = await api(`/api/rels/${rel.id}/call/start`, { method: 'POST' }); }
-  catch (e) { return toast(e.message); }
+  catch (e) { return toast(errMsg(e)); }
   const el = document.createElement('div');
   el.className = 'call-screen';
   el.innerHTML = `<div class="call-top"><div class="call-av">${avatar(rel.frame, 112, { season: false })}</div><h2>${esc(name)}</h2>
@@ -1824,7 +1834,7 @@ function openCharSheet(rel) {
         rel.mode = b.dataset.mode;
         $$('[data-mode]', sheet).forEach(x => x.setAttribute('aria-pressed', String(x === b)));
         modeHelp();
-      } catch (e) { toast(e.message); }
+      } catch (e) { toast(errMsg(e)); }
     });
     $('#saveMem', sheet) && ($('#saveMem', sheet).onclick = async () => {
       await api(`/api/rels/${rel.id}/setting-memories`, { method: 'PUT', body: { items: $('#setmem', sheet).value.split('\n') } });
@@ -1857,7 +1867,7 @@ function openReportSheet(rel) {
       if (!text) return toast('寫一下發生了什麼');
       $('#rpSend', sheet).disabled = true;
       try { const r = await api(`/api/rels/${rel.id}/report-issue`, { method: 'POST', body: { text, includeChat: $('#rpChat', sheet).checked } }); close(); toast(r.applied || '收到了，謝謝你'); }
-      catch (e) { $('#rpSend', sheet).disabled = false; toast(e.message); }
+      catch (e) { $('#rpSend', sheet).disabled = false; toast(errMsg(e)); }
     };
   });
 }
@@ -1866,7 +1876,7 @@ async function openShareSheet(rel) {
   const close = openSheet(`<p class="hand">正在整理${ta(rel.frame)}的樣子……</p>`);
   let d;
   const ok = sheetGuard();
-  try { d = await api(`/api/rels/${rel.id}/share-preview`, { method: 'POST' }); } catch (e) { close(); return toast(e.message); }
+  try { d = await api(`/api/rels/${rel.id}/share-preview`, { method: 'POST' }); } catch (e) { close(); return toast(errMsg(e)); }
   if (!ok()) return;
   close();
   openSheet(`<h3>分享前，確認一下${ta(rel.frame)}的人設</h3>
@@ -1883,7 +1893,7 @@ async function openShareSheet(rel) {
       try {
         await api(`/api/rels/${rel.id}/share`, { method: 'POST', body: { intro: v('intro'), traits: v('traits'), speech: v('speech'), catchphrases: v('cp').split(/[、,，]/).map(s => s.trim()).filter(Boolean), values: v('values'), weekend: v('weekend') } });
         c2(); toast('已分享到角色廣場；AI 審核通過的話，還會成為所有人都能認識的官方角色');
-      } catch (e) { toast(e.message); }
+      } catch (e) { toast(errMsg(e)); }
     };
   });
 }
@@ -1944,7 +1954,7 @@ async function renderFeed() {
         $('#cmtGo', sh).onclick = async () => {
           const text = $('#cmt', sh).value.trim(); if (!text) return;
           $('#cmtGo', sh).disabled = true;
-          try { await api(`/api/feed/${p.id}/comment`, { method: 'POST', body: { text } }); close(); toast(`${ta(p.frame)}看到會回你`); draw(); } catch (e) { toast(e.message); $('#cmtGo', sh).disabled = false; }
+          try { await api(`/api/feed/${p.id}/comment`, { method: 'POST', body: { text } }); close(); toast(`${ta(p.frame)}看到會回你`); draw(); } catch (e) { toast(errMsg(e)); $('#cmtGo', sh).disabled = false; }
         };
       });
     });
@@ -2200,7 +2210,7 @@ async function openPostComposer({ story = false, onDone } = {}) {
       fd.append('audience', aud === 'some' ? JSON.stringify($$('#pSome input:checked', sh).map(i => i.value)) : aud);
       if (file) fd.append('photo', await shrinkImage(file), 'post.jpg');
       $('#pGo', sh).disabled = true;
-      try { await api('/api/me/posts', { method: 'POST', form: fd }); close(); toast('發布了'); track('user_post', { story }); onDone?.(); } catch (e) { toast(e.message); $('#pGo', sh).disabled = false; }
+      try { await api('/api/me/posts', { method: 'POST', form: fd }); close(); toast('發布了'); track('user_post', { story }); onDone?.(); } catch (e) { toast(errMsg(e)); $('#pGo', sh).disabled = false; }
     };
   });
 }
@@ -2242,7 +2252,7 @@ function openStoryViewer(groups, start = 0, onClose) {
       $('input', form).onfocus = () => clearTimeout(timer);
       form.onsubmit = async (e) => {
         e.preventDefault(); const text = $('input', form).value.trim(); if (!text) return;
-        try { await api(`/api/rels/${g.relId}/messages`, { method: 'POST', body: { text, storyRef: it.id } }); toast(`已傳給${ta(g.frame)}`); track('story_reply', {}); onClose = null; close(); location.hash = `#/chat/${g.relId}`; } catch (err) { toast(err.message); }
+        try { await api(`/api/rels/${g.relId}/messages`, { method: 'POST', body: { text, storyRef: it.id } }); toast(`已傳給${ta(g.frame)}`); track('story_reply', {}); onClose = null; close(); location.hash = `#/chat/${g.relId}`; } catch (err) { toast(errMsg(err)); }
       };
     }
     timer = setTimeout(() => { ii++; show(); }, 6000);
@@ -2320,7 +2330,7 @@ async function renderSettings() {
       await api('/api/me', { method: 'PATCH', body: patch });
       S.me = await api('/api/me');
       toast('已儲存');
-    } catch (e) { toast(e.message); }
+    } catch (e) { toast(errMsg(e)); }
   };
   const saveSettings = (s) => save({ settings: s });
   $('#nick').onchange = (e) => save({ nickname: e.target.value });

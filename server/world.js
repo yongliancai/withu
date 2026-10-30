@@ -64,7 +64,7 @@ export async function weatherAt(place) {
     cache.set(place, { at: now(), data });
     return data;
   } catch (e) {
-    if (!hit) logIssue({ level: 'warn', source: 'weather', message: `天氣查詢失敗：${e.message}`, error: e });
+    if (!hit) logIssue({ level: /timeout|abort|fetch failed/i.test(e.message) ? 'auto' : 'warn', source: 'weather', message: `天氣查詢失敗：${e.message}`, error: e });
     cache.set(place, { at: now(), data: hit?.data || null }); // 失敗也記一下，10 分鐘內不重試
     return hit?.data || null;
   }
