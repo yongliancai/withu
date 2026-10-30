@@ -25,9 +25,12 @@ export const SETTING_DEFS = [
   // 語音通話
   { key: 'callMinStage', group: '語音通話', label: '關係到哪個階段才能打電話（0 認識 1 朋友 2 曖昧 3 交往）', type: 'int', min: 0, max: 4, def: 2 },
   { key: 'callDailyMinutes', group: '語音通話', label: '每人每天最多講幾分鐘', type: 'int', min: 0, max: 240, def: 10 },
+  // 角色投稿
+  { key: 'submitAutoScore', group: '角色投稿', label: '使用者投稿的角色，AI 評分幾分以上自動成為官方角色（0–100；設 101 = 全部要人工上架）', type: 'int', min: 0, max: 101, def: 75 },
   // 其他
   { key: 'maxActive', group: '其他', label: '每人同時最多認識幾個角色', type: 'int', min: 1, max: 20, def: n(env.MAX_ACTIVE_RELATIONSHIPS, 5) },
   { key: 'memoryEvery', group: '其他', label: '每聊幾輪整理一次記憶', type: 'int', min: 2, max: 20, def: 4 },
+  { key: 'adaptEvery', group: '其他', label: '對方每傳幾則訊息，角色調整一次說話方式（配合對方的喜好）', type: 'int', min: 5, max: 50, def: 10 },
   // 預算（美元；0 = 不限制）
   { key: 'budgetDailyUsd', group: '預算', label: '每日預算（美元，0 = 不限）', type: 'num', min: 0, max: 10000, def: 0 },
   { key: 'budgetMonthlyUsd', group: '預算', label: '每月預算（美元，0 = 不限）', type: 'num', min: 0, max: 100000, def: 0 },

@@ -28,7 +28,12 @@ const track = (name, data) => api('/api/events', { method: 'POST', body: { name,
 // 畫面上不該出現 null／undefined：資料還沒到時就不顯示
 const blank = (v) => v == null || /^\s*(null|undefined|none)?\s*$/i.test(String(v)) || /\b(null|undefined)\b/.test(String(v));
 function toast(msg) {
-  if (blank(msg)) { if (msg !== '' && msg != null) expect(false, '提示訊息是空的', { msg: String(msg).slice(0, 60), route: location.hash.replace(/[\w-]{16,}/g, ':id') }); return; }
+  if (msg == null || /^\s*(null|undefined|none)?\s*$/i.test(String(msg))) return;
+  // 提示裡混進了 null／undefined（通常是程式錯誤訊息）：給使用者看得懂的話，原文回報給後台
+  if (/\b(null|undefined|NaN)\b|\[object Object\]/.test(String(msg))) {
+    expect(false, '提示訊息有程式字眼', { msg: String(msg).slice(0, 200), route: location.hash.replace(/[\w-]{16,}/g, ':id') });
+    msg = '出了一點小問題，我們已經收到通知，等一下再試試';
+  }
   const t = $('#toast'); t.textContent = msg; t.classList.add('on');
   clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('on'), 2400);
 }
@@ -112,6 +117,7 @@ const routes = [
   [/^#\/explore$/, renderExplore],
   [/^#\/story$/, renderStory],
   [/^#\/me$/, renderMe],
+  [/^#\/taste$/, renderTaste],
   [/^#\/settings$/, renderSettings],
 ];
 async function route() {
@@ -146,6 +152,12 @@ window.addEventListener('hashchange', route);
 // ======================================================================
 // 每次有新功能，在最上面加一筆；看過的人不會再跳出來，「我 → 設定 → 更新內容」可以再看一次。
 const WHATS_NEW = [
+  { v: '2026-10-31', title: '聊天更合你的口味', items: [
+    { title: '告訴我們你喜歡怎麼聊', text: '我 → 設定 → 隱私與資料 →「聊天口味」：訊息長短、熟起來的速度、誰帶話題，點一下就好。角色也會每聊 10 則就照你的反應調整一次。' },
+    { title: '收回訊息', text: '長按（電腦按右鍵）自己傳的訊息可以收回，24 小時內都可以。角色覺得自己說錯話時，也可能收回重說。', route: '#/chat' },
+    { title: '偷看不已讀', text: '在聊天列表長按（電腦按右鍵）某個人，可以先看最近的訊息，不會顯示已讀。', route: '#/chat' },
+    { title: '你捏的角色有機會變官方', text: '把你捏的角色分享到角色廣場後，AI 會審核；通過的話，所有人都能認識他。' },
+  ] },
   { v: '2026-10-30b', title: '多了 20 位新朋友', items: [
     { title: '新角色', text: '男生女生各多了 10 位：剛上大學的新生、交換學生、廚師、空服員、圖書館員、髮型設計師……年紀從 18 歲到 40 幾歲都有。', route: '#/explore' },
     { title: '登入碼可以存到瀏覽器', text: '在「我 → 設定 → 隱私與資料」按「存到瀏覽器」，下次登入時瀏覽器會幫你填好。輸入登入碼時，大小寫和「-」打錯也沒關係。' },
@@ -322,7 +334,7 @@ function renderJoin() {
           <button class="btn block" id="go">好，去認識${TA()}</button></form></div>`;
       $('#copyCode').onclick = () => copyText(r.recoveryCode);
       $('#keepCode').onclick = async () => toast(await keepLoginCode(S.me.nickname, r.recoveryCode) ? '已經存好了' : '這個瀏覽器不支援直接存；按下面的按鈕時，瀏覽器問要不要儲存密碼，選「儲存」');
-      $('#saveF').onsubmit = (ev) => { ev.preventDefault(); keepLoginCode(S.me.nickname, r.recoveryCode, true); location.hash = '#/meet'; };
+      $('#saveF').onsubmit = (ev) => { ev.preventDefault(); keepLoginCode(S.me.nickname, r.recoveryCode, true); location.hash = '#/taste'; };
     } catch (err) { toast(err.message); }
   };
 }
@@ -338,6 +350,32 @@ async function keepLoginCode(name, code, quiet = false) {
 async function copyText(t) {
   try { await navigator.clipboard.writeText(t); toast('已複製'); }
   catch { toast('複製不了，請長按選取'); }
+}
+
+// 聊天口味：三題、點一下就好，可以略過；之後在設定裡改
+const TASTE_Q = [
+  ['length', '你喜歡怎樣的訊息？', [['short', '短短的就好'], ['mid', '看情況'], ['long', '多聊一點']]],
+  ['warm', '跟新朋友熟起來的速度', [['slow', '慢熱'], ['mid', '普通'], ['fast', '很快就能聊開']]],
+  ['lead', '聊天時，誰帶話題比較好？', [['him', `${TA()}多說一點`], ['turns', '輪流'], ['me', '我想多說一點']]],
+];
+function tasteHtml(cur = {}) {
+  return TASTE_Q.map(([k, q, opts]) => `<div class="field"><span>${q}</span>${chipGroup(k, opts, cur[k] || '')}</div>`).join('');
+}
+function renderTaste() {
+  tabs.hidden = true;
+  const st = { ...(S.me?.settings?.chatTaste || {}) };
+  app.innerHTML = `<div class="page" style="padding-bottom:32px">
+    <h1>你喜歡怎麼聊天？</h1>
+    <p class="muted">點一下就好，${TA()}們會照這個方式跟你說話，之後也會從聊天裡慢慢調整。不確定可以略過。</p>
+    ${tasteHtml(st)}
+    <button class="btn block" id="tOk" style="margin-top:8px">好了</button>
+    <button class="btn ghost block" id="tSkip" style="margin-top:10px">略過</button></div>`;
+  bindChips(app, st);
+  $('#tOk').onclick = async () => {
+    await api('/api/me', { method: 'PATCH', body: { settings: { chatTaste: st } } }).catch(() => {});
+    S.me.settings.chatTaste = st; location.hash = '#/meet';
+  };
+  $('#tSkip').onclick = () => { location.hash = '#/meet'; };
 }
 
 function renderRecover() {
@@ -655,6 +693,18 @@ async function doMeet() {
 // ======================================================================
 // 聊天（首頁）
 // ======================================================================
+// 偷看：只讀最近的訊息，不呼叫「已讀」，對方那邊也不會顯示已讀
+async function peekChat(r) {
+  const ok = sheetGuard();
+  let msgs = [];
+  try { msgs = await api(`/api/rels/${r.id}/messages`); } catch (e) { return toast(e.message); }
+  if (!ok()) return;
+  const last = msgs.filter(m => m.kind !== 'scene').slice(-8);
+  openSheet(`<h3 style="margin-top:0">${esc(displayName(r.frame))}</h3>
+    <p class="peek-note">偷看中・不會顯示已讀</p>
+    <div class="peek">${last.map((m, i) => messageHtml(m, r, last[i - 1])).join('')}</div>
+    <a class="btn block" href="#/chat/${r.id}" style="text-decoration:none;text-align:center">進入聊天室</a>`);
+}
 async function renderChatList() {
   const draw = async () => {
     S.rels = await api('/api/rels'); refreshBadge(S.rels);
@@ -689,6 +739,18 @@ async function renderChatList() {
     bindInstall();
     // 點大頭照看個人頁（點其他地方進聊天室）
     $$('[data-prof-rel]').forEach(a => a.onclick = (e) => { e.preventDefault(); e.stopPropagation(); location.hash = `#/profile/${a.dataset.profRel}`; });
+    // 長按（電腦按右鍵）聊天列：偷看最近的訊息，不會變成已讀
+    $$('a.conv, a.lover-card').forEach(a => {
+      const relId = (a.getAttribute('href') || '').split('/').pop();
+      const r = active.find(x => x.id === relId); if (!r) return;
+      let t = null, fired = false;
+      const start = () => { fired = false; t = setTimeout(() => { fired = true; navigator.vibrate?.(15); peekChat(r); }, 500); };
+      const stop = () => { clearTimeout(t); t = null; };
+      a.addEventListener('pointerdown', start); ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => a.addEventListener(ev, stop));
+      a.addEventListener('pointermove', (e) => { if (Math.abs(e.movementX) + Math.abs(e.movementY) > 6) stop(); });
+      a.addEventListener('contextmenu', (e) => { e.preventDefault(); stop(); fired = true; peekChat(r); });
+      a.addEventListener('click', (e) => { if (fired) { e.preventDefault(); fired = false; } }, true);
+    });
     $('#moodFab').onclick = () => openMoodButton();
     // 伴旅的公告（後台發的）：看過、按掉就不再出現
     api('/api/announcements').then(list => {
@@ -782,8 +844,14 @@ function waveBars(seed, n = 22) {
   return Array.from({ length: n }, (_, i) => { s = (s * 1103515245 + 12345) >>> 0; return `<i style="height:${30 + (s % 70)}%"></i>`; }).join('');
 }
 
+const retractedHtml = (m, rel) => `<div class="retracted" data-id="${m.id}">${m.sender === 'user' ? '你' : esc(displayName(rel.frame))}已收回訊息</div>`;
 function messageHtml(m, rel, prev) {
+  if (m.kind === 'retract') return ''; // 收回的紀錄本身不顯示，只把被收回的那則換成「已收回訊息」
   let out = '';
+  if (m.retracted) {
+    if (!prev || dayLabel(prev.at) !== dayLabel(m.at)) out += `<div class="day">${dayLabel(m.at)}</div>`;
+    return out + retractedHtml(m, rel);
+  }
   if (!prev || dayLabel(prev.at) !== dayLabel(m.at)) out += `<div class="day">${dayLabel(m.at)}</div>`;
   const side = m.sender === 'user' ? 'me' : 'him';
   const glow = side === 'him' && rel.mode === 'practice' && rel.stage === 2 ? ' glow' : '';
@@ -1169,6 +1237,8 @@ async function renderRoom(relId) {
       const prev = S.room.messages.at(-1);
       if (claimed.has(m.id) || S.room.messages.some(x => x.id === m.id)) { if (m.sender === 'user') stream.querySelector(`.local[data-sid="${m.id}"]`)?.remove(); continue; }
       claimed.add(m.id);
+      // 他收回了上一句：把畫面上那則換成「已收回訊息」
+      if (m.kind === 'retract') { S.room.messages.push(m); markRetracted(m.card?.target); continue; }
       // 自己剛傳的那則：伺服器版本到了就拿掉本地的暫時泡泡（避免同一句出現兩次）
       if (m.sender === 'user') stream.querySelector(`.local[data-sid="${m.id}"]`)?.remove();
       if (m.sender === 'char' && m.kind !== 'card') {
@@ -1194,6 +1264,13 @@ async function renderRoom(relId) {
     S.room.drawSuggest?.();
   }
   S.room.reveal = revealSequential;
+  function markRetracted(id) {
+    if (!id) return;
+    const t = S.room.messages.find(x => x.id === id); if (t) Object.assign(t, { retracted: true, text: '', media: null });
+    const node = stream.querySelector(`.msg[data-id="${id}"]`);
+    if (node) node.outerHTML = retractedHtml(t || { id, sender: 'char' }, rel);
+  }
+  S.room.markRetracted = markRetracted;
 
   async function startRecording() {
     if (!navigator.mediaDevices?.getUserMedia) return toast('這個瀏覽器不能錄音');
@@ -1296,6 +1373,20 @@ async function renderProfile(relId) {
 }
 
 let currentAudio = null;
+// 自己的訊息：收回（24 小時內）或複製
+function openOwnMsgMenu(mid, node) {
+  const m = S.room?.messages.find(x => x.id === mid); if (!m || m.retracted) return;
+  const canRetract = Date.now() - m.at < 24 * 3600e3;
+  openSheet(`<h3 style="margin-top:0">這則訊息</h3>
+    ${m.text ? '<button class="choice" id="omCopy"><b>複製</b></button>' : ''}
+    ${canRetract ? `<button class="choice" id="omRetract"><b>收回</b><span>雙方都會看到「你已收回訊息」${S.room?.sending ? '' : `；${ta(S.room.rel.frame)}還沒回的話就不會看到內容`}</span></button>` : '<p class="small muted">超過 24 小時的訊息不能收回。</p>'}`, (sh, close) => {
+    $('#omCopy', sh) && ($('#omCopy', sh).onclick = () => { close(); copyText(m.text); });
+    $('#omRetract', sh) && ($('#omRetract', sh).onclick = async () => {
+      try { await api(`/api/messages/${mid}/retract`, { method: 'POST' }); close(); S.room.markRetracted?.(mid); }
+      catch (e) { toast(e.message); }
+    });
+  });
+}
 // 語感回饋：讓角色說話更像真人
 function openMsgFeedback(mid, text) {
   const consent = !!S.me?.settings?.feedbackConsent;
@@ -1335,6 +1426,16 @@ function bindStream(root) {
     try { await api(`/api/rels/${relId}/goal`, { method: 'POST', body: { msgId: Number(b.dataset.goal), accept: b.dataset.acc === '1' } }); S.room.sending = false; renderRoom(relId); } catch (e) { toast(e.message); S.room.sending = false; }
   });
   $$('[data-prof]', root).forEach(b => b.onclick = () => { const id = S.room?.rel?.id; if (id) location.hash = `#/profile/${id}`; });
+  // 長按（電腦：按右鍵）自己的訊息 → 收回／複製
+  $$('.msg.me[data-id]', root).forEach(b => {
+    const mid = Number(b.dataset.id); if (!mid) return;
+    const target = $('.bubble, .photo-bubble, .stk-img', b) || b;
+    let t = null;
+    const open = () => openOwnMsgMenu(mid, b);
+    target.addEventListener('pointerdown', () => { t = setTimeout(() => { t = null; navigator.vibrate?.(15); open(); }, 550); });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => target.addEventListener(ev, () => { clearTimeout(t); t = null; }));
+    target.addEventListener('contextmenu', (e) => { e.preventDefault(); clearTimeout(t); open(); });
+  });
   // 長按（電腦：按右鍵）角色說的話 → 這句很像真人／怪怪的
   $$('.msg.him[data-id] > .bubble', root).forEach(b => {
     const mid = Number(b.parentElement.dataset.id); if (!mid) return;
@@ -1781,7 +1882,7 @@ async function openShareSheet(rel) {
       const v = (k) => $(`#s_${k}`, sheet).value;
       try {
         await api(`/api/rels/${rel.id}/share`, { method: 'POST', body: { intro: v('intro'), traits: v('traits'), speech: v('speech'), catchphrases: v('cp').split(/[、,，]/).map(s => s.trim()).filter(Boolean), values: v('values'), weekend: v('weekend') } });
-        c2(); toast('已發布到角色廣場');
+        c2(); toast('已分享到角色廣場；AI 審核通過的話，還會成為所有人都能認識的官方角色');
       } catch (e) { toast(e.message); }
     };
   });
@@ -2196,6 +2297,7 @@ async function renderSettings() {
       <div class="row"><span class="grow">下載我的資料</span><a class="btn ghost sm" href="/api/me/export" download>下載</a></div>
       <div class="row"><span class="grow">刪除帳號與所有資料</span><button class="btn danger sm" id="delAll">刪除</button></div>
       <div class="row"><span class="grow">系統整理的相處偏好<div class="small muted">${S.me.prefs?.likes?.length || S.me.prefs?.dislikes?.length ? [...(S.me.prefs.likes || []).map(x => '喜歡' + x.replace(/^喜歡/, '')), ...(S.me.prefs.dislikes || []).map(x => x.startsWith('不喜歡') ? x : '不喜歡' + x)].map(esc).join('・') : '還沒有。聊久一點，系統會整理你喜歡的聊天方式，讓新認識的人也懂你。'}<br>只記說話方式，不記你的私事。</div></span>${S.me.prefs ? '<button class="btn ghost sm" id="clrPrefs">清除</button>' : ''}</div>
+      <div class="row"><span class="grow">聊天口味<div class="small muted">訊息長短、熟起來的速度、誰帶話題</div></span><button class="btn ghost sm" id="tasteBtn">調整</button></div>
       <div class="row"><label for="fbc" class="grow">用我的回饋改善角色說話<div class="small muted">長按${TA()}說的話可以評「很像真人／怪怪的」；你說「什麼意思？」時也會記下前一句。只存那幾句、去掉名字</div></label><input type="checkbox" id="fbc" ${st.feedbackConsent ? 'checked' : ''}></div>
       <div class="row"><span class="grow">使用說明<div class="small muted">再帶你逛一次伴旅</div></span><button class="btn ghost sm" id="replayTour">看一次</button></div>
       <div class="row"><span class="grow">更新內容<div class="small muted">最近一次更新：${LATEST_NEWS}</div></span><button class="btn ghost sm" id="replayNews">看一次</button></div>
@@ -2229,6 +2331,13 @@ async function renderSettings() {
   $('#sugg').onchange = (e) => saveSettings({ showSuggestions: e.target.checked });
   $('#rdelay').onchange = (e) => saveSettings({ realisticDelay: e.target.checked });
   $('#fbc').onchange = (e) => saveSettings({ feedbackConsent: e.target.checked });
+  $('#tasteBtn').onclick = () => {
+    const tst = { ...(S.me.settings.chatTaste || {}) };
+    openSheet(`<h3>聊天口味</h3>${tasteHtml(tst)}<button class="btn block" id="tSave">儲存</button>`, (sh, close) => {
+      bindChips(sh, tst);
+      $('#tSave', sh).onclick = async () => { await api('/api/me', { method: 'PATCH', body: { settings: { chatTaste: tst } } }).catch(() => {}); S.me.settings.chatTaste = tst; close(); toast('已更新，之後的聊天會照這個調整'); };
+    });
+  };
   $('#owl').onchange = (e) => {
     const on = e.target.checked;
     const dnd = on ? { dndStart: '09:00', dndEnd: '16:00' } : { dndStart: '23:30', dndEnd: '07:30' };

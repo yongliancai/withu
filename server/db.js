@@ -204,6 +204,9 @@ for (const [table, col, def] of [
   ['daily_use', 'call_sec', 'INTEGER NOT NULL DEFAULT 0'], // 今天講了幾秒電話
   ['relationships', 'aff_day', 'TEXT'],                // 好感每日上限：哪一天
   ['relationships', 'aff_gain', 'INTEGER NOT NULL DEFAULT 0'], // 那一天已經加了多少好感
+  ['messages', 'retracted', 'INTEGER NOT NULL DEFAULT 0'], // 已收回（內容清空，只留「已收回」紀錄）
+  ['templates', 'review', 'TEXT'], // 投稿審核結果（AI 分數、理由）
+  ['templates', 'promoted_from', 'TEXT'], // 從使用者投稿升級成官方角色時，原本的投稿 id
 ]) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
   if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);

@@ -114,9 +114,24 @@ export function mountAdmin(app) {
     const rows = db.prepare(`SELECT * FROM templates WHERE kind='shared' ORDER BY created_at DESC`).all().map(t => {
       const f = j(t.data, {});
       return { id: t.id, name: f.name, gender: f.gender, intro: f.intro, traits: f.traits, catchphrases: f.catchphrases, creator: t.creator_name,
-        uses: t.uses, status: t.status, createdAt: t.created_at, reports: reports.filter(r => r.template === t.id).map(r => ({ reason: r.reason, by: r.by, at: r.at })) };
+        uses: t.uses, status: t.status, createdAt: t.created_at, review: j(t.review, null),
+        official: db.prepare('SELECT id, status FROM templates WHERE promoted_from=?').get(t.id) || null, reports: reports.filter(r => r.template === t.id).map(r => ({ reason: r.reason, by: r.by, at: r.at })) };
     });
     res.json(rows);
+  });
+  // 重新審核／手動設為官方／官方版下架
+  A('post', '/square/:id/review', async (req, res) => {
+    const { reviewSubmission } = await import('./submissions.js');
+    res.json(await reviewSubmission(req.params.id) || { error: '審核失敗，稍後再試' });
+  });
+  A('post', '/square/:id/promote', async (req, res) => {
+    const { promote } = await import('./submissions.js');
+    const t = db.prepare(`SELECT * FROM templates WHERE id=? AND kind='shared'`).get(req.params.id);
+    if (!t) return res.status(404).json({ error: '找不到' });
+    const ex = db.prepare('SELECT id FROM templates WHERE promoted_from=?').get(t.id);
+    if (ex) db.prepare(`UPDATE templates SET status=? WHERE id=?`).run(req.body?.off ? 'hidden' : 'published', ex.id);
+    else if (!req.body?.off) promote(t, j(t.data, {}), j(t.review, {})?.cats || []);
+    res.json({ ok: true });
   });
   A('post', '/square/:id', (req, res) => {
     const status = req.body?.status === 'published' ? 'published' : 'hidden';

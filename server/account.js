@@ -19,6 +19,7 @@ export function deleteAccount(uid) {
     for (const f of [ph.file, ph.blur_m, ph.blur_h]) if (f) fs.rmSync(path.join(config.dataDir, 'portraits', path.basename(f)), { force: true });
   }
   db.prepare('DELETE FROM char_photos WHERE owner IN (SELECT id FROM characters WHERE user_id=?)').run(uid);
+  db.prepare('DELETE FROM char_photos WHERE owner IN (SELECT id FROM templates WHERE creator_user_id=?)').run(uid); // 投稿升級成官方的角色沿用同一批照片
   db.prepare('DELETE FROM templates WHERE creator_user_id=?').run(uid);
   db.prepare('DELETE FROM events WHERE user_id=?').run(uid);
   db.prepare('DELETE FROM usage WHERE user_id=?').run(uid);

@@ -24,7 +24,7 @@ import { reviewOutgoing, gapLabel } from './review.js';
 import { statusLine, postsVisibleTo } from './social.js';
 import { worldContext } from './world.js';
 import { arcContext } from './arcs.js';
-import { updateUserPrefs, prefsLines } from './prefs.js';
+import { updateUserPrefs, prefsLines, tasteOf } from './prefs.js';
 
 export const id = (p = '') => p + crypto.randomBytes(9).toString('base64url');
 
@@ -63,6 +63,8 @@ export function addMessage(rel, sender, kind, { text = null, media = null, card 
 
 const refreshRel = (relId) => db.prepare('SELECT * FROM relationships WHERE id=?').get(relId);
 
+const texts0Ok = (out) => (out.messages || []).some(m => String(m.text || '').trim());
+
 function historyInput(relId, latestImage) {
   const rows = db.prepare(`SELECT * FROM messages WHERE rel_id=? AND sender != 'system' ORDER BY id DESC LIMIT 30`).all(relId).reverse();
   const items = [];
@@ -71,6 +73,8 @@ function historyInput(relId, latestImage) {
     // 隔了很久的訊息標上時間，讓他知道中間過了多久
     const stamp = prevAt && m.created_at - prevAt > 90 * 60000 ? `［隔了 ${gapLabel(m.created_at - prevAt)}・${new Date(m.created_at).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}］` : '';
     prevAt = m.created_at;
+    if (m.kind === 'retract') continue;
+    if (m.retracted) { items.push({ role: m.sender === 'char' ? 'assistant' : 'user', content: m.sender === 'char' ? '（你收回了一則訊息）' : '（對方收回了一則訊息）' }); continue; }
     if (m.sender === 'char') {
       if (m.kind === 'card') continue;
       if (m.kind === 'sticker') { items.push({ role: 'assistant', content: `（傳了貼圖：${m.text}）` }); continue; }
@@ -251,7 +255,7 @@ function reactionPairs(relId) {
 
 async function maybeShapePersona(rel, persona) {
   const c = persona._char;
-  const every = c.persona_locked ? 30 : 15;
+  const every = c.persona_locked ? Math.max(20, S('adaptEvery') * 2) : S('adaptEvery');
   if (rel.user_msg_count - c.shaped_at_count < every) return;
   db.prepare('UPDATE characters SET shaped_at_count=? WHERE id=?').run(rel.user_msg_count, c.id);
   const pairs = reactionPairs(rel.id);
@@ -378,6 +382,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const world = await worldContext(persona, rel.id);
   const arc = arcContext(rel.id);
   input.push({ role: 'developer', content: contextBlock({
+    taste: tasteOf(rel.user_id),
     userLen: [...String(userText || '').replace(/（[^）]*）/g, '').replace(/\s+/g, '')].length,
     prefs: prefsLines(rel.user_id),
     world, arc, goals: db.prepare(`SELECT title, days, done FROM goals WHERE rel_id=? AND status='active'`).all(rel.id).map(g => `${g.title}（做到 ${j(g.done, []).length}/${g.days} 天）`),
@@ -427,6 +432,15 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const isProactive = trigger && !lateReply && !String(triggerKey || '').startsWith('nudge') ? 1 : 0;
   if (!trigger || lateReply) db.prepare(`UPDATE relationships SET char_read_id=(SELECT COALESCE(MAX(id),0) FROM messages WHERE rel_id=? AND sender='user'), pending_reply_at=NULL WHERE id=?`).run(rel.id, rel.id);
   // 一則泡泡裡有換行就拆成兩則（像真人分開傳）
+  // 他覺得上一句說得太怪、說錯了：收回（留下「已收回」紀錄），再重說
+  if (out.retract_last && !trigger && !callMode && texts0Ok(out)) {
+    const lastChar = db.prepare(`SELECT id FROM messages WHERE rel_id=? AND sender='char' AND kind='text' AND retracted=0 AND created_at>? ORDER BY id DESC LIMIT 1`).get(rel.id, now() - 2 * 3600e3);
+    if (lastChar) {
+      db.prepare(`UPDATE messages SET retracted=1, text='' WHERE id=?`).run(lastChar.id);
+      addMessage(rel, 'char', 'retract', { card: { target: lastChar.id } });
+      logIssue({ level: 'auto', source: 'llm', message: '角色覺得上一句不妥，自己收回重說', userId: rel.user_id, relId: rel.id });
+    }
+  }
   let texts = (out.messages || []).flatMap(m => String(m.text || '').split(/\n+/)).map(x => x.trim()).filter(Boolean).slice(0, 4);
   // 剛認識最多 2 則、朋友最多 3 則（第一次相遇、危機、講電話例外）：超過就保留開頭和最後一則
   const maxB = crisis || callMode || triggerKey === 'FIRST' ? 4 : rel.stage === 0 ? 2 : rel.stage === 1 ? 3 : 4;

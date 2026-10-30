@@ -3,7 +3,7 @@ const pick = (a) => a[Math.floor(Math.random() * a.length)];
 
 export function mockTurn({ rel, persona, user, userText = '', imageMedia, trigger, todayMealProposed, crisis, lateReply = null }) {
   const base = {
-    messages: [], voice: false, affection_delta: 2, understanding_delta: 1, hint: null,
+    retract_last: false, messages: [], voice: false, affection_delta: 2, understanding_delta: 1, hint: null,
     relationship_event: 'none', milestone: null, memories_add: [], memories_correct: [], memories_forget: [],
     user_busy_until_minutes: null, followups: [], meal: null, outing: 'none', place_name: null, status_line: null, crisis: false, signature: null, life_post: null, postcard: null,
     suggestions: [{ label: '😂 吐槽他', text: '你也太誇張了吧哈哈' }, { label: '❓ 問後來呢', text: '然後呢？後來怎麼了' }, { label: '🙋 說說我自己', text: '我今天也遇到一件事' }],

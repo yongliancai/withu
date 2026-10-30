@@ -26,12 +26,13 @@ function stats(userId) {
 export async function updateUserPrefs(userId, { force = false } = {}) {
   const u = db.prepare('SELECT prefs FROM users WHERE id=?').get(userId);
   const cur = j(u?.prefs, null);
-  if (!force && cur && now() - cur.at < 12 * 3600e3) return;
+  if (!force && cur && now() - cur.at < 3600e3) return;
   const chars = db.prepare(`SELECT c.persona FROM relationships r JOIN characters c ON c.id=r.character_id WHERE r.user_id=?`).all(userId).map(r => j(r.persona, {}));
   const more = chars.flatMap(p => p.tuning?.more || []), less = chars.flatMap(p => p.tuning?.less || []);
   const habits = db.prepare(`SELECT content FROM memories WHERE user_id=? AND kind='style'`).all(userId).map(r => r.content);
   const st = stats(userId);
-  if (!more.length && !less.length && !habits.length && !st) return;
+  const taste = tasteLines(userId);
+  if (!more.length && !less.length && !habits.length && !st && !taste.length) return;
   const res = await jsonCall({
     userId, kind: 'prefs', tier: 'cheap',
     instructions: `以下是一位使用者和幾個 AI 角色相處時的反應整理。請歸納「這個人喜歡的聊天與相處方式」，讓他之後認識的新角色一開始就用對方喜歡的方式說話。
@@ -39,7 +40,7 @@ export async function updateUserPrefs(userId, { force = false } = {}) {
 - dislikes：0–4 條，每條 20 字內（例如「不喜歡一直被問問題」「不喜歡太油的情話」）。
 - 只寫說話與相處的方式。絕對不要寫任何關於這個人的事實或私事（工作、住哪、家人、健康、感情經歷、名字都不要）。
 - 訊號不夠就少寫，不要猜。只輸出 JSON。`,
-    input: [{ role: 'user', content: `對方反應好的：${more.join('；') || '（無）'}\n對方反應冷淡的：${less.join('；') || '（無）'}\n對方明確要求過的相處方式：${habits.join('；') || '（無）'}\n聊天習慣統計：${st || '（不足）'}` }],
+    input: [{ role: 'user', content: `對方註冊時自己選的聊天口味（最重要，除非聊天中明顯相反）：${taste.join('；') || '（沒填）'}\n對方反應好的：${more.join('；') || '（無）'}\n對方反應冷淡的：${less.join('；') || '（無）'}\n對方明確要求過的相處方式：${habits.join('；') || '（無）'}\n聊天習慣統計：${st || '（不足）'}` }],
     schema: { type: 'object', additionalProperties: false, properties: { likes: { type: 'array', items: { type: 'string' } }, dislikes: { type: 'array', items: { type: 'string' } } }, required: ['likes', 'dislikes'] },
     schemaName: 'prefs',
     mock: { likes: ['喜歡對方先分享自己的事', '回覆短一點、多幾則'], dislikes: ['不喜歡一直被問問題'] },
@@ -48,10 +49,26 @@ export async function updateUserPrefs(userId, { force = false } = {}) {
   db.prepare('UPDATE users SET prefs=? WHERE id=?').run(JSON.stringify({ likes: res.likes.slice(0, 6).map(x => x.slice(0, 30)), dislikes: res.dislikes.slice(0, 4).map(x => x.slice(0, 30)), at: now() }), userId);
 }
 
+// 註冊時的「聊天口味」前測：對方自己選的，比系統推測的更優先
+export const TASTE = {
+  length: { short: '喜歡短短的訊息，一兩句就好', mid: '訊息長短看情況', long: '喜歡多聊一點、訊息可以長一些' },
+  warm: { slow: '慢熱，希望一開始保持一點距離、慢慢熟', mid: '熟起來的速度普通', fast: '很快就能聊開，喜歡熱絡一點' },
+  lead: { him: '希望角色多說一點、多帶話題', turns: '喜歡輪流聊、一來一往', me: '自己比較想說，希望角色多聽' },
+};
+export function tasteOf(userId) {
+  const st = j(db.prepare('SELECT settings FROM users WHERE id=?').get(userId)?.settings, {});
+  const t = st.chatTaste || {};
+  return Object.fromEntries(Object.keys(TASTE).filter(k => TASTE[k][t[k]]).map(k => [k, t[k]]));
+}
+export function tasteLines(userId) {
+  const t = tasteOf(userId);
+  return Object.entries(t).map(([k, v]) => `- 對方自己說：${TASTE[k][v]}`);
+}
+
 export function prefsLines(userId) {
   const p = j(db.prepare('SELECT prefs FROM users WHERE id=?').get(userId)?.prefs, null);
-  if (!p || (!p.likes?.length && !p.dislikes?.length)) return null;
-  return [...(p.likes || []).map(x => `- 喜歡：${x}`), ...(p.dislikes || []).map(x => `- 不喜歡：${x}`)].join('\n');
+  const lines = [...tasteLines(userId), ...(p?.likes || []).map(x => `- 喜歡：${x}`), ...(p?.dislikes || []).map(x => `- 不喜歡：${x}`)];
+  return lines.length ? lines.join('\n') : null;
 }
 
 export function prefsOf(userId) {

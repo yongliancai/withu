@@ -253,7 +253,9 @@ export async function publishShare(user, rel, draft) {
   };
   const tid = id('t_');
   db.prepare(`INSERT INTO templates (id,kind,data,creator_user_id,creator_name,created_at) VALUES (?,?,?,?,?,?)`)
-    .run(tid, 'shared', JSON.stringify(frame), user.id, user.nickname, now());
+    .run(tid, 'shared', JSON.stringify({ ...frame, _sourceChar: c.id }), user.id, user.nickname, now());
   logEvent(user.id, 'share_publish', { template: tid });
+  // 投稿審核：AI 打分數，夠高就自動成為官方角色（在背景跑）
+  import('./submissions.js').then(m => m.reviewSubmission(tid)).catch(() => {});
   return { templateId: tid };
 }

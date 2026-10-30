@@ -271,7 +271,7 @@ const VIEWS = {
   async square() {
     const list = await api('/square');
     out.innerHTML = `
-      <p class="muted">使用者分享的角色。被檢舉 3 次會自動下架；你可以在這裡手動下架或恢復（恢復時檢舉數會歸零）。</p>
+      <p class="muted">使用者分享的角色。分享時 AI 會依評分標準打分（原創、成年、非性暗示是必要條件；完整度、不重複、吸引力、適合陪伴加總 100 分），達到「系統設定 → 角色投稿」的門檻就自動成為官方角色。被檢舉 3 次會自動下架；你可以在這裡手動下架或恢復（恢復時檢舉數會歸零）。</p>
       ${list.map(t => `<div class="card">
         <div class="row-form" style="margin:0 0 6px;justify-content:space-between">
           <span><b>${esc(t.name)}</b> <span class="muted small">${t.gender === 'female' ? '女' : '男'}・由 ${esc(t.creator)} 塑造・${dt(t.createdAt)}・${t.uses} 人認識過</span></span>
@@ -279,10 +279,16 @@ const VIEWS = {
             <button class="sm ${t.status === 'published' ? 'danger' : 'ghost'}" data-id="${t.id}" data-s="${t.status === 'published' ? 'hidden' : 'published'}">${t.status === 'published' ? '下架' : '恢復上架'}</button></span>
         </div>
         <p>${esc(t.intro || '')}</p>
+        <p class="small">${t.review ? `AI 評分 <b>${t.review.score}</b>${t.review.pass ? '' : '（必要條件沒過）'}・${t.review.reasons.map(esc).join('；')}` : '<span class="muted">還沒審核</span>'}
+          ${t.official ? `　<span class="tag ${t.official.status === 'published' ? 'on' : 'off'}">官方角色${t.official.status === 'published' ? '' : '（已下架）'}</span>` : ''}
+          <button class="sm ghost" data-rev="${t.id}">重新審核</button>
+          <button class="sm ghost" data-pro="${t.id}" data-off="${t.official?.status === 'published' ? 1 : 0}">${t.official?.status === 'published' ? '官方版下架' : '設為官方角色'}</button></p>
         <p class="small muted">性格：${esc(t.traits || '')}${t.catchphrases?.length ? `・口頭禪：${t.catchphrases.map(esc).join('、')}` : ''}</p>
         ${t.reports.length ? `<p class="small"><span class="tag warn">檢舉 ${t.reports.length}</span></p>${t.reports.map(r => `<p class="small">「${esc(r.reason || '（未說明）')}」<span class="muted">— ${esc(r.by || '')}・${dt(r.at)}</span></p>`).join('')}` : ''}
       </div>`).join('') || '<p class="muted">還沒有人分享角色。</p>'}`;
     out.querySelectorAll('[data-id]').forEach(b => b.onclick = async () => { await api('/square/' + b.dataset.id, 'POST', { status: b.dataset.s }); render(); });
+    out.querySelectorAll('[data-rev]').forEach(b => b.onclick = async () => { b.disabled = true; const r = await api(`/square/${b.dataset.rev}/review`, 'POST'); toast(r.error || `評分 ${r.score}`); render(); });
+    out.querySelectorAll('[data-pro]').forEach(b => b.onclick = async () => { await api(`/square/${b.dataset.pro}/promote`, 'POST', { off: b.dataset.off === '1' }); render(); });
   },
 
   // ------------------------------------------------ 流行新品

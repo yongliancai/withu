@@ -55,6 +55,9 @@ export const BASE_RULES = `
 - 當你在訊息裡分享了自己生活的一個片段，順便在 life_post 寫一則 30 字內、像社群動態的第一人稱短文，會發在你的動態牆上；life_post_photo 從照片類別挑一個最符合的（沒有適合的就 null）。沒有要發就兩個都填 null。
 - signature 是你的個性簽名（像 LINE 的狀態訊息，15 字內）。只有在你的心情或生活有明顯變化時才更新，平常填 null。
 
+## 收回訊息
+- 像 LINE 一樣，你可以收回你「上一句」話：只有在對方明顯看不懂、覺得你說得很怪，或你發現上一句說錯了（叫錯名字、記錯事、講得不得體）時，才把 retract_last 設為 true，然後這次用自然、簡單的方式重說（例如「欸我剛剛講得好怪，我是說…」）。一天最多一兩次，平常都是 false。
+
 ## 不要重複
 - 你會看到「你已經跟對方講過的事」：那些事不要再當成新鮮事重講，只能延續（「上次跟你說的那個阿伯，今天又來了」）或說新進展。
 - 不要重複自己最近說過的句子、開場白或關心方式（例如每次都問「吃飯了嗎」）。換個說法，或聊新的東西。
@@ -153,7 +156,7 @@ function meetLine(rel) {
   return `你們的相遇：${sc.label || '（未記錄）'}${rel.start_type === 'friend' ? '（本來就認識）' : ''}，${days === 0 ? '就是今天' : `${days} 天前`}${sad}`;
 }
 
-export function contextBlock({ userLen = 0, callMode = false, life = [], episodes = [], selfTopics = [], prefs = null, goals = [], world = [], arc = null, lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
+export function contextBlock({ taste = {}, userLen = 0, callMode = false, life = [], episodes = [], selfTopics = [], prefs = null, goals = [], world = [], arc = null, lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
   const st = charStatus(persona);
   // 剛認識的這幾個小時：他的狀態以相遇場景為準，不然會變成「剛剛在咖啡廳上班、下一句說今天休假」
   let sc0 = {}; try { sc0 = JSON.parse(rel.scenario || '{}'); } catch {}
@@ -163,8 +166,9 @@ export function contextBlock({ userLen = 0, callMode = false, life = [], episode
     : `你此刻的狀態：${st.label}`;
   const stageText = `${STAGES[rel.stage]}——${STAGE_GUIDE[rel.stage]}`;
   // 跟著對方的長度回：避免對方一句「嗯」他回一大段
+  const k = taste.length === 'short' ? 0.7 : taste.length === 'long' ? 1.5 : 1;
   const lenLine = !trigger && !callMode && userLen > 0 && !crisis
-    ? `對方這次一共打了大約 ${userLen} 個字。${userLen <= 8 ? '很短：你也只回 1 則、20 字內就好。' : userLen <= 25 ? `你這次總共大約 ${Math.min(45, userLen * 2)} 字內、${rel.stage === 0 ? '1' : '1–2'} 則。` : `你這次總共大約 ${Math.min(rel.stage === 0 ? 60 : 110, Math.round(userLen * 1.5))} 字內。`}`
+    ? `對方這次一共打了大約 ${userLen} 個字。${userLen <= 8 && taste.length !== 'long' ? '很短：你也只回 1 則、20 字內就好。' : userLen <= 25 ? `你這次總共大約 ${Math.round(Math.min(45, userLen * 2) * k)} 字內、${rel.stage === 0 ? '1' : '1–2'} 則。` : `你這次總共大約 ${Math.round(Math.min(rel.stage === 0 ? 60 : 110, userLen * 1.5) * k)} 字內。`}${taste.lead === 'him' ? '對方希望你多帶話題，可以多分享一點自己的事。' : taste.lead === 'me' ? '對方比較想說，你多聽、多接對方的話，少講自己。' : ''}${taste.warm === 'slow' && rel.stage <= 1 ? '對方慢熱：保持一點距離，不要太熱絡。' : ''}`
     : '';
   const modeText = rel.mode === 'real'
     ? '真實模式：吃醋可以比較強烈、會有情緒；關係真的被傷害時可能冷戰。'
@@ -262,6 +266,7 @@ export const TURN_SCHEMA = {
     choice: { anyOf: [{ type: 'null' }, { type: 'object', additionalProperties: false, properties: { prompt: { type: 'string' }, options: { type: 'array', items: { type: 'string' } } }, required: ['prompt', 'options'] }] },
     goal: { anyOf: [{ type: 'null' }, { type: 'object', additionalProperties: false, properties: { title: { type: 'string' }, days: { type: 'integer' } }, required: ['title', 'days'] }] },
     life_post_photo: { type: ['string', 'null'], enum: [...Object.keys(PHOTO_TAGS), null] },
+    retract_last: { type: 'boolean' },
   },
-  required: ['messages', 'voice', 'affection_delta', 'understanding_delta', 'hint', 'relationship_event', 'milestone', 'memories_add', 'memories_correct', 'memories_forget', 'user_busy_until_minutes', 'followups', 'meal', 'outing', 'place_name', 'status_line', 'crisis', 'signature', 'life_post', 'postcard', 'suggestions', 'told', 'self_topic', 'activity', 'life_post_photo', 'sticker', 'note', 'choice', 'goal'],
+  required: ['retract_last', 'messages', 'voice', 'affection_delta', 'understanding_delta', 'hint', 'relationship_event', 'milestone', 'memories_add', 'memories_correct', 'memories_forget', 'user_busy_until_minutes', 'followups', 'meal', 'outing', 'place_name', 'status_line', 'crisis', 'signature', 'life_post', 'postcard', 'suggestions', 'told', 'self_topic', 'activity', 'life_post_photo', 'sticker', 'note', 'choice', 'goal'],
 };

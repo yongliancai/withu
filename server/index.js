@@ -136,8 +136,13 @@ app.get('/api/me', auth, (req, res) => {
 app.patch('/api/me', auth, (req, res) => {
   const b = req.body || {};
   const settings = { ...j(req.user.settings, {}), ...(b.settings || {}) };
-  const allowed = ['dailyCap', 'proactiveLevel', 'dndStart', 'dndEnd', 'notifyPreview', 'lunchAt', 'dinnerAt', 'discreetNames', 'portraitStyle', 'showSuggestions', 'realisticDelay', 'notifyAsked', 'appTheme', 'nightOwl', 'customMoods', 'tourDone', 'roomTourDone', 'seenNews', 'feedbackConsent'];
+  const allowed = ['dailyCap', 'proactiveLevel', 'dndStart', 'dndEnd', 'notifyPreview', 'lunchAt', 'dinnerAt', 'discreetNames', 'portraitStyle', 'showSuggestions', 'realisticDelay', 'notifyAsked', 'appTheme', 'nightOwl', 'customMoods', 'tourDone', 'roomTourDone', 'seenNews', 'feedbackConsent', 'chatTaste'];
   for (const k of Object.keys(settings)) if (!allowed.includes(k)) delete settings[k];
+  if (settings.chatTaste) { // 聊天口味：只收三個欄位的固定選項
+    const t = settings.chatTaste || {}, ok = { length: ['short', 'mid', 'long'], warm: ['slow', 'mid', 'fast'], lead: ['him', 'turns', 'me'] };
+    settings.chatTaste = Object.fromEntries(Object.keys(ok).filter(k => ok[k].includes(t[k])).map(k => [k, t[k]]));
+    if (b.settings?.chatTaste) updateUserPrefs(req.user.id, { force: true }).catch(() => {});
+  }
   const seeks = ['male', 'female', 'any'].includes(b.seeks) ? b.seeks : req.user.seeks;
   const gender = ['female', 'male', 'other'].includes(b.gender) ? b.gender : req.user.gender;
   db.prepare('UPDATE users SET nickname=?, call_name=?, settings=?, seeks=?, gender=?, bio=? WHERE id=?').run(
@@ -308,15 +313,15 @@ function templateLook(tid) {
 }
 function relSummary(rel) {
   const p = getPersona(rel);
-  const last = db.prepare(`SELECT * FROM messages WHERE rel_id=? AND kind != 'card' ORDER BY id DESC LIMIT 1`).get(rel.id);
-  const unread = db.prepare(`SELECT COUNT(*) n FROM messages WHERE rel_id=? AND sender='char' AND id>?`).get(rel.id, rel.last_read_id).n;
+  const last = db.prepare(`SELECT * FROM messages WHERE rel_id=? AND kind NOT IN ('card','retract') ORDER BY id DESC LIMIT 1`).get(rel.id);
+  const unread = db.prepare(`SELECT COUNT(*) n FROM messages WHERE rel_id=? AND sender='char' AND kind != 'retract' AND id>?`).get(rel.id, rel.last_read_id).n;
   return {
     id: rel.id, status: rel.status, stage: rel.stage, stageLabel: STAGES[rel.stage], mode: rel.mode, pinned: !!rel.pinned, starred: !!rel.starred,
     outing: !!rel.outing_active, activity: j(rel.activity), theme: rel.theme || 'default', pendingReplyAt: rel.pending_reply_at || null, charReadId: rel.char_read_id || 0,
     presence: (() => { const pr = presenceOf(rel, p); return { code: pr.code, label: pr.label, lastSeen: pr.lastSeen || null }; })(), statusLine: rel.status_line, statusLineAt: rel.status_line_at, blocked: !!rel.blocked,
     startType: rel.start_type, origin: p._char.origin, canShare: p._char.origin === 'custom' && rel.user_msg_count >= 10,
     frame: { ...publicFrame({ ...p, look: p.look || templateLook(p._char.template_id) }), portraitUrl: (() => { if (rel.stage < 1) return null; const m = mainOf(ownerOfCharacter(p._char)); return m ? `/api/portrait/${m.id}/c` : null; })() }, voice: p.voice, now: charStatus(p).code,
-    last: last ? { text: last.kind === 'voice' ? '［語音訊息］' : last.kind === 'photo' ? '［照片］' : last.kind === 'sticker' ? '［貼圖］' : last.text, at: last.created_at, sender: last.sender } : null,
+    last: last ? { text: last.retracted ? (last.sender === 'user' ? '你已收回訊息' : '已收回訊息') : last.kind === 'voice' ? '［語音訊息］' : last.kind === 'photo' ? '［照片］' : last.kind === 'sticker' ? '［貼圖］' : last.text, at: last.created_at, sender: last.sender } : null,
     unread, endedAt: rel.ended_at, createdAt: rel.created_at,
     scenarioId: (() => { const sc = j(rel.scenario, {}); return sc.id || SCENARIOS.find(x => x.label === sc.label)?.id || null; })(),
   };
@@ -333,7 +338,7 @@ app.get('/api/rels/:id', auth, (req, res) => {
   res.json({ ...relSummary(rel), settingMemories });
 });
 
-const msgOut = (m) => ({ id: m.id, sender: m.sender, kind: m.kind, text: m.text, media: m.media ? `/api/media/${m.media}` : null,
+const msgOut = (m) => m.retracted ? { id: m.id, sender: m.sender, kind: m.kind, retracted: true, text: '', media: null, card: null, at: m.created_at } : ({ id: m.id, sender: m.sender, kind: m.kind, text: m.text, media: m.media ? `/api/media/${m.media}` : null,
   card: j(m.card), proactive: !!m.proactive, at: m.created_at, suggest: j(m.suggest) });
 
 app.get('/api/rels/:id/messages', auth, (req, res) => {
@@ -587,6 +592,18 @@ app.post('/api/rels/:id/call/end', auth, (req, res) => {
   const sec = endCall(rel.id);
   if (sec) { addMessage(rel, 'system', 'card', { card: { type: 'call', seconds: sec } }); logEvent(req.user.id, 'call_end', { rel: rel.id, sec }); }
   res.json({ ok: true, seconds: sec });
+});
+
+// 收回自己的訊息（24 小時內）：內容清空，雙方都只看到「已收回訊息」
+app.post('/api/messages/:id/retract', auth, (req, res) => {
+  const m = db.prepare(`SELECT * FROM messages WHERE id=? AND user_id=? AND sender='user'`).get(Number(req.params.id), req.user.id);
+  if (!m) return res.status(404).json({ error: '找不到這則訊息' });
+  if (m.retracted) return res.json({ ok: true });
+  if (now() - m.created_at > 24 * 3600e3) return res.status(400).json({ error: '超過 24 小時的訊息不能收回' });
+  if (m.media) for (const dir of ['uploads', 'audio']) fs.rmSync(path.join(config.dataDir, dir, path.basename(m.media)), { force: true });
+  db.prepare(`UPDATE messages SET retracted=1, text='', media=NULL, card=NULL WHERE id=?`).run(m.id);
+  logEvent(req.user.id, 'retract', {});
+  res.json({ ok: true });
 });
 
 // 語感回饋：長按角色的訊息 → 很像真人／怪怪的（＋他應該怎麼說）
