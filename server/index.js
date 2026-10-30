@@ -108,7 +108,9 @@ app.get('/api/auth/cohort', rateLimit('邀請碼查詢', 30, 15 * 60000), (req, 
 });
 
 app.post('/api/auth/recover', rateLimit('登入碼', 10, 15 * 60000), (req, res) => {
-  const code = String(req.body?.code || '').trim().toUpperCase();
+  // 容許小寫、空白、少打或多打「-」：都整理成 XXXX-XXXX
+  const raw = String(req.body?.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const code = raw.length === 8 ? `${raw.slice(0, 4)}-${raw.slice(4)}` : String(req.body?.code || '').trim().toUpperCase();
   const u = db.prepare('SELECT id, disabled FROM users WHERE recovery_code=?').get(code);
   if (!u) return res.status(400).json({ error: '找不到這組登入碼' });
   if (u.disabled) return res.status(400).json({ error: '這個帳號已停用，有問題請聯絡測試負責人' });

@@ -1,5 +1,5 @@
 // 伴旅 WithU — PWA front end (no build step).
-import { portraitSVG, sceneSVG, LOOK_OPTIONS, setPortraitStyle, stickerSVG, STICKER_LIST, mascotSVG, APP_THEMES } from './art.js';
+import { portraitSVG, sceneSVG, hasScene, LOOK_OPTIONS, setPortraitStyle, stickerSVG, STICKER_LIST, mascotSVG, APP_THEMES } from './art.js';
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -146,6 +146,11 @@ window.addEventListener('hashchange', route);
 // ======================================================================
 // 每次有新功能，在最上面加一筆；看過的人不會再跳出來，「我 → 設定 → 更新內容」可以再看一次。
 const WHATS_NEW = [
+  { v: '2026-10-30b', title: '多了 20 位新朋友', items: [
+    { title: '新角色', text: '男生女生各多了 10 位：剛上大學的新生、交換學生、廚師、空服員、圖書館員、髮型設計師……年紀從 18 歲到 40 幾歲都有。', route: '#/explore' },
+    { title: '登入碼可以存到瀏覽器', text: '在「我 → 設定 → 隱私與資料」按「存到瀏覽器」，下次登入時瀏覽器會幫你填好。輸入登入碼時，大小寫和「-」打錯也沒關係。' },
+    { title: '相遇的路上', text: '選好情境之後，會先帶你走一段路，不會再停在一個不動的畫面。' },
+  ] },
   { v: '2026-10-30', title: '可以捏臉了', items: [
     { title: '自己捏的角色可以選長相', text: '在「探索 → 自己捏一個」裡，打開「捏臉」可以選臉型、眼睛和氣質，他的照片會照你選的畫成插畫。不選也沒關係，系統會幫他長得獨一無二。', route: '#/explore' },
   ] },
@@ -302,24 +307,58 @@ function renderJoin() {
     try {
       const r = await api('/api/auth/join', { method: 'POST', body: { ...fd, ...pick, adult: !!fd.adult, aiAck: !!fd.aiAck, feedbackConsent: !!fd.feedbackConsent } });
       S.me = await api('/api/me');
+      // 用真的表單（帳號＋密碼欄位）顯示登入碼：按下去時瀏覽器會問要不要「儲存密碼」，下次登入自動填入
       app.innerHTML = `<div class="page" style="padding-bottom:32px"><h1>這是你的登入碼</h1>
         <p>換手機或清掉瀏覽器資料時，用它回來。之後也能在「我」裡面找到。</p>
-        <div class="code-box">${esc(r.recoveryCode)}</div>
-        <button class="btn block" id="go">好，去認識${TA()}</button></div>`;
-      $('#go').onclick = () => { location.hash = '#/meet'; };
+        <form id="saveF" action="#/meet" method="post" autocomplete="on">
+          <input class="sr-only" type="text" name="username" autocomplete="username" value="${esc(S.me.nickname || '伴旅')}" readonly tabindex="-1" aria-hidden="true">
+          <div class="code-box">${esc(r.recoveryCode)}</div>
+          <label class="field keep-field"><span class="small muted">給瀏覽器記住用（已經幫你填好）</span><input class="input" type="password" name="password" autocomplete="new-password" value="${esc(r.recoveryCode)}" readonly id="codeIn"></label>
+          <div class="row" style="gap:8px;margin:10px 0 4px"><button type="button" class="btn ghost grow" id="copyCode">複製</button><button type="button" class="btn ghost grow" id="keepCode">存到這個瀏覽器</button></div>
+          <p class="small muted">按「存到這個瀏覽器」或瀏覽器問你要不要儲存密碼時按「儲存」，下次登入會自動填好。</p>
+          <button class="btn block" id="go">好，去認識${TA()}</button></form></div>`;
+      $('#copyCode').onclick = () => copyText(r.recoveryCode);
+      $('#keepCode').onclick = async () => toast(await keepLoginCode(S.me.nickname, r.recoveryCode) ? '已經存好了' : '這個瀏覽器不支援直接存；按下面的按鈕時，瀏覽器問要不要儲存密碼，選「儲存」');
+      $('#saveF').onsubmit = (ev) => { ev.preventDefault(); keepLoginCode(S.me.nickname, r.recoveryCode, true); location.hash = '#/meet'; };
     } catch (err) { toast(err.message); }
   };
+}
+
+// 把登入碼存進瀏覽器的密碼管理（支援的瀏覽器才會成功；其他瀏覽器靠表單送出時的「儲存密碼」提示）
+async function keepLoginCode(name, code, quiet = false) {
+  try {
+    if (!window.PasswordCredential || !navigator.credentials?.store) return false;
+    await navigator.credentials.store(new PasswordCredential({ id: name || '伴旅', password: code, name: `伴旅 WithU・${name || ''}` }));
+    return true;
+  } catch { return false; }
+}
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); toast('已複製'); }
+  catch { toast('複製不了，請長按選取'); }
 }
 
 function renderRecover() {
   tabs.hidden = true;
   app.innerHTML = `<div class="page"><a class="icon-btn back" href="#/welcome" aria-label="返回">${icon('back')}</a>
     <h1>用登入碼回來</h1>
-    <form id="f"><label class="field"><span>登入碼</span><input class="input" name="code" placeholder="XXXX-XXXX" autocomplete="off" required></label>
+    <form id="f" method="post" autocomplete="on">
+      <input class="sr-only" type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true">
+      <label class="field"><span>登入碼</span><span class="pw-wrap"><input class="input" type="password" name="code" id="codeIn" placeholder="XXXX-XXXX" autocomplete="current-password" autocapitalize="characters" spellcheck="false" required><button type="button" class="linkbtn small" id="showCode">顯示</button></span></label>
+      <p class="small muted">之前存過的話，點一下輸入框，瀏覽器會幫你填好。</p>
     <button class="btn block">回來</button></form></div>`;
+  $('#showCode').onclick = () => { const i = $('#codeIn'); i.type = i.type === 'password' ? 'text' : 'password'; $('#showCode').textContent = i.type === 'password' ? '顯示' : '隱藏'; };
+  // Chrome／Android：直接從瀏覽器存的密碼裡拿（使用者確認後）
+  if (window.PasswordCredential && navigator.credentials?.get) {
+    navigator.credentials.get({ password: true, mediation: 'optional' }).then(c => { if (c?.password && !$('#codeIn')?.value) $('#codeIn').value = c.password; }).catch(() => {});
+  }
   $('#f').onsubmit = async (e) => {
     e.preventDefault();
-    try { await api('/api/auth/recover', { method: 'POST', body: { code: e.target.code.value } }); S.me = await api('/api/me'); location.hash = '#/chat'; }
+    const code = e.target.code.value;
+    try {
+      await api('/api/auth/recover', { method: 'POST', body: { code } }); S.me = await api('/api/me');
+      keepLoginCode(S.me.nickname, S.me.recoveryCode || code, true);
+      location.hash = '#/chat';
+    }
     catch (err) { toast(err.message); }
   };
 }
@@ -547,12 +586,50 @@ async function renderWho() {
   if (r.reunion) $('#reunion').onclick = () => { M.reunionRelId = r.reunion.relId; M.frame = r.reunion.frame; doMeet(); };
 }
 
+// 相遇前的過場：場景慢慢浮現、一句一句像旁白，讓等待像是在「走過去」而不是當機
+const GOING_LINES = {
+  cafe: ['推開咖啡廳的門，鈴鐺響了一下', '今天的豆子香味有點不一樣', '櫃檯後面站著一個沒見過的人'],
+  mrt: ['車廂比平常還擠', '列車晃了一下，你沒站穩', '「啊，抱歉——」'],
+  colleague: ['茶水間的咖啡機又在排隊', '隔壁部門好像來了新人', '有人在你旁邊停下腳步'],
+  store: ['加班到這麼晚，只想買個微波食品', '自動門「叮咚」一聲打開', '冰櫃前面已經站了一個人'],
+  rain: ['雨突然大了起來', '你跑到騎樓下躲雨', '旁邊的人也在甩著頭髮上的雨'],
+  friends: ['朋友說今天會多帶一個人來', '餐廳裡很熱鬧', '「來，跟你介紹一下」'],
+  gym: ['今天的音樂有點吵', '你在找空著的器材', '有人剛好也要用同一台'],
+  bookstore: ['書店裡很安靜', '你伸手去拿架上那本書', '另一隻手也同時伸了過來'],
+  exhibition: ['展場的燈光有點暗', '你在一幅畫前面停了很久', '旁邊有人輕聲說了一句話'],
+};
+const GOING_FREE = ['時間慢慢往那一天靠近', '那個地方的聲音越來越清楚', '你好像看見了一個熟悉又陌生的身影'];
+const GOING_REUNION = ['好久沒走這條路了', '轉角那間店還在', '有個背影，你一眼就認出來了'];
+function goingScreen() {
+  const lines = M.reunionRelId ? GOING_REUNION : GOING_LINES[M.scenarioId] || GOING_FREE;
+  const scene = M.scenarioId && hasScene(M.scenarioId) ? M.scenarioId : 'city';
+  app.innerHTML = `<div class="going"><div class="going-in">
+    <div class="going-scene">${sceneSVG(scene, { label: '' })}<div class="going-av">${avatar(M.frame, 64, { season: false })}</div></div>
+    <p class="hand going-line show" id="goLine">${esc(lines[0])}</p>
+    <div class="going-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+    <p class="small muted going-slow" id="goSlow" hidden>${ta(M.frame)}好像在整理自己，再等一下下</p>
+  </div></div>`;
+  let i = 0;
+  const line = $('#goLine');
+  const t = setInterval(() => {
+    if (!document.body.contains(line)) return clearInterval(t);
+    i++;
+    if (i < lines.length) { line.classList.remove('show'); void line.offsetWidth; line.textContent = lines[i]; line.classList.add('show'); }
+    if (i === 6) $('#goSlow').hidden = false; // 等太久時給一句安心的話
+  }, 2600);
+  return () => clearInterval(t);
+}
+
 async function doMeet() {
-  app.innerHTML = `<div class="going"><div>${avatar(M.frame, 72, { season: false })}<p class="hand" style="margin-top:18px">正在前往你們相遇的地方……</p></div></div>`;
+  const stop = goingScreen();
+  const started = Date.now();
   try {
     const r = await api('/api/meet', { method: 'POST', body: { templateId: M.templateId, custom: M.custom, scenarioId: M.scenarioId, scenarioText: M.scenarioText, reunionRelId: M.reunionRelId, mood: M.mood } });
-    location.hash = `#/chat/${r.relId}`;
+    // 太快的話稍微停一下，讓過場看得完第一句
+    const wait = 1800 - (Date.now() - started); if (wait > 0) await new Promise(res => setTimeout(res, wait));
+    stop(); location.hash = `#/chat/${r.relId}`;
   } catch (e) {
+    stop();
     const back = M.templateId && !M.reunionRelId && location.hash !== '#/meet/who' ? '#/meet/where' : (M.scenarioText ? '#/meet/scene' : null);
     if (M.scenarioText && e.data) {
       // 情境被擋：說明原因，給改寫版本，保留原本寫的內容
@@ -654,7 +731,7 @@ async function refreshBadge(rels) {
 function maybeAskNotify(rel) {
   try {
     if (S.askedNotify) return;
-    if ($('#sheet-root').innerHTML || !S.room || S.room.rel?.id !== rel.id) return; // 使用者正在看別的東西：下次再問，不要蓋掉
+    if (!S.me || location.hash !== `#/chat/${rel.id}` || $('#sheet-root').innerHTML || !S.room || S.room.rel?.id !== rel.id) return; // 使用者正在看別的東西：下次再問，不要蓋掉
     if (isIOS() && !isStandalone()) {
       if (localStorage.getItem('a2hsShown')) return;
       S.askedNotify = true; localStorage.setItem('a2hsShown', '1');
@@ -800,6 +877,11 @@ function postcardHtml(c, { large = false } = {}) {
 
 async function renderRoom(relId) {
   tabs.hidden = true;
+  // 聊天室重畫時（開始／結束一起做點什麼等），上一份畫面的輪詢要先停掉，
+  // 不然舊的輪詢會把訊息塞進已經不在畫面上的舊聊天室，看起來像訊息不見或重複
+  clearTimers();
+  const gen = S.roomGen = (S.roomGen || 0) + 1;
+  const live = () => S.roomGen === gen;
   let rel;
   try { rel = await api(`/api/rels/${relId}`); } catch (e) { toast(e.message); location.hash = '#/chat'; return; }
   if (location.hash !== `#/chat/${relId}`) return; // 等資料時已經換到別頁了
@@ -973,7 +1055,8 @@ async function renderRoom(relId) {
       locals().forEach(n => n.remove());
       await revealSequential(res.messages || [], { typing, typingAt });
     } catch (e) {
-      clearTimeout(readTimer); typing?.remove(); ok = e.status === 429 ? 'busy' : false; if (ok !== 'busy') toast(e.message);
+      clearTimeout(readTimer); typing?.remove(); ok = e.status === 429 ? 'busy' : false;
+      if (ok !== 'busy') { toast(e.message); setTimeout(() => pollNow(), 2500); } // 連線斷掉但伺服器可能已經回了：馬上再對一次
     } finally { S.room.sending = false; }
     return ok;
   }
@@ -1010,6 +1093,7 @@ async function renderRoom(relId) {
     chain = chain.then(async () => {
       try {
         item.id = (await req()).id;
+        if (item.id) node.dataset.sid = item.id; // 之後伺服器的同一則出現時，換掉這個本地泡泡
         // 照片：先沿用手機上的預覽，不用等伺服器的圖載完才看得到
         if (local.kind === 'photo' && local.media && item.id) (S.room.previews ||= {})[item.id] = local.media;
       }
@@ -1074,11 +1158,15 @@ async function renderRoom(relId) {
     return run;
   }
   async function revealNow(fresh, { typing = null, typingAt = 0 } = {}) {
+    if (!live()) { typing?.remove(); return; }
     let first = true, gotChar = false;
     for (const m of fresh) {
+      if (!live()) break;
       const prev = S.room.messages.at(-1);
-      if (claimed.has(m.id) || S.room.messages.some(x => x.id === m.id)) continue;
+      if (claimed.has(m.id) || S.room.messages.some(x => x.id === m.id)) { if (m.sender === 'user') stream.querySelector(`.local[data-sid="${m.id}"]`)?.remove(); continue; }
       claimed.add(m.id);
+      // 自己剛傳的那則：伺服器版本到了就拿掉本地的暫時泡泡（避免同一句出現兩次）
+      if (m.sender === 'user') stream.querySelector(`.local[data-sid="${m.id}"]`)?.remove();
       if (m.sender === 'char' && m.kind !== 'card') {
         gotChar = true;
         $('#pendingNote')?.remove();
@@ -1135,11 +1223,12 @@ async function renderRoom(relId) {
   }
 
   // poll for proactive messages while the room is open
-  S.timers.push(setInterval(async () => {
-    if (document.visibilityState !== 'visible' || S.room.sending || queue.length) return;
+  async function pollNow() {
+    if (!live() || document.visibilityState !== 'visible' || S.room.sending || queue.length) return;
     const lastId = S.room.messages.filter(m => typeof m.id === 'number').at(-1)?.id || 0;
-    try { const fresh = await api(`/api/rels/${relId}/messages?after=${lastId}`); if (fresh.length) await revealSequential(fresh); } catch {}
-  }, 8000));
+    try { const fresh = await api(`/api/rels/${relId}/messages?after=${lastId}`); if (fresh.length && live()) await revealSequential(fresh); } catch {}
+  }
+  S.timers.push(setInterval(pollNow, 8000));
   S.timers.push(setInterval(async () => {
     if (document.visibilityState !== 'visible' || S.room.sending) return;
     try { const r = await api(`/api/rels/${relId}`); S.room.presence = r.presence; $('#sub').innerHTML = sub(); } catch {}
@@ -2099,7 +2188,7 @@ async function renderSettings() {
 
     <h2>隱私與資料</h2>
     <div class="section">
-      <div class="row"><span class="grow">登入碼<div class="small muted">換裝置時用它回來</div></span><code>${esc(S.me.recoveryCode)}</code></div>
+      <div class="row"><span class="grow">登入碼<div class="small muted">換裝置時用它回來</div></span><code>${esc(S.me.recoveryCode)}</code><button class="btn ghost sm" id="copyCode">複製</button><button class="btn ghost sm" id="keepCode">存到瀏覽器</button></div>
       <div class="row"><span class="grow">下載我的資料</span><a class="btn ghost sm" href="/api/me/export" download>下載</a></div>
       <div class="row"><span class="grow">刪除帳號與所有資料</span><button class="btn danger sm" id="delAll">刪除</button></div>
       <div class="row"><span class="grow">系統整理的相處偏好<div class="small muted">${S.me.prefs?.likes?.length || S.me.prefs?.dislikes?.length ? [...(S.me.prefs.likes || []).map(x => '喜歡' + x.replace(/^喜歡/, '')), ...(S.me.prefs.dislikes || []).map(x => x.startsWith('不喜歡') ? x : '不喜歡' + x)].map(esc).join('・') : '還沒有。聊久一點，系統會整理你喜歡的聊天方式，讓新認識的人也懂你。'}<br>只記說話方式，不記你的私事。</div></span>${S.me.prefs ? '<button class="btn ghost sm" id="clrPrefs">清除</button>' : ''}</div>
@@ -2162,6 +2251,8 @@ async function renderSettings() {
       $$('[data-price]', sheet).forEach(c => c.onclick = () => { track('coming_soon_price', { item: item.key, price: Number(c.dataset.price) }); close(); toast('謝謝你告訴我們'); });
     });
   });
+  $('#copyCode').onclick = () => copyText(S.me.recoveryCode);
+  $('#keepCode').onclick = async () => toast(await keepLoginCode(S.me.nickname, S.me.recoveryCode) ? '已經存到這個瀏覽器' : '這個瀏覽器不支援直接存，請先複製下來保管');
   $('#replayTour').onclick = () => runTour(MAIN_TOUR(), { key: 'tourDone' });
   $('#replayNews').onclick = () => showWhatsNew();
   $('#delAll').onclick = async () => {
