@@ -777,3 +777,12 @@ button.pf-face { border:0; padding:0; cursor:zoom-in; }
 .keep-field input { letter-spacing: 3px; font-size: 14px; opacity: .7; }
 .pw-wrap { display: flex; gap: 8px; align-items: center; }
 .pw-wrap .input { flex: 1; letter-spacing: 2px; }
+
+/* 歡迎頁：新使用者／已有登入碼 */
+.entry-choice { display: grid; gap: 12px; margin: 8px 0 14px; }
+.entry { box-sizing: border-box; width: 100%; margin: 0; display: flex; flex-direction: column; gap: 4px; padding: 16px 18px; border-radius: 18px; text-decoration: none; text-align: left; transition: transform .15s ease; }
+.entry:active { transform: scale(.98); }
+.entry b { font-size: 18px; }
+.entry span { font-size: 13px; opacity: .8; }
+.entry.new { background: var(--ink, #3B3561); color: #fff; }
+.entry.back { background: var(--surface, #fff); color: var(--ink, #3B3561); border: 1.5px solid var(--line, rgba(0,0,0,.12)); }

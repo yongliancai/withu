@@ -1,5 +1,5 @@
 // Service worker: app-shell cache + push notifications.
-const VERSION = 'v24';
+const VERSION = 'v25';
 const SHELL = ['/', '/index.html', '/app.js', '/art.js', '/styles.css', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {

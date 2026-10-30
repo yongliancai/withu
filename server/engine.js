@@ -378,6 +378,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const world = await worldContext(persona, rel.id);
   const arc = arcContext(rel.id);
   input.push({ role: 'developer', content: contextBlock({
+    userLen: [...String(userText || '').replace(/（[^）]*）/g, '').replace(/\s+/g, '')].length,
     prefs: prefsLines(rel.user_id),
     world, arc, goals: db.prepare(`SELECT title, days, done FROM goals WHERE rel_id=? AND status='active'`).all(rel.id).map(g => `${g.title}（做到 ${j(g.done, []).length}/${g.days} 天）`),
     episodes: episodesFor(rel.id, userText).map(e => `${new Date(e.created_at).toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric' })}${e.tags ? `（${e.tags}）` : ''} ${e.summary}`),
@@ -426,7 +427,10 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const isProactive = trigger && !lateReply && !String(triggerKey || '').startsWith('nudge') ? 1 : 0;
   if (!trigger || lateReply) db.prepare(`UPDATE relationships SET char_read_id=(SELECT COALESCE(MAX(id),0) FROM messages WHERE rel_id=? AND sender='user'), pending_reply_at=NULL WHERE id=?`).run(rel.id, rel.id);
   // 一則泡泡裡有換行就拆成兩則（像真人分開傳）
-  const texts = (out.messages || []).flatMap(m => String(m.text || '').split(/\n+/)).map(x => x.trim()).filter(Boolean).slice(0, 4);
+  let texts = (out.messages || []).flatMap(m => String(m.text || '').split(/\n+/)).map(x => x.trim()).filter(Boolean).slice(0, 4);
+  // 剛認識最多 2 則、朋友最多 3 則（第一次相遇、危機、講電話例外）：超過就保留開頭和最後一則
+  const maxB = crisis || callMode || triggerKey === 'FIRST' ? 4 : rel.stage === 0 ? 2 : rel.stage === 1 ? 3 : 4;
+  if (texts.length > maxB) texts = [...texts.slice(0, maxB - 1), texts.at(-1)];
   if (!texts.length && !out.meal && !out.postcard) logIssue({ level: 'warn', source: 'llm', message: '角色這一輪沒有回任何話', detail: { trigger: triggerKey, tier, userText: userText ? userText.slice(0, 200) : null }, userId: rel.user_id, relId: rel.id });
   if (out.voice && voiceAllowed && texts.length) {
     const joined = texts.join(' ');

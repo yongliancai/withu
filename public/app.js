@@ -263,9 +263,11 @@ function renderWelcome() {
     <div class="hero-art">${sceneSVG('city', { label: '黃昏的城市' })}</div>
     <div class="mark">伴旅<span class="mark-en">WithU</span></div>
     <p class="lede">不只在 App 裡陪你聊天。<br>會報備、會陪你吃飯，也想看看你眼前的世界。</p>
-    <a class="btn block" href="#/join" style="text-align:center;text-decoration:none">開始</a>
-    <p class="fine">已經在別的裝置用過？<a href="#/recover">用登入碼回來</a><br>
-    測試版・對方是 AI 角色，不是真人・限 18 歲以上</p>
+    <div class="entry-choice">
+      <a class="entry new" href="#/join"><b>第一次來</b><span>拿邀請碼註冊，開始認識新朋友</span></a>
+      <a class="entry back" href="#/recover"><b>我已經有登入碼</b><span>換手機、換瀏覽器，或之前登出過</span></a>
+    </div>
+    <p class="fine">測試版・對方是 AI 角色，不是真人・限 18 歲以上</p>
   </div>`;
 }
 
@@ -274,6 +276,7 @@ function renderJoin() {
   app.innerHTML = `<div class="page" style="padding-bottom:32px">
     <a class="icon-btn back" href="#/welcome" aria-label="返回">${icon('back')}</a>
     <h1>先讓對方知道怎麼叫你</h1>
+    <p class="small muted" style="margin-top:-6px">之前用過了？<a href="#/recover">用登入碼回來</a>，不用重新註冊。</p>
     <form id="f">
       <label class="field"><span>邀請碼</span><input class="input" name="invite" autocomplete="off" required></label>
       <label class="field"><span>暱稱</span><input class="input" name="nickname" maxlength="16" required></label>
@@ -344,8 +347,9 @@ function renderRecover() {
     <form id="f" method="post" autocomplete="on">
       <input class="sr-only" type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true">
       <label class="field"><span>登入碼</span><span class="pw-wrap"><input class="input" type="password" name="code" id="codeIn" placeholder="XXXX-XXXX" autocomplete="current-password" autocapitalize="characters" spellcheck="false" required><button type="button" class="linkbtn small" id="showCode">顯示</button></span></label>
-      <p class="small muted">之前存過的話，點一下輸入框，瀏覽器會幫你填好。</p>
-    <button class="btn block">回來</button></form></div>`;
+      <p class="small muted">之前存過的話，點一下輸入框，瀏覽器會幫你填好。登入碼在註冊時給過你，也在「我 → 設定 → 隱私與資料」裡。</p>
+    <button class="btn block">回來</button></form>
+    <p class="small muted" style="margin-top:18px;text-align:center">第一次來？<a href="#/join">用邀請碼註冊</a></p></div>`;
   $('#showCode').onclick = () => { const i = $('#codeIn'); i.type = i.type === 'password' ? 'text' : 'password'; $('#showCode').textContent = i.type === 'password' ? '顯示' : '隱藏'; };
   // Chrome／Android：直接從瀏覽器存的密碼裡拿（使用者確認後）
   if (window.PasswordCredential && navigator.credentials?.get) {

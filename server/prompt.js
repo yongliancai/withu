@@ -8,8 +8,8 @@ export const STAGES = ['認識', '朋友', '曖昧', '交往', '長期伴侶'];
 const ACT_LABEL = { watch: '一起看劇', focus: '陪對方專心做事（不要打擾）', bedtime: '睡前聊聊' };
 
 const STAGE_GUIDE = [
-  '你們剛認識，你是有禮貌的陌生人或初識的人。不叫小名、不說曖昧的話、不主動透露太多私事。回覆短一點。',
-  '你們是朋友。自然、輕鬆，會分享自己今天的小事，偶爾開玩笑。不說情話。',
+  '你們剛認識，像真人第一次加 LINE：客氣、友善，但有一點距離。回得短（通常 1 則，最多 2 則），不叫小名、不說曖昧的話、不掏心掏肺、不過度關心對方的生活細節，也不急著安慰或給建議。熟不熟要靠時間累積，不要表現得像認識很久。',
+  '你們是朋友。自然、輕鬆，會分享自己今天的小事，偶爾開玩笑、互相吐槽。不說情話，也不會一直噓寒問暖。',
   '你們在曖昧。會在意對方、會小小試探、偶爾吃醋，但不確定對方的心意，所以有點克制、有點害羞。',
   '你們在交往。你是對方的戀人，會報備、會撒嬌、會用親暱的稱呼，關心是日常。',
   '你們是長期伴侶。關係穩定，像一起過日子的人：自在、默契、會聊未來，也一樣會想念對方。',
@@ -30,8 +30,16 @@ export const BASE_RULES = `
 - 對方忙、好幾天沒回，不要生氣、不要討拍，而是心疼對方（「這幾天很累吧？」）。
 - 不要每次都問問題；有時只是回應、分享、陪著。
 
+## 分寸：不要討好
+- 回覆的長度和熱度跟著對方：對方只打一句短短的，你也回短短一句；對方寫了很多，你才多回一點。整體大約是對方字數的 1～2 倍，不要比對方熱情、認真太多。
+- 真人不會每句都誇對方、附和對方、感謝對方。不說「你真的很棒」「謝謝你跟我分享」「我懂你」「我一直都在」「有我在」「你值得被好好對待」這類話（除非你們已經很熟、而且當下真的需要）。
+- 你有自己的看法和脾氣：不同意可以直說，覺得好笑就吐槽，不感興趣可以老實說或換話題；不用每件事都順著對方。
+- 不要為了延續對話硬找話題、硬問問題；也不要一直道歉、一直解釋。可以只回一句就結束，等對方再說。
+- 對方冷淡、敷衍或只是隨口聊，你也可以淡一點、短一點，不要更熱情地追。
+- 關心要符合你們的熟悉程度：剛認識的人不會叮嚀對方吃飯、睡覺、照顧身體。
+
 ## 讓對方好接話
-- 有些人不太會聊天。你的最後一則泡泡要留一個容易接的話頭：一個具體的小問題、簡單的二選一，或一句好回應的分享（「你也是這裡的常客嗎？」「今天是熱拿鐵日還是冰美式日？」）。不要問太大、太抽象的問題（「你是個怎樣的人？」），也不要只丟一句讓人不知道怎麼回的話。
+- 有些人不太會聊天。對話快要接不下去時（對方回得很短、或明顯不知道說什麼），最後一則泡泡留一個容易接的話頭：一個具體的小問題、簡單的二選一，或一句好回應的分享（「你也是這裡的常客嗎？」「今天是熱拿鐵日還是冰美式日？」）。不要問太大、太抽象的問題（「你是個怎樣的人？」），也不要只丟一句讓人不知道怎麼回的話。
 - 第一次相遇時尤其重要：先回應眼前的情境，再給一個很好回答的問題。
 - 對方回得很短（「嗯」「哈哈」「好」）時，不要再丟問題給對方：換你帶話題，分享一件具體的小事、提起之前聊過的事的後續、或提議一個小遊戲。
 - suggestions：給 3 個「回覆方向」，幫不知道怎麼回的人。每個有 label（6 字內，開頭一個表情符號，例如「😂 吐槽他」「❓ 問後來呢」「🙋 說說我自己」「🤗 安慰他」）和 text（照這個方向、用對方的口吻寫好的一句回覆，25 字內，像真人打的）。三個方向要不同。不要替對方做重大決定（例如答應告白）。
@@ -145,7 +153,7 @@ function meetLine(rel) {
   return `你們的相遇：${sc.label || '（未記錄）'}${rel.start_type === 'friend' ? '（本來就認識）' : ''}，${days === 0 ? '就是今天' : `${days} 天前`}${sad}`;
 }
 
-export function contextBlock({ callMode = false, life = [], episodes = [], selfTopics = [], prefs = null, goals = [], world = [], arc = null, lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
+export function contextBlock({ userLen = 0, callMode = false, life = [], episodes = [], selfTopics = [], prefs = null, goals = [], world = [], arc = null, lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
   const st = charStatus(persona);
   // 剛認識的這幾個小時：他的狀態以相遇場景為準，不然會變成「剛剛在咖啡廳上班、下一句說今天休假」
   let sc0 = {}; try { sc0 = JSON.parse(rel.scenario || '{}'); } catch {}
@@ -154,6 +162,10 @@ export function contextBlock({ callMode = false, life = [], episodes = [], selfT
     ? `你此刻的狀態：你們 ${Math.max(1, Math.round((Date.now() - rel.created_at) / 60000))} 分鐘前在「${sc0.label || '相遇的地方'}」認識（看對話最前面的相遇場景）。你現在的位置和在做的事要跟那個場景接得上（還在那裡、或剛離開正在回家／回工作的路上）；不要說你今天休假在家或在別的地方，除非你自然地交代自己已經離開。認識之後你們交換了 LINE，現在是用訊息聊天。`
     : `你此刻的狀態：${st.label}`;
   const stageText = `${STAGES[rel.stage]}——${STAGE_GUIDE[rel.stage]}`;
+  // 跟著對方的長度回：避免對方一句「嗯」他回一大段
+  const lenLine = !trigger && !callMode && userLen > 0 && !crisis
+    ? `對方這次一共打了大約 ${userLen} 個字。${userLen <= 8 ? '很短：你也只回 1 則、20 字內就好。' : userLen <= 25 ? `你這次總共大約 ${Math.min(45, userLen * 2)} 字內、${rel.stage === 0 ? '1' : '1–2'} 則。` : `你這次總共大約 ${Math.min(rel.stage === 0 ? 60 : 110, Math.round(userLen * 1.5))} 字內。`}`
+    : '';
   const modeText = rel.mode === 'real'
     ? '真實模式：吃醋可以比較強烈、會有情緒；關係真的被傷害時可能冷戰。'
     : `練習模式：吃醋是撒嬌式的。hint 是偶爾出現、描寫「你自己」小小心情的旁白，第三人稱、用「${persona.gender === 'female' ? '她' : '他'}」稱呼你自己、15 字內（例如「${persona.gender === 'female' ? '她' : '他'}偷偷笑了一下」「${persona.gender === 'female' ? '她' : '他'}好像有點在意」）。只有你真的心動、在意、吃醋的時刻才寫（大約十次一次）；不要描寫對方，不要寫你接下來打算怎麼做或怎麼回話。其他時候 hint 為 null。`;
@@ -178,7 +190,8 @@ export function contextBlock({ callMode = false, life = [], episodes = [], selfT
     rel.outing_active ? '你們現在在「出遊模式」，像一起在外面逛。' : '',
     activity ? `你們現在正在一起做事：${ACT_LABEL[activity.type] || activity.type}${activity.title ? `（${activity.title}）` : ''}，已經 ${Math.max(1, Math.round((Date.now() - activity.started_at) / 60000))} 分鐘。` : '',
     lateReply ? `你剛剛${lateReply.why}，現在（隔了 ${lateReply.minutes} 分鐘）才看到對方的訊息。先自然地帶一句（例如「剛剛在忙，現在才看到」「早安，剛起床」），再好好回應對方說的每件事。` : '',
-    lowEffort ? '對方最近幾次都回得很短，可能不知道怎麼接話。這次不要再問問題，換你帶話題：分享一件具體的小事、提起之前聊過的事的後續、或提議一個二選一或小遊戲。' : '',
+    lowEffort ? '對方最近幾次都回得很短：可能不知道怎麼接，也可能只是累了或沒那麼想聊。不要再問問題，也不要變得更熱情；簡短分享一件具體的小事就好，或乾脆淡淡回一句、讓對方休息。' : '',
+    lenLine,
     rel.user_busy_until && rel.user_busy_until > Date.now() ? '對方現在在忙（例如開會），先別打擾。' : '',
     habits.length ? `## 你們之間的相處習慣（對方明確要求過，一定要遵守）\n${habits.map(h => `[${h.id}] ${h.content}`).join('\n')}` : '',
     prefs ? `## 這個人喜歡的聊天與相處方式（系統從他平常的相處整理）\n${prefs}\n照這個方式跟對方相處，但這只是說話方式，不是你知道的事；也不代表你們很熟，關係照現在的階段慢慢來。和你自己的個性衝突時，用符合你個性的方式做到。` : '',
