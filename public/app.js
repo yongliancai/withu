@@ -1154,7 +1154,7 @@ async function renderRoom(relId) {
     d.id = 'pendingNote'; d.className = 'note pending-note';
     const P = displayName(rel.frame);
     d.textContent = p.presence?.code === 'dnd' ? `${P}睡了，醒來會回你` : p.presence?.code === 'busy' ? `${P}在上班，可能晚點回` : `${P}現在不在線上，等等會回你`;
-    stream.appendChild(d); stream.scrollTop = stream.scrollHeight;
+    stream.appendChild(d); typingToEnd(); stream.scrollTop = stream.scrollHeight;
   }
   if (rel.pendingReplyAt) showPendingNote({ presence: rel.presence });
 
@@ -1216,9 +1216,12 @@ async function renderRoom(relId) {
     div.className = 'local';
     div.innerHTML = messageHtml({ ...m, id: 'local', at: Date.now() }, rel, S.room.messages.at(-1));
     stream.appendChild(div);
+    typingToEnd();
     stream.scrollTop = stream.scrollHeight;
     return div;
   }
+  // 「正在輸入…」永遠在最下面：他打字時你又傳了一則，泡泡不會跑到你的訊息上面
+  function typingToEnd() { $$('.msg.typing', stream).forEach(t => stream.appendChild(t)); }
   function showTyping() {
     const d = document.createElement('div');
     d.className = 'msg him typing';
@@ -1261,6 +1264,7 @@ async function renderRoom(relId) {
       wrap.className = 'reveal';
       wrap.innerHTML = messageHtml(m, rel, prev);
       stream.appendChild(wrap);
+      typingToEnd();
       bindStream(wrap);
       stream.scrollTop = stream.scrollHeight;
       if (['ended', 'outing'].includes(m.card?.type) || (m.card?.type === 'activity')) { typing?.remove(); setTimeout(() => renderRoom(relId), 1500); return; }
