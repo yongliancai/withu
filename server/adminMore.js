@@ -12,7 +12,7 @@ import { STAGES } from './prompt.js';
 import { pastLife } from './lifelog.js';
 import { mainOf, photosOf, makeMain, makeLife, portraitFile, LIFE_COUNT } from './portraits.js';
 import fs from 'node:fs';
-import { runBugDigest, bugList, githubEnabled } from './bugwatch.js';
+import { runBugDigest, bugList, githubEnabled, closeBug } from './bugwatch.js';
 
 db.exec(`CREATE TABLE IF NOT EXISTS announcements (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,6 +93,7 @@ export function mountAdminMore(app) {
   // ---- 待修清單（自動回報的程式問題） ----
   A('get', '/bugs', (req, res) => res.json({ github: githubEnabled(), repo: process.env.GITHUB_REPO || '', list: bugList() }));
   A('post', '/bugs/run', async (req, res) => res.json(await runBugDigest()));
+  A('post', '/bugs/close', async (req, res) => { const r = await closeBug(String(req.body?.sig || '')); res.status(r.error ? 400 : 200).json(r); });
 
   // ---- 系統參數 ----
   A('get', '/settings', (req, res) => res.json(allSettings()));

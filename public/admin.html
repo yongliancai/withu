@@ -446,11 +446,19 @@ const VIEWS = {
       </tbody></table></div>`;
     (async () => {
       const b = await api('/bugs').catch(() => null); if (!b) return;
-      document.getElementById('bugSum').textContent = `　${b.list.length} 項・${b.github ? 'GitHub Issue：已連接（' + b.repo + '）' : 'GitHub Issue：未設定（見 docs/auto-fix.md）'}`;
+      const openN = b.list.filter(x => !x.closed_at).length;
+      document.getElementById('bugSum').textContent = `　待修 ${openN} 項・${b.github ? 'GitHub Issue：已連接（' + b.repo + '）' : 'GitHub Issue：未設定（見 docs/auto-fix.md）'}`;
       document.getElementById('bugList').innerHTML = `<p class="row-form"><button class="sm" id="bugRun">立刻整理${b.github ? '並送到 GitHub' : ''}</button></p>
-        <div class="wrap"><table><thead><tr><th>問題</th><th>來源</th><th>次數</th><th>最近</th><th>Issue</th></tr></thead><tbody>
-        ${b.list.map(x => `<tr><td class="text">${esc(x.title)}</td><td>${SRC[x.source] || esc(x.source)}</td><td>${x.count}</td><td class="nw">${dt(x.last_at)}</td><td>${x.issue_url ? `<a href="${esc(x.issue_url)}" target="_blank" rel="noopener">#${x.issue_number}</a>` : '—'}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">沒有待修的問題</td></tr>'}</tbody></table></div>`;
-      document.getElementById('bugRun').onclick = async () => { const r = await api('/bugs/run', 'POST'); toast(r.error ? '送到 GitHub 失敗：' + r.error : `整理完成：新開 ${r.filed} 個 Issue`); render(); };
+        <div class="wrap"><table><thead><tr><th>問題</th><th>來源</th><th>次數</th><th>最近</th><th>Issue</th><th>狀態</th></tr></thead><tbody>
+        ${b.list.map(x => `<tr${x.closed_at ? ' class="muted"' : ''}><td class="text">${esc(x.title)}</td><td>${SRC[x.source] || esc(x.source)}</td><td>${x.count}</td><td class="nw">${dt(x.last_at)}</td><td>${x.issue_url ? `<a href="${esc(x.issue_url)}" target="_blank" rel="noopener">#${x.issue_number}</a>` : '—'}</td>
+          <td class="nw">${x.closed_at ? `<span class="tag">已修好</span> <span class="small">${dt(x.closed_at)}</span>` : `<button class="sm" data-bugclose="${esc(x.sig)}">標記已處理</button>`}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">沒有待修的問題</td></tr>'}</tbody></table></div>
+        <p class="small muted">修正 PR 合併後，GitHub 會自動關掉 Issue；這裡每小時對一次，關掉的會變成「已修好」，相關的系統紀錄也會標成已處理。修好後又發生 3 次以上，會自動重新打開 Issue。</p>`;
+      document.querySelectorAll('[data-bugclose]').forEach(btn => btn.onclick = async () => {
+        if (!confirm('標成已處理？有 GitHub Issue 的話也會一起關掉。')) return;
+        const r = await api('/bugs/close', 'POST', { sig: btn.dataset.bugclose }).catch(e => ({ error: e.message }));
+        toast(r.error ? '失敗：' + r.error : `已處理（${r.resolved} 筆紀錄）`); render();
+      });
+      document.getElementById('bugRun').onclick = async () => { const r = await api('/bugs/run', 'POST'); toast(r.error ? '送到 GitHub 失敗：' + r.error : `整理完成：新開 ${r.filed} 個 Issue${r.closed ? `、${r.closed} 個已修好` : ''}${r.reopened ? `、${r.reopened} 個又發生` : ''}`); render(); };
     })();
     out.querySelectorAll('[data-f]').forEach(s => s.onchange = () => { f[s.dataset.f] = s.value; render(); });
     out.querySelectorAll('[data-log]').forEach(b => b.onclick = async () => {
