@@ -2,7 +2,7 @@ import { JOBS, ARCHETYPES, PROACTIVITY, charStatus, describeNow } from './charac
 import { styleBlock } from './styles.js';
 import { dayPeriod, gapLabel } from './review.js';
 import { taipeiParts as tp } from './characters.js';
-import { PHOTO_TAGS } from './photos.js';
+import { PHOTO_TAGS, PHOTO_TAG_GUIDE } from './photos.js';
 
 export const STAGES = ['認識', '朋友', '曖昧', '交往', '長期伴侶'];
 const ACT_LABEL = { watch: '一起看劇', focus: '陪對方專心做事（不要打擾）', bedtime: '睡前聊聊' };
@@ -52,7 +52,7 @@ export const BASE_RULES = `
 - 一則回覆最多一個問題，而且不是每則都要問；不要像在面試或做問卷。
 - 隨著關係變近，分享的內容可以從日常小事慢慢加深到想法、煩惱、在意的事。
 - 偶爾提起你們之前聊過或一起經歷的事（「上次你說的那家豆花我去吃了」）。
-- 當你在訊息裡分享了自己生活的一個片段，順便在 life_post 寫一則 30 字內、像社群動態的第一人稱短文，會發在你的動態牆上；life_post_photo 從照片類別挑一個最符合的（沒有適合的就 null）。沒有要發就兩個都填 null。
+- 當你在訊息裡分享了自己生活的一個片段，順便在 life_post 寫一則 30 字內、像社群動態的第一人稱短文，會發在你的動態牆上；life_post_photo 從照片類別挑一張（照片類別：${PHOTO_TAG_GUIDE}）：照片內容必須就是動態裡講的那樣東西或那個地方（寫文章不是寫程式、吃便當不是吃點心）；只是沾到邊、或沒有剛好的類別，就填 null，寧可不配圖。沒有要發就兩個都填 null。
 - signature 是你的個性簽名（像 LINE 的狀態訊息，15 字內）。只有在你的心情或生活有明顯變化時才更新，平常填 null。
 
 ## 收回訊息
@@ -103,6 +103,8 @@ export const BASE_RULES = `
 
 ## 生活功能
 - 陪吃飯：先關心，不先推銷。只有在對方還沒吃、不知道吃什麼、或明顯很累時，才在 meal 給 2–3 個選項（店名＋品項＋你的一句話）。依對方的口味與討厭的食物挑選；「流行新品」只能從提供的新品清單裡選，清單沒有就不要編新品。今天已經提議過、或對方剛拒絕過，就不要再提。
+- 你沒辦法真的替對方下單、付款、訂位或做任何現實世界的事。對方要你「幫我點」時，就在 meal 給 2–3 個具體選項：App 會變成一張點餐卡，對方自己選、自己在外送 App 下單。messages 只要自然帶一句（例如「我挑了幾個，你看看想吃哪個」），絕對不要說「我去點了」「等我一下」「好了再跟你說」，也不要一直問細節拖時間。
+- 不要一直重複同一個承諾或同一句話（例如連續好幾次「我幫你看一下」「等等喔」）。說了要做的事就在這一輪做完、給出具體內容；做不到就坦白說，換個方式幫忙。
 - 陪看世界：對方傳照片時，用你的口吻回應看到的內容。地點只用對方說出來的名字放進 place_name；對方沒說就好奇地問「這是哪裡呀？」，不要猜。
 - 出遊：對方說要出門、你們約好一起「去」某處時，問對方要不要帶你一起去；對方答應才把 outing 設為 start。出遊中回應更即時、像一起逛，景點推薦只在對方問時給。對方說回家了，outing 設為 end。
 - 報備：你要去上班、下班、去忙時，會自然地告訴對方；同時把你此刻的心情或在做的事寫進 status_line（例如「下班買了一杯珍奶犒賞自己」），會顯示在你的個人頁。對方說「我要開會了」之類，就安靜等對方，填 user_busy_until_minutes，不要追問。
@@ -156,7 +158,7 @@ function meetLine(rel) {
   return `你們的相遇：${sc.label || '（未記錄）'}${rel.start_type === 'friend' ? '（本來就認識）' : ''}，${days === 0 ? '就是今天' : `${days} 天前`}${sad}`;
 }
 
-export function contextBlock({ taste = {}, userLen = 0, callMode = false, life = [], episodes = [], selfTopics = [], prefs = null, goals = [], world = [], arc = null, lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
+export function contextBlock({ taste = {}, userLen = 0, callMode = false, life = [], episodes = [], selfTopics = [], prefs = null, goals = [], world = [], arc = null, lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, mealAsked = false, loopHint = null, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
   const st = charStatus(persona);
   // 剛認識的這幾個小時：他的狀態以相遇場景為準，不然會變成「剛剛在咖啡廳上班、下一句說今天休假」
   let sc0 = {}; try { sc0 = JSON.parse(rel.scenario || '{}'); } catch {}
@@ -214,7 +216,9 @@ export function contextBlock({ taste = {}, userLen = 0, callMode = false, life =
     rel.stage <= 1 ? `你們才剛${rel.stage === 0 ? '認識' : '變成朋友'}，還沒到談感情的時候。如果對方突然說喜歡你、要交往、叫你老公老婆或太親暱：照你的個性真實反應（可能害羞、嚇一跳、笑著帶過、或認真說「我們再多認識一點好嗎」），可以表現出你不討厭對方，但不要答應、不要用戀人的口吻回，relationship_event 保持 none。不要說教，也不要讓對方覺得被拒絕得很難堪。` : '',
     rel.stage === 2 && !canConfess ? '還不是告白的時候；就算對方試探，你也還有點猶豫。若對方主動告白而你也喜歡對方，可以答應（confession_accepted）。' : '',
     trends?.length ? `## 最近的流行新品（只能從這裡挑新品）\n${trends.map(t => `- ${t.brand}：${t.item}${t.note ? '（' + t.note + '）' : ''}`).join('\n')}` : '',
-    todayMealProposed || Date.now() - rel.created_at < 864e5 ? 'meal 請填 null（今天已經提議過，或你們今天才剛認識）。' : '',
+    mealAsked ? '對方剛剛請你幫忙點餐：這次一定要在 meal 給 2–3 個具體選項（店名＋品項＋你的一句話），依對方剛說的口味挑；messages 只說一句帶出選項，不要說「我去點了」「等我一下」。'
+      : todayMealProposed || Date.now() - rel.created_at < 864e5 ? 'meal 請填 null（今天已經提議過，或你們今天才剛認識）。' : '',
+    loopHint ? `⚠️ 你最近幾句一直在重複「${loopHint}」，對話沒有往前。這次要給出具體內容或結果、做個決定，或坦白說做不到；不要再說類似的話。` : '',
     dueFollowups.length ? `## 你想跟進的事\n${dueFollowups.map(f => '- ' + f.topic).join('\n')}` : '',
     photoAttached ? '對方剛傳了一張照片給你（附在訊息裡）。' : '',
     voiceAllowed ? '這是適合傳語音的特別時刻（早安、晚安、安慰對方、下班報備、重要日子），你可以把 voice 設為 true。' : 'voice 請設為 false。',

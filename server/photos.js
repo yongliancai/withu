@@ -47,7 +47,7 @@ export const PHOTO_TAGS = {
   clinic: ['診間', 'doctor clinic stethoscope desk'], classroom: ['教室', 'empty classroom desks blackboard'], studio_mic: ['錄音室', 'radio studio microphone'],
   bar_counter: ['酒吧吧台', 'cocktail bar counter bottles'], cocktail: ['調酒', 'cocktail glass bar'], florist_table: ['花藝工作台', 'florist workbench flowers'],
   sewing: ['縫紉', 'sewing machine tailor'], tattoo_studio: ['刺青工作室', 'tattoo studio'], camera: ['相機', 'film camera photography'],
-  laptop_code: ['寫程式', 'laptop code screen night'], lab: ['研究室', 'science laboratory bench'], vet_clinic: ['動物醫院', 'veterinary clinic dog'],
+  laptop_code: ['寫程式（螢幕上是程式碼）', 'laptop code screen night'], writing: ['寫文章、寫筆記', 'notebook pen writing desk'], snack: ['零食、點心', 'snacks chips cookies'], lab: ['研究室', 'science laboratory bench'], vet_clinic: ['動物醫院', 'veterinary clinic dog'],
   kindergarten: ['幼兒園', 'kindergarten toys classroom'], meeting_room: ['會議室', 'meeting room office'], stage_lights: ['舞台燈光', 'concert stage lights'],
   makeup: ['化妝台', 'makeup vanity table'], kitchen_pro: ['專業廚房', 'restaurant kitchen chef'], dessert_shop: ['甜點櫃', 'dessert shop display'],
   // 台灣在地
@@ -66,6 +66,19 @@ export const PHOTO_TAGS = {
   sunset_train: ['車窗夕陽', 'train window sunset'], cozy_bed: ['被窩', 'cozy bed blanket morning'], bookshelf_home: ['家裡的書架', 'home bookshelf plants'],
   stars: ['星空', 'starry night sky'], ocean_night: ['夜晚海邊', 'ocean at night moon'], walk_path: ['散步小路', 'park walking path trees'],
 };
+
+// 給模型看的「照片類別」：英文代號＝照片裡實際是什麼，讓它挑得準
+export const PHOTO_TAG_GUIDE = Object.entries(PHOTO_TAGS).map(([k, [zh]]) => `${k}=${zh}`).join('、');
+
+// 圖庫搜尋結果的說明（alt／標題）要跟搜尋字有關，不然不收：Openverse 很常回不相干的照片（搜便當給零食）
+const STOP = new Set(['night', 'table', 'city', 'home', 'cozy', 'morning', 'interior', 'view', 'street', 'taiwan', 'box', 'cup', 'window']);
+export function relevant(alt, query) {
+  if (!alt) return false;
+  const a = String(alt).toLowerCase();
+  const words = query.toLowerCase().split(/\s+/).filter(w => w.length >= 3 && !STOP.has(w));
+  if (!words.length) return true;
+  return words.some(w => a.includes(w.replace(/s$/, '')));
+}
 
 const MIN_PER_TAG = 6;
 
@@ -152,6 +165,7 @@ export async function fillLibrary({ force = false, only } = {}) {
           for (const p of await search(query)) {
             if (n >= MIN_PER_TAG - have && !force) break;
             if (has.get(name, p.extId, tag)) continue;
+            if (!relevant(p.alt, query)) continue;
             let url;
             try { url = name === 'pexels' ? p.src : await download(p.src); } catch { continue; }
             ins.run(tag, url, url, p.credit, p.creditUrl, name, p.extId, p.alt ? String(p.alt).slice(0, 200) : null, now());

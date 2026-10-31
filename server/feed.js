@@ -4,7 +4,7 @@ import { lifeContext } from './lifelog.js';
 import { S } from './settings.js';
 import { jsonCall } from './llm.js';
 import { personaBlock } from './prompt.js';
-import { PHOTO_TAGS, pickPhoto, photoById } from './photos.js';
+import { PHOTO_TAGS, PHOTO_TAG_GUIDE, pickPhoto, photoById } from './photos.js';
 import { taipeiParts, describeNow, charStatus } from './characters.js';
 import { toldOf, addTold, similarity } from './memory.js';
 import { presenceOf } from './presence.js';
@@ -58,7 +58,7 @@ export async function generatePost(rel, persona, moment) {
 你今天的生活手帳（動態內容要跟這裡一致，挑一件已經發生的事來發）：${lifeContext(rel.id).join('；') || '（沒有）'}
 - 第一人稱，20–60 字，像真人發文：具體、有畫面、有一點心情，可以有一兩個表情符號或 hashtag。
 - 內容是你自己的生活（可以延續「你生活中正在進行的事」，要有新進展），不要提到和你聊天的那個人，也不要寫對方的任何私事。
-- photo_tag 從這些類別挑一個最符合的照片：${TAG_LIST.join('、')}；這則不適合配照片就填 null。
+- photo_tag 從這些照片類別挑一張（代號＝照片裡實際是什麼）：${PHOTO_TAG_GUIDE}。照片內容必須就是文中講的東西或地方（寫文章不是寫程式、吃便當不是吃點心）；只是沾到邊、或沒有剛好的類別就填 null，寧可不配圖。
 - 不要和最近發過的重複：${recent.join('｜') || '（還沒發過）'}
 - told：用 20 字內摘要這則動態講的事，讓你之後聊天不會重講。
 只輸出 JSON。`,

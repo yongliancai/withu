@@ -346,6 +346,36 @@ function findRepeat(texts, recent) {
   return null;
 }
 
+// 繞圈圈：最近幾句一直在講同一件事（例如連續「我幫你點，等等」），句子短、換句話說，findRepeat 抓不到
+const cleanTxt = (x) => String(x).replace(/[^\p{Script=Han}A-Za-z0-9]/gu, '');
+function findLoop(texts, recent) {
+  const last = recent.slice(0, 4).map(cleanTxt);
+  for (const t of texts) {
+    const c = cleanTxt(t);
+    // 同一段 4 個字出現在最近 2 句以上，或同一段 3 個字出現在最近 3 句以上（「我幫你…」講第四次）
+    for (const [n, need] of [[4, 2], [3, 3]]) {
+      for (let i = 0; i + n <= c.length; i++) {
+        const w = c.slice(i, i + n);
+        if (new Set(w).size < n - 1) continue; // 哈哈哈哈、嗯嗯嗯
+        if (last.filter(r => r.includes(w)).length >= need) return w;
+      }
+    }
+  }
+  return null;
+}
+// 只看最近 2 小時內他說的話（隔天再說同一句不算繞圈圈）
+const recentCharWithin = (relId, ms = 2 * 3600e3) => db.prepare(`SELECT text FROM messages WHERE rel_id=? AND sender='char' AND kind IN ('text','voice') AND text IS NOT NULL AND retracted=0 AND created_at>? ORDER BY id DESC LIMIT 6`).all(relId, now() - ms).map(r => r.text);
+
+// 對方請他幫忙點餐：最近 20 分鐘內說過，而且之後還沒出現點餐卡
+const MEAL_ASK = /(幫我|替我|你來|你幫|可以幫|要不要幫)[^，。？！?!]{0,3}(點|叫|訂)(餐|外送|外賣|飯|吃|便當|東西|一下|個|吧|嗎|啊|$)|點(餐|外送|外賣)|叫外送|訂便當/;
+function mealAskedRecently(relId) {
+  const since = now() - 20 * 60000;
+  const ask = db.prepare(`SELECT text, created_at FROM messages WHERE rel_id=? AND sender='user' AND kind='text' AND created_at>? ORDER BY id DESC LIMIT 8`).all(relId, since).find(m => MEAL_ASK.test(m.text || ''));
+  if (!ask) return false;
+  const card = db.prepare(`SELECT 1 FROM messages WHERE rel_id=? AND kind='card' AND card LIKE '%"type":"meal"%' AND created_at>=?`).get(relId, ask.created_at);
+  return !card;
+}
+
 /**
  * One exchange. Either `userText`/`imageMedia` (she sent something) or `trigger` (he reaches out).
  * Returns the list of new message ids.
@@ -371,6 +401,8 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const lover = loverOf(rel.user_id, rel.id);
   const canConfess = rel.stage === 2 && rel.affection >= 70 && !lover;
   const todayMealProposed = rel.meal_proposed_date === t.date;
+  const mealAsked = !trigger && !callMode && !crisis && mealAskedRecently(rel.id);
+  const loopHint = !trigger ? (() => { const r = recentCharWithin(rel.id); return findLoop([r[0] || ''], r.slice(1)) || findLoop([r[1] || ''], r.slice(2)); })() : null;
   const voiceAllowed = !callMode && rel.stage >= 1 && voicesToday(rel.user_id) < config.voiceDailyCap &&
     (voiceMoment || crisis || SAD.test(userText) || /語音/.test(userText));
 
@@ -394,7 +426,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     userStatus: statusLine(db.prepare('SELECT * FROM users WHERE id=?').get(rel.user_id) || user), userPosts: postsVisibleTo(rel),
     lastTimes: db.prepare(`SELECT MAX(CASE WHEN sender='user' THEN created_at END) u, MAX(CASE WHEN sender='char' THEN created_at END) c FROM messages WHERE rel_id=? AND id<=?`).get(rel.id, before),
     rel, persona, user, memories, worldEvents, otherChars: otherCharsFor(rel), trends: loadTrends(),
-    dueFollowups, trigger, crisis, todayMealProposed, voiceAllowed, canConfess, loverElsewhere: lover, photoAttached: !!imageMedia,
+    dueFollowups, trigger, crisis, todayMealProposed, mealAsked, loopHint, voiceAllowed, canConfess, loverElsewhere: lover, photoAttached: !!imageMedia,
   }) });
 
   const call = () => jsonCall({
@@ -408,6 +440,13 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   if (rep) {
     logIssue({ level: 'auto', source: 'llm', message: '角色重複說了類似的話，已自動重寫', detail: { now: rep.now, before: rep.before, trigger: triggerKey }, userId: rel.user_id, relId: rel.id });
     input.push({ role: 'developer', content: `你剛剛想說「${rep.now}」，但這跟你之前說過的「${rep.before}」太像了。換一個說法，或聊新的東西、說新的進展。` });
+    try { out = await call(); } catch { /* keep the first answer */ }
+  }
+  // 繞圈圈：這次又要講最近一直在講的那件事（例如第四次「我幫你點，等等」）就重寫一次
+  const loop = !rep && !trigger && findLoop((out.messages || []).map(m => String(m.text || '')), recentCharWithin(rel.id));
+  if (loop) {
+    logIssue({ level: 'auto', source: 'llm', message: '角色一直在講同一件事（繞圈圈），已自動重寫', detail: { phrase: loop, trigger: triggerKey }, userId: rel.user_id, relId: rel.id });
+    input.push({ role: 'developer', content: `你最近已經好幾次說「${loop}」之類的話，對話一直沒有往前。這次不要再說類似的話：直接給出具體內容或結果、做個決定，或坦白說你做不到。${mealAsked ? '對方在請你幫忙點餐：在 meal 給 2–3 個具體選項，messages 只說一句帶出選項。' : ''}` });
     try { out = await call(); } catch { /* keep the first answer */ }
   }
   // 發送前檢查：主動訊息、晚回的訊息要對得上現在的時間和最近的對話
@@ -555,7 +594,8 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     if (h && h.length <= 18 && !meta && !recentHint) addMessage(rel, 'system', 'card', { card: { type: 'hint', text: h } });
   }
 
-  if (out.meal && out.meal.options?.length >= 2 && !todayMealProposed && !crisis && now() - rel.created_at > 864e5) {
+  // 對方主動請他幫忙點（mealAsked）：今天提過、剛認識也照樣給卡片
+  if (out.meal && out.meal.options?.length >= 2 && !crisis && (mealAsked || (!todayMealProposed && now() - rel.created_at > 864e5))) {
     addMessage(rel, 'char', 'card', { card: buildMealCard(out.meal.options) });
     db.prepare('UPDATE relationships SET meal_proposed_date=? WHERE id=?').run(t.date, rel.id);
     logEvent(rel.user_id, 'meal_propose', { rel: rel.id });
