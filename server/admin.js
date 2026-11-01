@@ -1,23 +1,14 @@
 // Test-phase metrics: retention, daily messages, token use, cost per user, and willingness-to-pay signals.
 import { db, j } from './db.js';
 import { config } from './config.js';
+import { sumUsd } from './budget.js';
 
 const DAY = 864e5;
 
 function costTwd(rows) {
-  const p = config.price;
-  let usd = 0;
-  for (const r of rows) {
-    if (r.kind === 'tts') { usd += r.units * p.ttsPerChar; continue; }
-    if (r.kind === 'stt') { usd += (r.units / 60) * p.sttPerMin; continue; }
-    if (r.kind === 'image') { usd += r.units * p.imageLow; continue; }
-    if (r.kind === 'portrait') { usd += r.units * p.imageHigh; continue; }
-    const good = r.model === config.modelGood;
-    const inP = good ? p.goodIn : p.cheapIn, cP = good ? p.goodCached : p.cheapCached, oP = good ? p.goodOut : p.cheapOut;
-    usd += ((r.input_tokens - r.cached_tokens) * inP + r.cached_tokens * cP + r.output_tokens * oP) / 1e6;
-  }
-  return Math.round(usd * p.usdToTwd * 100) / 100;
+  return Math.round(sumUsd(rows) * config.price.usdToTwd * 100) / 100;
 }
+const IMG = new Set(['image', 'portrait']);
 
 // cohort: 'f' (女性向), 'm' (男性向) or 'all'
 export function adminStats(cohort = 'all') {
@@ -65,6 +56,8 @@ export function adminStats(cohort = 'all') {
     if (d.price !== undefined) paid[k].prices.push(d.price); else paid[k].clicks++;
   }
   const usageRows = mine(db.prepare('SELECT * FROM usage').all());
+  // 不屬於任何使用者的花費：照片庫 AI 生圖、官方角色照片、功能檢查（只在「全部」時算進來）
+  const sysRows = cohort === 'all' ? db.prepare('SELECT * FROM usage WHERE user_id IS NULL').all() : [];
   const totalsMap = {};
   for (const r of usageRows) {
     const k = `${r.kind}|${r.model}`;
@@ -99,7 +92,10 @@ export function adminStats(cohort = 'all') {
     habitsAdded: inWeek(`SELECT user_id FROM memories WHERE created_at>=? AND kind='style'`),
     mealsChosen: inWeek(`SELECT user_id FROM events WHERE created_at>=? AND name='meal_choose'`),
     mealsDeclined: inWeek(`SELECT user_id FROM events WHERE created_at>=? AND name='meal_decline'`),
-    costTwd: costTwd(usageRows.filter(r => r.created_at >= wk)),
+    costTwd: costTwd([...usageRows, ...sysRows].filter(r => r.created_at >= wk)),
+    systemCostTwd: costTwd(sysRows.filter(r => r.created_at >= wk)),
+    imageCostTwd: costTwd([...usageRows, ...sysRows].filter(r => r.created_at >= wk && IMG.has(r.kind))),
+    images: [...usageRows, ...sysRows].filter(r => r.created_at >= wk && IMG.has(r.kind)).reduce((a, r) => a + (r.units || 0), 0),
   };
   // 使用者最常提出的相處習慣（看出整體規則哪裡需要調整），只取前 12 條
   const habitCounts = {};
@@ -116,6 +112,8 @@ export function adminStats(cohort = 'all') {
     generatedAt: new Date().toISOString(), mock: config.mock, users: users.length,
     retention: { d1: retention(1), d7: retention(7), d30: retention(30) },
     perUser, comingSoon: paid, usageTotals: totals,
-    totalCostTwd: costTwd(usageRows),
+    totalCostTwd: costTwd([...usageRows, ...sysRows]),
+    systemCostTwd: costTwd(sysRows),
+    imageCostTwd: costTwd([...usageRows, ...sysRows].filter(r => IMG.has(r.kind))),
   };
 }

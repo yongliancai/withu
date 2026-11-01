@@ -112,7 +112,7 @@ const VIEWS = {
         <div class="kpi"><b>${pct(d.retention.d7)}</b><span>D7 留存</span></div>
         <div class="kpi"><b>${pct(d.retention.d30)}</b><span>D30 留存</span></div>
         <div class="kpi"><b>${avg('userMsgsPerDay')}</b><span>每人每天傳的訊息</span></div>
-        <div class="kpi"><b>NT$${d.totalCostTwd}</b><span>累計模型成本</span></div>
+        <div class="kpi"><b>NT$${d.totalCostTwd}</b><span>累計模型成本（含生圖 NT$${d.imageCostTwd ?? 0}）</span></div>
       </div>
       <h2>本週摘要（最近 7 天）</h2>
       <div class="kpis">
@@ -125,7 +125,8 @@ const VIEWS = {
         <div class="kpi"><b>${d.weekly.feedback}</b><span>意見回饋</span></div>
         <div class="kpi"><b>${d.weekly.crisis}</b><span>危機事件</span></div>
         <div class="kpi"><b>${d.weekly.breakups}</b><span>分手</span></div>
-        <div class="kpi"><b>NT$${d.weekly.costTwd}</b><span>本週成本</span></div>
+        <div class="kpi"><b>NT$${d.weekly.costTwd}</b><span>本週成本${d.weekly.systemCostTwd ? `（含系統 NT$${d.weekly.systemCostTwd}）` : ''}</span></div>
+        <div class="kpi"><b>NT$${d.weekly.imageCostTwd ?? 0}</b><span>本週生圖（${d.weekly.images ?? 0} 張）</span></div>
       </div>
       <div class="card" style="margin-top:12px"><b>每週檢查</b>
         <p class="small" style="margin:6px 0 0">1. 主動訊息回覆率偏低（低於 40%）→ 到「官方角色」調整語氣，或把頻率改少。<br>
@@ -499,7 +500,7 @@ Object.assign(VIEWS, {
     const c = await api('/costs');
     const st = c.state, r = c.usdToTwd;
     const max = Math.max(0.01, ...c.daily.map(d => d.usd));
-    const KIND = { chat: '聊天回覆', proactive: '主動訊息', memory: '記憶整理', lifelog: '生活日誌', lifedigest: '每月大事記', post: '動態', arc: '生活連續劇', review: '發送前檢查', summary: '對話摘要', shape: '個性整理', prefs: '相處偏好', scene: '相遇場景', scenario: '自訂情境', tts: '語音合成', stt: '語音轉文字', react: '回應使用者動態', comment: '留言', letter: '告別信', travelogue: '遊記', share: '分享角色', style: '說話風格', schedule: '作息', scene_photo: '相遇照片', dislike: '不喜歡', image: '圖片生成' };
+    const KIND = { chat: '聊天回覆', proactive: '主動訊息', memory: '記憶整理', lifelog: '生活日誌', lifedigest: '每月大事記', post: '動態', arc: '生活連續劇', review: '發送前檢查', summary: '對話摘要', shape: '個性整理', prefs: '相處偏好', scene: '相遇場景', scenario: '自訂情境', tts: '語音合成', stt: '語音轉文字', react: '回應使用者動態', comment: '留言', letter: '告別信', travelogue: '遊記', share: '分享角色', style: '說話風格', schedule: '作息', scene_photo: '相遇照片', dislike: '不喜歡', image: '生圖：照片庫', portrait: '生圖：角色照片' };
     out.innerHTML = `${c.mock ? '<p class="muted">測試模式（沒有接 OpenAI），花費都是 0。</p>' : ''}
       <div class="kpis">
         <div class="kpi"><b>US$${st.dayUsd}</b><span>今天（約 NT$${twd(st.dayUsd, r)}）${st.dailyLimit ? `・預算 ${st.dayPct}%` : ''}</span></div>
@@ -511,6 +512,10 @@ Object.assign(VIEWS, {
       <h2>這個月花在哪裡</h2>
       <div class="wrap"><table><thead><tr><th>用途</th><th>美元</th><th>約台幣</th></tr></thead><tbody>
       ${c.byKind.map(k => `<tr><td>${esc(KIND[k.kind] || k.kind)}</td><td>${k.usd}</td><td>${twd(k.usd, r)}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">還沒有資料</td></tr>'}</tbody></table></div>
+      <h2>這個月的生圖</h2>
+      <div class="wrap"><table><thead><tr><th>用途</th><th>張數</th><th>美元</th><th>約台幣</th><th>其中系統</th></tr></thead><tbody>
+      ${(c.images || []).map(k => `<tr><td>${esc(k.label)}</td><td>${k.n}</td><td>${k.usd}</td><td>${twd(k.usd, r)}</td><td>US$${k.systemUsd}</td></tr>`).join('')}</tbody></table></div>
+      <p class="small muted">「系統」是不屬於任何使用者的花費（照片庫補圖、官方角色照片、功能檢查），這個月共 US$${c.systemUsd}（約 NT$${twd(c.systemUsd, r)}），已算進上面的總額。每張單價：照片庫 US$${c.price?.imageLow}、角色照片 US$${c.price?.imageHigh}，可在 .env 用 PRICE_IMAGE_LOW／PRICE_IMAGE_HIGH 調整。</p>
       <h2>這個月花最多的使用者</h2>
       <div class="wrap"><table><thead><tr><th>暱稱</th><th>美元</th><th>約台幣</th><th></th></tr></thead><tbody>
       ${c.top.map(u => `<tr><td>${esc(u.nickname)}</td><td>${u.usd}</td><td>${twd(u.usd, r)}</td><td><button class="sm ghost" data-u="${u.id}">看這個人</button></td></tr>`).join('') || '<tr><td colspan="4" class="muted">還沒有資料</td></tr>'}</tbody></table></div>`;
