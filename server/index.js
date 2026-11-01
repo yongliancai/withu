@@ -125,6 +125,11 @@ app.post('/api/auth/logout', auth, (req, res) => {
 });
 
 // ---------- me ----------
+// 部署後的健康檢查：伺服器有起來、資料庫讀得到（不含任何資料）
+app.get('/api/health', (req, res) => {
+  try { db.prepare('SELECT 1').get(); res.json({ ok: true }); } catch { res.status(500).json({ ok: false }); }
+});
+
 app.get('/api/me', auth, (req, res) => {
   const u = req.user;
   res.json({ id: u.id, nickname: u.nickname, callName: u.call_name, recoveryCode: u.recovery_code, settings: j(u.settings, {}),

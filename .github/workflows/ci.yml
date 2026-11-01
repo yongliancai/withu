@@ -1,0 +1,31 @@
+# 每個 PR 和 main 都跑：語法檢查＋用測試模式把伺服器開起來，確認首頁和健康檢查正常
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 語法檢查
+        run: for f in server/*.js public/app.js public/art.js public/sw.js; do node --check "$f"; done
+      - name: 測試模式啟動
+        run: |
+          export DATA_DIR=$(mktemp -d) ADMIN_TOKEN=ci PORT=5099 OPENAI_API_KEY=
+          node server/index.js > server.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf localhost:5099/api/health && break; sleep 1; done
+          curl -sf localhost:5099/api/health
+          curl -sf localhost:5099/ | grep -q '<nav id="tabs"'
+          code=$(curl -s -o /dev/null -w '%{http_code}' localhost:5099/api/me); test "$code" = 401
+      - if: failure()
+        run: cat server.log || true
