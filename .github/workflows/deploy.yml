@@ -1,0 +1,62 @@
+# main 的 CI 通過後，自動到主機執行 ./deploy.sh；部署後健康檢查失敗就自動退回上一版。
+# 需要在 GitHub → Settings → Secrets and variables → Actions 設定（說明在 docs/auto-deploy.md）：
+#   DEPLOY_HOST、DEPLOY_USER、DEPLOY_KEY（部署專用的 SSH 私鑰，主機上用 scripts/deploy-gate.sh 綁住只能部署）、
+#   DEPLOY_KNOWN_HOSTS（主機指紋）、HEALTH_URL（例如 https://liancai.fun/api/health）；DEPLOY_PORT 可選。
+name: Deploy
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - name: 檢查設定
+        id: cfg
+        env:
+          H: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          if [ -n "$H" ]; then echo "ready=true" >> "$GITHUB_OUTPUT"; else echo "::notice::還沒設定部署用的 secrets（見 docs/auto-deploy.md），這次略過自動部署"; fi
+      - name: 準備 SSH
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          KEY: ${{ secrets.DEPLOY_KEY }}
+          KNOWN: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+      - name: 部署
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          H: ${{ secrets.DEPLOY_HOST }}
+          U: ${{ secrets.DEPLOY_USER }}
+          P: ${{ secrets.DEPLOY_PORT || '22' }}
+        run: ssh -i ~/.ssh/deploy -p "$P" -o StrictHostKeyChecking=yes "$U@$H" deploy
+      - name: 健康檢查
+        id: health
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          URL: ${{ secrets.HEALTH_URL }}
+        run: |
+          for i in $(seq 1 12); do curl -sf "$URL" && exit 0; sleep 5; done
+          exit 1
+      - name: 健康檢查失敗：退回上一版
+        if: failure() && steps.health.outcome == 'failure'
+        env:
+          H: ${{ secrets.DEPLOY_HOST }}
+          U: ${{ secrets.DEPLOY_USER }}
+          P: ${{ secrets.DEPLOY_PORT || '22' }}
+        run: ssh -i ~/.ssh/deploy -p "$P" -o StrictHostKeyChecking=yes "$U@$H" rollback
+      - if: always()
+        run: rm -f ~/.ssh/deploy
