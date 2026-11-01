@@ -21,6 +21,7 @@ export const SETTING_DEFS = [
   { key: 'affDailyCap', group: '關係節奏', label: '好感一天最多加多少', type: 'int', min: 1, max: 100, def: 15 },
   // 主動訊息
   { key: 'proactiveMult', group: '主動訊息', label: '角色主動找人的頻率（倍數）', type: 'num', min: 0, max: 3, def: 1, help: '1 = 預設；0.5 = 減半；0 = 完全不主動' },
+  { key: 'idlePauseDays', group: '主動訊息', label: '使用者幾天沒打開 App，就暫停他的角色主動傳訊息、發動態、生活更新', type: 'num', min: 0, max: 60, def: 3, help: '對方一打開 App 就自動恢復；0 = 不暫停。省費用，也避免對方回來時累積一大堆訊息' },
   { key: 'stickerGapTurns', group: '主動訊息', label: '貼圖：至少隔幾輪才再傳', type: 'int', min: 1, max: 30, def: 5 },
   // 語音通話
   { key: 'callMinStage', group: '語音通話', label: '關係到哪個階段才能打電話（0 認識 1 朋友 2 曖昧 3 交往）', type: 'int', min: 0, max: 4, def: 2 },

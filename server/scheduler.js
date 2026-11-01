@@ -63,6 +63,8 @@ async function tickRel(rel, user, t, userSentToday) {
   const persona = getPersona(rel);
   const log = j(rel.proactive_log, {});
   const today = log.date === t.date ? log : { date: t.date, sent: {}, count: 0 };
+  // 暫停期間過期的跟進（「明天報告順利嗎」放了一個禮拜）：回來時不要再問
+  db.prepare('UPDATE followups SET done=1 WHERE rel_id=? AND done=0 AND due_at<?').run(rel.id, now() - 3 * 864e5);
 
   // Outing auto-ends after 3 quiet hours.
   if (rel.outing_active && rel.last_user_msg_at && now() - rel.last_user_msg_at > 3 * 3600e3) {
@@ -154,7 +156,10 @@ export async function tick() {
   try {
     const t = taipeiParts();
     const dayStart = now() - t.minutes * 60000;
-    const users = db.prepare('SELECT * FROM users WHERE COALESCE(disabled,0)=0').all();
+    // 好幾天沒打開 App 的人：他的角色先暫停（主動訊息、動態、生活日誌、連續劇都不跑），一上線就恢復
+    const idleMs = (Number(S('idlePauseDays')) || 0) * 864e5;
+    const users = db.prepare('SELECT * FROM users WHERE COALESCE(disabled,0)=0').all()
+      .filter(u => !idleMs || now() - (u.last_active_at || u.created_at) < idleMs);
     for (const user of users) {
       const rels = db.prepare(`SELECT * FROM relationships WHERE user_id=? AND status='active' AND blocked=0`).all(user.id);
       const sent = { count: db.prepare(`SELECT COUNT(*) n FROM messages WHERE user_id=? AND sender='char' AND proactive=1 AND created_at>=?`).get(user.id, dayStart).n };

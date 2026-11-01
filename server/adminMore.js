@@ -119,6 +119,13 @@ export function mountAdminMore(app) {
     for (const r of mRows) byKind[r.kind] = (byKind[r.kind] || 0) + rowUsd(r);
     const byUser = {};
     for (const r of mRows) if (r.user_id) byUser[r.user_id] = (byUser[r.user_id] || 0) + rowUsd(r);
+    // 生圖：張數與花費；系統（不屬於任何使用者）與使用者分開看
+    const IMG = { image: '照片庫／功能檢查', portrait: '角色照片（主照、生活照）' };
+    const images = Object.entries(IMG).map(([k, label]) => {
+      const rs = mRows.filter(r => r.kind === k);
+      return { kind: k, label, n: rs.reduce((a, r) => a + (r.units || 0), 0), usd: usd(sumUsd(rs)), systemUsd: usd(sumUsd(rs.filter(r => !r.user_id))) };
+    });
+    const systemUsd = usd(sumUsd(mRows.filter(r => !r.user_id)));
     const top = Object.entries(byUser).sort((a, b) => b[1] - a[1]).slice(0, 15).map(([uid, v]) => {
       const u = db.prepare('SELECT nickname FROM users WHERE id=?').get(uid);
       return { id: uid, nickname: u?.nickname || '（已刪除）', usd: usd(v) };
@@ -127,7 +134,7 @@ export function mountAdminMore(app) {
       state: { ...st, dayUsd: usd(st.dayUsd), monthUsd: usd(st.monthUsd) }, usdToTwd: config.price.usdToTwd, mock: config.mock,
       daily: Object.entries(daily).sort().map(([d, v]) => ({ day: d, usd: usd(v) })),
       byKind: Object.entries(byKind).sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ kind: k, usd: usd(v) })),
-      top,
+      top, images, systemUsd, price: { imageLow: config.price.imageLow, imageHigh: config.price.imageHigh },
     });
   });
 
