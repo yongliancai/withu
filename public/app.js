@@ -960,7 +960,8 @@ async function renderRoom(relId) {
   // 不然舊的輪詢會把訊息塞進已經不在畫面上的舊聊天室，看起來像訊息不見或重複
   clearTimers();
   const gen = S.roomGen = (S.roomGen || 0) + 1;
-  const live = () => S.roomGen === gen;
+  // 還在這間聊天室的畫面上：沒有被別的聊天室取代，也沒有離開到聊天列表等其他頁（stream 在下面建立後才會用到）
+  const live = () => S.roomGen === gen && !!stream?.isConnected;
   let rel;
   try { rel = await api(`/api/rels/${relId}`); } catch (e) { toast(errMsg(e)); location.hash = '#/chat'; return; }
   if (location.hash !== `#/chat/${relId}`) return; // 等資料時已經換到別頁了
@@ -1124,8 +1125,9 @@ async function renderRoom(relId) {
         typing?.remove();
         locals().forEach(n => n.remove());
         await revealSequential(res.messages || [], {});
+        if (!live()) return; // 等回覆時已經離開聊天室：畫面已換掉，不要再改舊的標題列
         S.room.presence = res.pending.presence;
-        $('#sub').innerHTML = sub();
+        $('#sub') && ($('#sub').innerHTML = sub());
         showPendingNote(res.pending);
         return;
       }
@@ -1323,7 +1325,7 @@ async function renderRoom(relId) {
   S.timers.push(setInterval(pollNow, 8000));
   S.timers.push(setInterval(async () => {
     if (document.visibilityState !== 'visible' || S.room.sending) return;
-    try { const r = await api(`/api/rels/${relId}`); S.room.presence = r.presence; $('#sub').innerHTML = sub(); } catch {}
+    try { const r = await api(`/api/rels/${relId}`); if (!live()) return; S.room.presence = r.presence; $('#sub') && ($('#sub').innerHTML = sub()); } catch {}
   }, 60000));
 
   function markRead() {
