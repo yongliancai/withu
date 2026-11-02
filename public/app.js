@@ -1018,6 +1018,9 @@ async function renderRoom(relId) {
   // 回覆建議：他最後一則訊息附的 2–3 個好接的回覆
   function drawSuggest() {
     $('#suggest')?.remove();
+    // 回覆動畫還在跑時就離開了聊天室（例如回到聊天列表）：輸入框已經不在畫面上，不要畫
+    const composer = $('#composer');
+    if (!composer || !stream.isConnected) return;
     if (S.me?.settings?.showSuggestions === false) return;
     const last = S.room.messages.filter(m => typeof m.id === 'number' && m.kind !== 'card' && m.kind !== 'sticker' || (m.card && ['meal', 'pin_request', 'postcard'].includes(m.card.type))).at(-1);
     if (!last || last.sender !== 'char' || !last.suggest?.length) return;
@@ -1026,7 +1029,7 @@ async function renderRoom(relId) {
     const items = last.suggest.map(x => typeof x === 'string' ? { label: x, text: x } : x);
     // 先只放一顆小按鈕，按了才展開三個方向：不讓人覺得「預設就是要講這些」
     box.innerHTML = `<button class="chip sug-toggle" aria-expanded="false">💡 不知道怎麼回？</button>`;
-    $('#composer').before(box);
+    composer.before(box);
     $('.sug-toggle', box).onclick = () => {
       box.innerHTML = items.map((x, i) => `<button class="chip" data-i="${i}" title="${esc(x.text)}">${esc(x.label)}</button>`).join('');
       bindChips();
@@ -1270,6 +1273,7 @@ async function renderRoom(relId) {
       if (['ended', 'outing'].includes(m.card?.type) || (m.card?.type === 'activity')) { typing?.remove(); setTimeout(() => renderRoom(relId), 1500); return; }
     }
     typing?.remove();
+    if (!stream.isConnected) return; // 等回覆動畫時已經離開聊天室：畫面已換掉，不要再改舊的標題列和建議
     if (gotChar) { S.room.presence = { code: 'online', label: '上線中' }; $('#sub') && ($('#sub').innerHTML = sub()); refreshReads(); setTimeout(() => maybeAskNotify(rel), 1800); }
     markRead();
     S.room.drawSuggest?.();
