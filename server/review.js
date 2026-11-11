@@ -49,6 +49,8 @@ export function recentLines(relId, n = 14) {
  * Returns a reason string when he should stay quiet.
  */
 export function shouldHoldProactive(rel, persona, key, ts = Date.now()) {
+  // 還沒交換聯絡方式（當面相遇中、還在決定、或沒有交換）：他沒辦法傳訊息給對方
+  { let sc = {}; try { sc = JSON.parse(rel.scenario || '{}'); } catch {} if (sc.phase && sc.phase !== 'chat') return '你們還沒交換聯絡方式'; }
   if (key === 'followup' || key === 'focus_end') {
     if (charStatus(persona, ts).code === 'sleeping') return '他在睡覺，醒來再跟進';
     return null;

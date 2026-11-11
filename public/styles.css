@@ -799,3 +799,10 @@ button.pf-face { border:0; padding:0; cursor:zoom-in; }
 
 /* 已收回的訊息 */
 .retracted { text-align: center; font-size: 12px; color: var(--muted); margin: 8px auto; padding: 4px 12px; border-radius: 999px; background: color-mix(in srgb, var(--line) 60%, transparent); width: fit-content; }
+
+/* 當面相遇：置中的對白框（交換聯絡方式前），和聊天泡泡分開 */
+.face { max-width: 84%; margin: 10px auto; padding: 10px 14px 11px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); box-shadow: 0 1px 3px rgba(0,0,0,.06); text-align: left; }
+.face.me { background: var(--paper); border-style: dashed; }
+.face .face-who { display: block; font-size: 12px; opacity: .6; margin-bottom: 2px; letter-spacing: .04em; }
+.face p { margin: 0; font-size: 16px; line-height: 1.55; }
+.exchange-card { text-align: center; }

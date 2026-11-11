@@ -27,6 +27,7 @@ import { crisisSignal } from './safety.js';
 import { episodesList } from './memory.js';
 import { topicsFor, GAMES, ACTIVITIES, LEAD_REASON, EMOTIONS, pokeReason , EMOTION_GROUPS, BODY_FEELINGS, DIRECTIONS, candidateWords, unsureReason} from './topics.js';
 import { seedOfficial, meet, sharePreview, publishShare, cleanupOrphans } from './meet.js';
+import { encounterOf, setEncounter, makeEncounterCard, OPENINGS } from './encounter.js';
 import { startScheduler, tick } from './scheduler.js';
 import { pushEnabled } from './push.js';
 import { adminStats } from './admin.js';
@@ -226,7 +227,17 @@ import { execSync } from 'node:child_process';
 const APP_VERSION = (() => { try { return execSync('git rev-parse --short HEAD', { cwd: path.join(__dirname, '..'), stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { return String(Date.now()); } })();
 app.get('/api/version', (req, res) => { res.setHeader('Cache-Control', 'no-store'); res.json({ v: APP_VERSION }); });
 
-app.get('/api/meta', (req, res) => res.json({ jobs: JOBS, archetypes: ARCHETYPES, proactivity: PROACTIVITY, voices: VOICES, scenarios: SCENARIOS, hues: AVATAR_HUES, stages: STAGES, moods: MOODS, categories: CATEGORIES, emotions: EMOTIONS, emotionGroups: EMOTION_GROUPS, bodyFeelings: BODY_FEELINGS, directions: DIRECTIONS }));
+app.get('/api/meta', (req, res) => res.json({ jobs: JOBS, archetypes: ARCHETYPES, proactivity: PROACTIVITY, voices: VOICES, scenarios: SCENARIOS, hues: AVATAR_HUES, stages: STAGES, moods: MOODS, categories: CATEGORIES, emotions: EMOTIONS, emotionGroups: EMOTION_GROUPS, bodyFeelings: BODY_FEELINGS, directions: DIRECTIONS,
+  openings: Object.fromEntries(Object.entries(OPENINGS).map(([k, v]) => [k, v.label])) }));
+
+// 開頭偏好：哪種開頭後來聊得最久（每段關係使用者傳了幾則），推薦當預設；資料不夠就用上次選的
+app.get('/api/opening-pref', auth, (req, res) => {
+  const rows = db.prepare(`SELECT json_extract(scenario,'$.opening') o, user_msg_count n, created_at FROM relationships WHERE user_id=? AND json_extract(scenario,'$.opening') IS NOT NULL ORDER BY created_at DESC`).all(req.user.id);
+  const by = {};
+  for (const r of rows) (by[r.o] ||= []).push(r.n);
+  const scored = Object.entries(by).filter(([, ns]) => ns.length >= 2).map(([o, ns]) => [o, ns.reduce((a, b) => a + b, 0) / ns.length]).sort((a, b) => b[1] - a[1]);
+  res.json({ recommended: scored[0]?.[0] || rows[0]?.o || 'him', basis: scored.length ? 'longest' : rows.length ? 'last' : 'default' });
+});
 
 const publicFrame = (f) => ({ name: f.name, gender: f.gender, age: f.age, nationality: f.nationality, jobLabel: f.jobLabel, job: f.job,
   archetype: f.archetype, archetypeLabel: ARCHETYPES[f.archetype]?.label, look: f.look, proactivity: f.proactivity, appearance: f.appearance,
@@ -329,6 +340,7 @@ function relSummary(rel) {
     last: last ? { text: last.retracted ? (last.sender === 'user' ? '你已收回訊息' : '已收回訊息') : last.kind === 'voice' ? '［語音訊息］' : last.kind === 'photo' ? '［照片］' : last.kind === 'sticker' ? '［貼圖］' : last.text, at: last.created_at, sender: last.sender } : null,
     unread, endedAt: rel.ended_at, createdAt: rel.created_at,
     scenarioId: (() => { const sc = j(rel.scenario, {}); return sc.id || SCENARIOS.find(x => x.label === sc.label)?.id || null; })(),
+    phase: j(rel.scenario, {}).phase || 'chat', entry: j(rel.scenario, {}).entry || null,
   };
 }
 
@@ -361,6 +373,7 @@ const busyRels = new Set();
 app.post('/api/rels/:id/messages', auth, upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'voice', maxCount: 1 }]), wrap(async (req, res) => {
   const rel = ownRel(req, res); if (!rel) return;
   if (rel.status !== 'active') return res.status(400).json({ error: '這段關係已經結束了' });
+  { const ph = j(rel.scenario, {}).phase; if (ph === 'deciding' || ph === 'parted') return res.status(400).json({ error: '你們還沒交換聯絡方式' }); }
   const quiet = req.body?.quiet === true || req.body?.quiet === '1';
   if (!quiet && busyRels.has(rel.id)) return res.status(429).json({ error: `${ta(getPersona(rel))}還在回上一則` });
   if (!quiet) busyRels.add(rel.id);
@@ -403,7 +416,7 @@ app.post('/api/rels/:id/messages', auth, upload.fields([{ name: 'photo', maxCoun
     }
     const out = await replyOrDefer(req.user, rel, { userText: text, imageMedia });
     const rows = db.prepare('SELECT * FROM messages WHERE rel_id=? AND id>? ORDER BY id').all(rel.id, before);
-    res.json({ messages: rows.map(msgOut), ...out });
+    res.json({ messages: rows.map(msgOut), ...out, phase: j(db.prepare('SELECT scenario FROM relationships WHERE id=?').get(rel.id)?.scenario, {}).phase || 'chat' });
   } finally {
     if (!quiet) busyRels.delete(rel.id);
   }
@@ -425,7 +438,7 @@ app.post('/api/rels/:id/reply', auth, wrap(async (req, res) => {
     const imageMedia = pend.filter(m => m.kind === 'photo' && m.media).at(-1)?.media || null;
     const out = await replyOrDefer(req.user, rel, { userText, imageMedia });
     const rows = db.prepare(`SELECT * FROM messages WHERE rel_id=? AND id>? AND (sender!='user' OR id<=?) ORDER BY id`).all(rel.id, since, upto);
-    res.json({ messages: rows.map(msgOut), ...out });
+    res.json({ messages: rows.map(msgOut), ...out, phase: j(db.prepare('SELECT scenario FROM relationships WHERE id=?').get(rel.id)?.scenario, {}).phase || 'chat' });
   } finally {
     busyRels.delete(rel.id);
   }
@@ -489,6 +502,40 @@ async function replyOrDefer(user, rel, { userText = '', imageMedia = null, trigg
 }
 
 // 記事本：你們一起的約定與清單
+// 依心情認識：當面聊完後，由使用者決定要不要交換 LINE
+app.post('/api/rels/:id/exchange', auth, wrap(async (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const enc = encounterOf(rel);
+  if (enc.phase !== 'deciding') return res.status(400).json({ error: '現在不用決定這個' });
+  const accept = !!req.body?.accept;
+  db.prepare(`UPDATE messages SET card=json_set(card, '$.done', ?) WHERE rel_id=? AND kind='card' AND card LIKE '%"type":"exchange"%'`).run(accept ? 'yes' : 'no', rel.id);
+  if (accept) {
+    addMessage(rel, 'system', 'scene', { text: '你們交換了 LINE。' });
+    setEncounter(rel.id, { phase: 'chat' });
+  } else {
+    addMessage(rel, 'system', 'scene', { text: `你們沒有交換聯絡方式，各自離開了。也許哪天還會在那裡遇到${ta(getPersona(rel))}。` });
+    setEncounter(rel.id, { phase: 'parted' });
+  }
+  logEvent(req.user.id, 'exchange', { rel: rel.id, accept });
+  res.json({ ok: true });
+}));
+
+// 沒交換聯絡方式的人：再去那裡看看，可能會再遇到
+app.post('/api/rels/:id/reencounter', auth, wrap(async (req, res) => {
+  const rel = ownRel(req, res); if (!rel) return;
+  const enc = encounterOf(rel);
+  if (enc.phase !== 'parted') return res.status(400).json({ error: '現在不能這樣做' });
+  const persona = getPersona(rel);
+  const card = await makeEncounterCard({ userId: req.user.id, frame: persona, label: `${enc.sc.label || '上次的地方'}（你們之前在這裡見過一次，這次又遇到）`, roles: '', scene: enc.sc, entry: 'mood', opening: 'him', startFriend: false });
+  addMessage(rel, 'system', 'scene', { text: card.narration });
+  setEncounter(rel.id, { phase: 'in_person', faceTurns: 0, card: { incident: card.incident, reason_type: card.reason_type, reason_to_talk: card.reason_to_talk, contact_exchange: card.contact_exchange } });
+  let lastId = null;
+  for (const line of card.opener) lastId = addMessage(rel, 'char', 'text', { text: line, card: { face: true }, reason: 'reencounter' });
+  if (lastId && card.suggestions?.length) db.prepare('UPDATE messages SET suggest=? WHERE id=?').run(JSON.stringify(card.suggestions), lastId);
+  logEvent(req.user.id, 'reencounter', { rel: rel.id });
+  res.json({ ok: true });
+}));
+
 app.get('/api/rels/:id/notes', auth, (req, res) => {
   const rel = ownRel(req, res); if (!rel) return;
   res.json(db.prepare('SELECT id, author, text, done, created_at at FROM notes WHERE rel_id=? ORDER BY done, id DESC').all(rel.id));
@@ -691,7 +738,7 @@ app.post('/api/rels/:id/nudge', auth, wrap(async (req, res) => {
     const out = await replyOrDefer(req.user, rel, { trigger: reason, triggerKey: `nudge_${kind}` });
     if (act && !out.pending) startActivity(db.prepare('SELECT * FROM relationships WHERE id=?').get(rel.id), persona, act);
     const rows = db.prepare('SELECT * FROM messages WHERE rel_id=? AND id>? ORDER BY id').all(rel.id, before);
-    res.json({ messages: rows.map(msgOut), ...out });
+    res.json({ messages: rows.map(msgOut), ...out, phase: j(db.prepare('SELECT scenario FROM relationships WHERE id=?').get(rel.id)?.scenario, {}).phase || 'chat' });
   } finally { busyRels.delete(rel.id); }
 }));
 
@@ -803,7 +850,7 @@ app.post('/api/rels/:id/poke', auth, wrap(async (req, res) => {
     logEvent(req.user.id, 'poke', { rel: rel.id, emotion: e.id, count, ...(e.id === 'unsure' ? { level: cardExtra.level, dir: cardExtra.dir, picked: !!cardExtra.word } : {}) });
     const out = await replyOrDefer(req.user, rel, { trigger: reason || pokeReason(e, count), triggerKey: 'nudge_poke' });
     const rows = db.prepare('SELECT * FROM messages WHERE rel_id=? AND id>? ORDER BY id').all(rel.id, before);
-    res.json({ messages: rows.map(msgOut), ...out });
+    res.json({ messages: rows.map(msgOut), ...out, phase: j(db.prepare('SELECT scenario FROM relationships WHERE id=?').get(rel.id)?.scenario, {}).phase || 'chat' });
   } finally { busyRels.delete(rel.id); }
 }));
 

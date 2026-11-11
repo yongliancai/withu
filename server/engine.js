@@ -16,6 +16,7 @@ import { buildMealCard, loadTrends } from './ordering.js';
 import { crisisSignal, crisisLevel, HELP_CARD } from './safety.js';
 import { planTurn, planBlock } from './planner.js';
 import { reviewReply, stripNarration } from './turncheck.js';
+import { encounterOf, setEncounter, faceBlock, shouldWrap } from './encounter.js';
 import { taipeiParts, JOBS } from './characters.js';
 import { notify } from './push.js';
 import { mockTurn } from './mock.js';
@@ -391,6 +392,15 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const t = taipeiParts();
   // 危機分級（關鍵字＋內容審核）和天氣同時跑，不增加延遲
   const planning = !trigger && !callMode && !lateReply;
+  // 當面相遇階段：還沒交換聯絡方式，對話用當面的方式進行，2–4 輪後收尾
+  const enc = encounterOf(rel);
+  const face = enc.phase === 'in_person' && !trigger && !callMode && !!enc.card;
+  const faceTurn = face ? enc.faceTurns + 1 : 0;
+  const faceWrap = face && shouldWrap({ turn: faceTurn, userText });
+  if (face) {
+    setEncounter(rel.id, { faceTurns: faceTurn });
+    db.prepare(`UPDATE messages SET card='{"face":true}' WHERE rel_id=? AND sender='user' AND kind='text' AND card IS NULL AND id>(SELECT COALESCE(MAX(id),0) FROM messages WHERE rel_id=? AND sender='char')`).run(rel.id, rel.id);
+  }
   const worldP = worldContext(persona, rel.id);
   const level = !trigger && userText ? await crisisLevel(userText) : 'none';
   const crisis = !trigger && (crisisSignal(userText) || level === 'high');
@@ -421,7 +431,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const arc = arcContext(rel.id);
   // 回合規劃：先決定這一輪要做什麼（分享自己的事、接舊話題、開新話題…），再寫回覆
   const planP = planning ? planTurn({
-    rel, persona, user, userText, crisis, lowEffort: lowEffortStreak(rel.id),
+    rel, persona, user, userText, crisis, lowEffort: lowEffortStreak(rel.id), encounter: enc.card ? { reason: enc.card.reason_to_talk, incident: enc.card.incident, face } : null,
     material: {
       life: lifeContext(rel.id), arc, told: toldOf(rel.id), threads: persona.threads || [],
       followups: dueFollowups.map(f => f.topic), selfTopics: selfTopicsToday(rel.id).map(x => `${x.topic}（${x.n} 次）`),
@@ -445,6 +455,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   }) });
   const plan = await planP;
   if (plan) input.push({ role: 'developer', content: planBlock(plan) });
+  if (face) input.push({ role: 'developer', content: faceBlock({ card: enc.card, entry: enc.entry, turn: faceTurn, wrap: faceWrap, persona }) });
   if (level === 'low' && !crisis) input.push({ role: 'developer', content: '對方的話裡可能有一點低落或傷害自己的念頭（沒有很明確）。先溫柔地接住、關心對方現在的感受，不要開玩笑、不要轉移話題，也不要急著叫對方去求助；如果對方說得更明白，就切換到支持模式。' });
 
   const call = () => jsonCall({
@@ -472,7 +483,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   if (planning && !crisis && !rewritten) {
     const draft = (out.messages || []).map(m => String(m.text || '').trim()).filter(Boolean);
     if (draft.length) {
-      const fixed = await reviewReply({ rel, persona, user, userText, texts: draft, plan });
+      const fixed = await reviewReply({ rel, persona, user, userText, texts: draft, plan, face });
       if (fixed.join('\n') !== draft.join('\n')) out.messages = fixed.map(text => ({ text }));
     }
   }
@@ -491,6 +502,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   }
 
   // 講電話時：不傳語音檔、貼圖、建議回覆、點餐卡（由通話自己把文字念出來）
+  if (face) { out.voice = false; out.sticker = null; out.meal = null; out.postcard = null; out.activity = null; out.outing = 'none'; out.choice = null; out.goal = null; out.note = null; }
   if (callMode) { out.voice = false; out.sticker = null; out.suggestions = []; out.meal = null; out.choice = null; out.goal = null; out.postcard = null; }
 
   // ---------- apply ----------
@@ -523,7 +535,17 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     if (media) addMessage(rel, 'char', 'voice', { text: joined, media, proactive: isProactive, reason: triggerKey });
     else texts.forEach(tx => addMessage(rel, 'char', 'text', { text: tx, proactive: isProactive, reason: triggerKey }));
   } else {
-    texts.forEach(tx => addMessage(rel, 'char', 'text', { text: tx, proactive: isProactive, reason: triggerKey }));
+    texts.forEach(tx => addMessage(rel, 'char', 'text', { text: tx, proactive: isProactive, reason: triggerKey, card: face ? { face: true } : null }));
+  }
+  // 當面相遇收尾：交換聯絡方式（依心情認識的人自己決定要不要換）
+  if (faceWrap) {
+    if (enc.entry === 'mood') {
+      addMessage(rel, 'system', 'card', { card: { type: 'exchange', name: persona.name } });
+      setEncounter(rel.id, { phase: 'deciding' });
+    } else {
+      addMessage(rel, 'system', 'scene', { text: '你們交換了 LINE。' });
+      setEncounter(rel.id, { phase: 'chat' });
+    }
   }
 
   // 好感一天最多加 affDailyCap（後台可調）：聊再多，感情也要靠時間慢慢累積
