@@ -806,3 +806,34 @@ button.pf-face { border:0; padding:0; cursor:zoom-in; }
 .face .face-who { display: block; font-size: 12px; opacity: .6; margin-bottom: 2px; letter-spacing: .04em; }
 .face p { margin: 0; font-size: 16px; line-height: 1.55; }
 .exchange-card { text-align: center; }
+
+/* 前導劇情（輕量視覺小說）：場景插圖、旁白打字、角色淡入 */
+.vn { position: fixed; inset: 0; z-index: 60; background: #111; overflow: hidden; animation: vnIn .5s ease both; }
+.vn.out { animation: vnOut .45s ease both; }
+.vn-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; animation: vnPan 18s ease-in-out both; }
+.vn-svg { display: flex; align-items: center; background: #cfd6e0; }
+.vn-svg svg { width: 100%; height: auto; }
+.vn-fx { position: absolute; inset: 0; pointer-events: none; }
+.vn.fx-night .vn-fx { background: linear-gradient(180deg, rgba(20,24,60,.45), rgba(10,10,30,.25)); }
+.vn.fx-dusk .vn-fx { background: linear-gradient(180deg, rgba(255,150,90,.18), rgba(120,60,120,.18)); }
+.vn.fx-rain .vn-fx { background-image: repeating-linear-gradient(105deg, rgba(255,255,255,.0) 0 14px, rgba(255,255,255,.28) 14px 15px, rgba(255,255,255,0) 15px 38px);
+  background-size: 120px 220px; animation: vnRain .55s linear infinite; opacity: .55; }
+.vn-who { position: absolute; left: 50%; bottom: 31%; transform: translate(-50%, 12px); opacity: 0; transition: opacity .9s ease, transform .9s ease; }
+.vn-who.in { opacity: 1; transform: translate(-50%, 0); }
+.vn-who img, .vn-who svg { width: 132px; height: 132px; border-radius: 50%; object-fit: cover; border: 3px solid rgba(255,255,255,.85); box-shadow: 0 8px 24px rgba(0,0,0,.3); display: block; }
+.vn-box { position: absolute; left: 14px; right: 14px; bottom: calc(18px + env(safe-area-inset-bottom)); min-height: 120px; padding: 16px 18px 26px;
+  border-radius: 16px; background: rgba(255,255,255,.9); color: #2a2633; box-shadow: 0 8px 30px rgba(0,0,0,.25); cursor: pointer; backdrop-filter: blur(6px); }
+.vn-box.say { background: rgba(255,252,246,.95); }
+.vn-name { position: absolute; top: -13px; left: 16px; padding: 3px 12px; border-radius: 999px; background: var(--accent, #6E4C7E); color: #fff; font-size: 13px; }
+.vn-text { margin: 0; font: 16px/1.8 var(--hand, inherit); white-space: pre-wrap; }
+.vn-box.say .vn-text { font-family: var(--sans, inherit); }
+.vn-next { position: absolute; right: 16px; bottom: 8px; font-size: 11px; opacity: .5; animation: vnBlink 1.2s ease-in-out infinite; }
+.vn-skip, .vn-sound { position: absolute; top: calc(14px + env(safe-area-inset-top)); padding: 6px 14px; border-radius: 999px; border: 0; background: rgba(0,0,0,.35); color: #fff; font-size: 13px; }
+.vn-skip { right: 14px; } .vn-sound { left: 14px; }
+.scene-img img { width: 100%; max-height: 240px; object-fit: cover; border-radius: 14px; display: block; }
+@keyframes vnIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes vnOut { to { opacity: 0; } }
+@keyframes vnPan { from { transform: scale(1.06); } to { transform: scale(1); } }
+@keyframes vnRain { from { background-position: 0 0; } to { background-position: -40px 220px; } }
+@keyframes vnBlink { 50% { opacity: .15; } }
+@media (prefers-reduced-motion: reduce) { .vn, .vn-bg, .vn.fx-rain .vn-fx, .vn-next { animation: none; } .vn-who { transition: none; } }
