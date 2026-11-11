@@ -17,6 +17,7 @@ import { crisisSignal, crisisLevel, HELP_CARD } from './safety.js';
 import { planTurn, planBlock } from './planner.js';
 import { reviewReply, stripNarration } from './turncheck.js';
 import { encounterOf, setEncounter, faceBlock, shouldWrap } from './encounter.js';
+import { syncTalkFromTemplate } from './persona.js';
 import { taipeiParts, JOBS } from './characters.js';
 import { notify } from './push.js';
 import { mockTurn } from './mock.js';
@@ -52,6 +53,8 @@ export function getPersona(rel) {
     if (p.signature === undefined) p.signature = tf.signature || '';
     p.look = p.look || tf.look;
   }
+  // 人設細節：官方角色的模板在背景補好之後帶進來
+  if (!p.talk?.filled && c.template_id) { const t = syncTalkFromTemplate(c); if (t) p.talk = t; }
   // 對方是夜貓／輪班：一般角色也會晚一點睡
   const owl = !!j(db.prepare('SELECT settings FROM users WHERE id=?').get(rel.user_id)?.settings, {}).nightOwl;
   return { ...p, _owl: owl, _char: c };

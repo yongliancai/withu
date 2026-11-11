@@ -28,6 +28,7 @@ import { episodesList } from './memory.js';
 import { topicsFor, GAMES, ACTIVITIES, LEAD_REASON, EMOTIONS, pokeReason , EMOTION_GROUPS, BODY_FEELINGS, DIRECTIONS, candidateWords, unsureReason} from './topics.js';
 import { seedOfficial, meet, sharePreview, publishShare, cleanupOrphans } from './meet.js';
 import { encounterOf, setEncounter, makeEncounterCard, OPENINGS } from './encounter.js';
+import { backfillTemplates } from './persona.js';
 import { startScheduler, tick } from './scheduler.js';
 import { pushEnabled } from './push.js';
 import { adminStats } from './admin.js';
@@ -51,6 +52,8 @@ app.use(cookieParser());
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 seedOfficial();
+// 人設細節（行為模組 J）：官方角色缺的喜好、煩惱、禁區在背景補，每 10 分鐘補一批，補完就停
+{ const run = () => backfillTemplates(10).then(n => { if (n > 0) setTimeout(run, 10 * 60000); }).catch(() => {}); setTimeout(run, 30000); }
 cleanupOrphans();
 setInterval(cleanupOrphans, 10 * 60000);
 

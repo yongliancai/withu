@@ -8,6 +8,8 @@ import { timeProblems, recentLines, dayPeriod } from './review.js';
 import { describeNow, charStatus, taipeiParts } from './characters.js';
 import { MOVES } from './planner.js';
 import { logIssue } from './logger.js';
+import { talkOf } from './persona.js';
+import { db } from './db.js';
 
 // 客服、助理腔：真人朋友傳 LINE 不會這樣講
 const SERVICE = [/您/, /請問/, /有什麼(我)?可以(幫|為)/, /希望(這|以上)?(對你)?有(幫助|幫到)/, /隨時(都)?(可以)?(告訴|跟)我/, /如果你(還)?需要(任何|什麼)/, /很高興(能)?(為你|幫你|跟你分享)/, /祝你(有個)?(愉快|美好)/];
@@ -44,6 +46,15 @@ export function ruleProblems(texts, { persona, rel, plan = null, face = false, t
   }
   if (face && /(LINE|傳訊息|私訊|訊息給你)/i.test(all) && !/交換|加/.test(all)) p.push('你們現在是當面說話，還沒有對方的聯絡方式，不能說傳訊息');
   if (texts.some(t => [...t].length > 70)) p.push('有一則泡泡太長，拆短或刪掉一些');
+  // 口頭禪不能每則都用：最近 4 則已經用過 2 次以上，這次又用
+  const cps = (persona.catchphrases || []).filter(c => c && c.length >= 2);
+  if (cps.length && rel.id) {
+    const recent = db.prepare(`SELECT text FROM messages WHERE rel_id=? AND sender='char' AND kind='text' ORDER BY id DESC LIMIT 4`).all(rel.id).map(r => r.text || '').join('\n');
+    const cp = cps.find(c => all.includes(c) && recent.split(c).length - 1 >= 2);
+    if (cp) p.push(`口頭禪「${cp}」最近用太多次了，這次不要用`);
+  }
+  const emo = (all.match(/\p{Extended_Pictographic}/gu) || []).length;
+  if (talkOf(persona).emoji === 'none' && emo > 0) p.push('你幾乎不用表情符號，拿掉');
   return p;
 }
 
@@ -64,7 +75,7 @@ ${problems.length ? `規則檢查已發現：${problems.join('；')}。這些一
 - 不像客服或助理；不過度熱情、不每句都附和或誇對方；長度跟對方差不多。
 - 有照規劃做（例如規劃要分享自己的事，就要真的分享，而不是只問對方）。
 - 不要和他最近說過的話重複開頭或說法。
-沒問題就 send、messages 給空陣列。有問題就 rewrite：messages 給改好的 1–3 則泡泡，保持他的口吻、原本的用意和規劃。reason 一句話。`,
+${talkOf(persona).never.length ? `- ${persona.name}絕對不會說或做：${talkOf(persona).never.join('；')}。\n` : ''}沒問題就 send、messages 給空陣列。有問題就 rewrite：messages 給改好的 1–3 則泡泡，保持他的口吻、原本的用意和規劃。reason 一句話。`,
     input: [{ role: 'user', content: `最近的對話：\n${recentLines(rel.id, 12).join('\n') || '（還沒有）'}\n\n對方剛說：${userText || '（貼圖或照片）'}\n\n準備送出的回覆：\n${texts.map(x => '- ' + x).join('\n')}` }],
     schema: { type: 'object', additionalProperties: false, properties: {
       action: { type: 'string', enum: ['send', 'rewrite'] },

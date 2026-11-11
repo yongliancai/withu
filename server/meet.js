@@ -11,6 +11,7 @@ import { personaBlock } from './prompt.js';
 import { addMemory } from './memory.js';
 import { id, addMessage, runTurn, ta, getPersona } from './engine.js';
 import { makeEncounterCard, OPENINGS } from './encounter.js';
+import { fillTalk } from './persona.js';
 
 export function seedOfficial() {
   // 新角色直接加入；已存在的只補上缺少的欄位，不覆蓋你在後台改過的設定。
@@ -215,6 +216,12 @@ export async function meet(user, { templateId, custom, scenarioId, scenarioText,
   writeToday(relRow, getPersona(relRow)).catch(() => {});
   // 自己捏的角色：在背景生成他的寫實人像（官方角色的照片由後台先準備好）
   if (origin === 'custom') ensurePortraits(db.prepare('SELECT * FROM characters WHERE id=?').get(charId), user.id);
+  // 自己捏的角色：在背景補人設細節（喜好、煩惱、絕對不做的事）
+  if (origin === 'custom') fillTalk(frame, user.id).then(talk => {
+    const c = db.prepare('SELECT persona FROM characters WHERE id=?').get(charId); if (!c) return;
+    const p = j(c.persona, {}); p.talk = { ...talk, ...(p.talk || {}), filled: true };
+    db.prepare('UPDATE characters SET persona=? WHERE id=?').run(JSON.stringify(p), charId);
+  }).catch(e => logIssue({ level: 'warn', source: 'llm', message: `補角色人設細節失敗：${e.message}`, error: e, userId: user.id }));
   return { relId };
 }
 
