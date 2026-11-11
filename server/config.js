@@ -27,6 +27,9 @@ export const config = {
   modelGood: env.MODEL_GOOD || 'gpt-5.5',
   effortCheap: env.REASONING_CHEAP || 'none',
   effortGood: env.REASONING_GOOD || 'low',
+  // 對話邏輯（行為模組）：回合規劃、送出前檢查的模型層。設成 0 可以關掉，比較前後差異
+  planner: env.TURN_PLANNER !== '0',
+  checkModel: env.CHECK_MODEL !== '0',
   ttsModel: env.TTS_MODEL || 'gpt-4o-mini-tts',
   sttModel: env.STT_MODEL || 'gpt-4o-mini-transcribe',
   // USD per 1M tokens, used only for the admin cost estimate

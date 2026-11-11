@@ -20,3 +20,28 @@ export const HELP_CARD = {
   ],
   footer: '他是 AI，會一直在這裡陪你說話；但真實的人可以給你更多幫助。',
 };
+
+// 危機分級（行為模組 K）：關鍵字是第一關；再用 OpenAI 免費的內容審核看 self-harm 類別，
+// 抓關鍵字沒寫到的說法。跟回合規劃同時跑，不增加延遲。
+//   high：有自傷意圖或方法 → 走危機流程（支持模式＋求助資源）
+//   low：有自傷相關但沒有意圖 → 只提醒角色溫柔關心，不跳求助卡
+//   none：沒有
+import { openai } from './llm.js';
+import { config } from './config.js';
+import { logIssue } from './logger.js';
+
+export async function crisisLevel(text = '') {
+  if (!text) return 'none';
+  if (crisisSignal(text)) return 'high';
+  if (config.mock || !openai) return 'none';
+  try {
+    const r = await openai.moderations.create({ model: 'omni-moderation-latest', input: text });
+    const c = r.results[0]?.categories || {};
+    if (c['self-harm/intent'] || c['self-harm/instructions']) return 'high';
+    if (c['self-harm']) return 'low';
+    return 'none';
+  } catch (e) {
+    logIssue({ level: 'warn', source: 'llm', message: `危機偵測（內容審核）失敗，只用關鍵字：${e.message}`, error: e });
+    return 'none';
+  }
+}

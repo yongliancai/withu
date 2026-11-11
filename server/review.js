@@ -39,7 +39,7 @@ export function timeProblems(texts, persona, ts = Date.now()) {
   return p;
 }
 
-function recentLines(relId, n = 14) {
+export function recentLines(relId, n = 14) {
   return db.prepare(`SELECT sender, kind, text, created_at FROM messages WHERE rel_id=? AND sender IN ('user','char') AND text IS NOT NULL ORDER BY id DESC LIMIT ?`).all(relId, n).reverse()
     .map(m => `[${describeNow(m.created_at).slice(5)}] ${m.sender === 'user' ? '對方' : '你'}：${m.kind === 'sticker' ? `（貼圖：${m.text}）` : m.text}`);
 }
