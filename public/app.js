@@ -127,6 +127,17 @@ const routes = [
   [/^#\/taste$/, renderTaste],
   [/^#\/settings$/, renderSettings],
 ];
+// 讀取 /api/meta；伺服器剛好重啟或網路斷掉時回應可能是空的，稍等再試幾次
+async function loadMeta() {
+  for (let i = 0; i < 3; i++) {
+    try {
+      const r = await fetch('/api/meta', { credentials: 'same-origin' });
+      if (r.ok) return await r.json();
+    } catch {}
+    await new Promise(ok => setTimeout(ok, 600 * (i + 1)));
+  }
+  return null;
+}
 async function route() {
   clearTimers();
   $('#sheet-root').innerHTML = ''; sheetGen++;
@@ -134,7 +145,16 @@ async function route() {
   if (!S.me && !/^#\/(welcome|join|recover)$/.test(hash)) {
     try { S.me = await api('/api/me'); } catch { return; }
   }
-  if (!S.meta) S.meta = await fetch('/api/meta').then(r => r.json());
+  if (!S.meta) {
+    S.meta = await loadMeta();
+    if (!S.meta) {
+      // 主機重啟／網路中斷時 /api/meta 會拿到空白回應：給使用者重試，不要讓整頁卡住
+      tabs.hidden = true;
+      app.innerHTML = `<div class="empty"><p class="muted">連線有點問題，資料還沒載入。</p><button class="btn" id="metaRetry">再試一次</button></div>`;
+      $('#metaRetry').onclick = () => route();
+      return;
+    }
+  }
   for (const [re, fn] of routes) {
     const m = hash.match(re);
     if (m) {
