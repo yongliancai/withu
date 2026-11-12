@@ -1,5 +1,6 @@
 // Character frames, official characters, meeting scenarios, and schedule helpers.
 import { config } from './config.js';
+import { EXTRA_JOBS, EXTRA_OFFICIAL, EXTRA_SCENARIO_JOBS } from './characters_extra.js';
 
 // scene: 個人頁封面插圖；threads: 他生活中「正在進行的事」，讓他有東西可以分享
 export const JOBS = {
@@ -629,6 +630,11 @@ export const SCENARIOS = [
   { id: 'bookstore', label: '書店', jobs: ['teacher', 'engineer', 'pastry', 'designer', 'florist', 'student', 'researcher', 'kindergarten', 'undergrad', 'librarian'] },
   { id: 'exhibition', label: '展覽', jobs: ['photographer', 'musician', 'lawyer', 'designer', 'pianist', 'ceo', 'fashion', 'actor', 'flight_attendant', 'hairstylist'] },
 ];
+
+// 第二批角色與職業（characters_extra.js）
+Object.assign(JOBS, EXTRA_JOBS);
+OFFICIAL.push(...EXTRA_OFFICIAL);
+for (const sc of SCENARIOS) for (const jb of EXTRA_SCENARIO_JOBS[sc.id] || []) if (!sc.jobs.includes(jb)) sc.jobs.push(jb);
 
 export function frameFromOfficial(o) {
   const job = JOBS[o.job];
