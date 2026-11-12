@@ -37,6 +37,8 @@ export function ruleProblems(texts, { persona, rel, plan = null, face = false, t
   if (qs >= 2) p.push(`一次問了 ${qs} 個問題，最多留一個`);
   if (plan && !plan.ask && qs >= 1 && plan.move !== 'repair') p.push('這輪決定不問問題，但訊息裡有問句');
   if (/^\s*(\d+[.、)]|[-•・])\s/m.test(all)) p.push('用了條列，真人傳訊息不會這樣');
+  const meta = all.match(/台詞|劇本|人設|角色扮演|那種版本|平常那種版本|太做作了|我是\s*AI|語言模型|系統設定/);
+  if (meta) p.push(`跳出角色談自己的說話方式（「${meta[0]}」），改成真人會有的反應`);
   // 剛認識：不裝熟、不編共同回憶、不問私人狀態
   if (rel.stage === 0) {
     const close = all.match(/晚點見|明天見|想你|寶貝|親愛的|抱抱/);

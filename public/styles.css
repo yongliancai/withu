@@ -837,3 +837,5 @@ button.pf-face { border:0; padding:0; cursor:zoom-in; }
 @keyframes vnRain { from { background-position: 0 0; } to { background-position: -40px 220px; } }
 @keyframes vnBlink { 50% { opacity: .15; } }
 @media (prefers-reduced-motion: reduce) { .vn, .vn-bg, .vn.fx-rain .vn-fx, .vn-next { animation: none; } .vn-who { transition: none; } }
+
+.scene.act { font-style: italic; font-size: 13px; opacity: .75; margin: 4px auto 6px; }

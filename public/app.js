@@ -686,7 +686,11 @@ async function chooseOpening() {
 function playPrologue(rel, msgs, { portrait } = {}) {
   const scene = msgs.find(m => m.kind === 'scene');
   if (!scene) return;
-  const lines = msgs.filter(m => m.sender === 'char' && m.kind === 'text').slice(0, 2).map(m => m.text);
+  // 旁白之後：他的動作和當面說的第一句（到使用者第一次開口前為止）
+  const firstUser = msgs.findIndex(m => m.sender === 'user');
+  const lines = msgs.slice(msgs.indexOf(scene) + 1, firstUser < 0 ? undefined : firstUser)
+    .filter(m => (m.sender === 'char' && m.kind === 'text') || (m.kind === 'scene' && m.card?.action)).slice(0, 3)
+    .map(m => m.kind === 'scene' ? { act: m.text } : { say: m.text });
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   // 向量場景圖墊底；插圖載入成功就蓋在上面，載不到就移除，看到的是向量圖
   const bg = `<div class="vn-bg vn-svg">${sceneSVG(rel.scenarioId || 'city', { label: '' })}</div>${rel.sceneArt ? `<img class="vn-bg" src="/scene-art/${esc(rel.sceneArt)}" alt="" onerror="this.remove()">` : ''}`;
@@ -700,7 +704,7 @@ function playPrologue(rel, msgs, { portrait } = {}) {
     <div class="vn-box" role="button" tabindex="0" aria-live="polite"><span class="vn-name" hidden></span><p class="vn-text"></p><span class="vn-next" aria-hidden="true">▼</span></div>`;
   document.body.appendChild(el);
   const text = $('.vn-text', el), name = $('.vn-name', el), whoEl = $('.vn-who', el), box = $('.vn-box', el);
-  const steps = [{ narr: scene.text }, ...lines.map(t => ({ say: t }))];
+  const steps = [{ narr: scene.text }, ...lines.map(l => l.act ? { narr: l.act, show: true } : l)];
   let i = -1, typing = null, full = '', audio = null;
   const done = () => { clearInterval(typing); audio?.stop(); el.classList.add('out'); setTimeout(() => el.remove(), reduce ? 0 : 450); };
   const type = (s) => {
@@ -714,6 +718,7 @@ function playPrologue(rel, msgs, { portrait } = {}) {
     i++;
     if (i >= steps.length) return done();
     const st = steps[i];
+    if (st.show) whoEl.classList.add('in');
     if (st.say) { whoEl.classList.add('in'); name.hidden = false; name.textContent = displayName(rel.frame); box.classList.add('say'); }
     else { name.hidden = true; box.classList.remove('say'); }
     type(st.narr || st.say);
@@ -937,13 +942,11 @@ function messageHtml(m, rel, prev) {
   const glow = side === 'him' && rel.mode === 'practice' && rel.stage === 2 ? ' glow' : '';
   if (m.kind === 'scene') {
     const art = m.id === S.room?.firstSceneId ? (rel.sceneArt ? `<div class="scene-art scene-img"><img src="/scene-art/${esc(rel.sceneArt)}" alt="你們相遇的地方" loading="lazy" onerror="this.parentNode.innerHTML=this.parentNode.dataset.svg" ></div>`.replace('class="scene-art scene-img"', `class="scene-art scene-img" data-svg="${esc(sceneSVG(rel.scenarioId || 'city', { label: '你們相遇的地方' }))}"`) : `<div class="scene-art">${sceneSVG(rel.scenarioId || 'city', { label: '你們相遇的地方' })}</div>`) : '';
+    // 當面時他的動作（例如「她把茶葉蛋往你那邊推」）：小小的斜體旁白
+    if (m.card?.action) return out + `<div class="scene act" data-id="${m.id}">${esc(m.text)}</div>`;
     return out + `${art}<div class="scene" data-id="${m.id}">${esc(m.text)}</div>`;
   }
   if (m.kind === 'card') return out + cardHtml(m, rel);
-  // 當面相遇：用置中的對白框，不是聊天泡泡
-  if (m.card?.face && m.kind === 'text') {
-    return out + `<div class="face ${side}" data-id="${m.id}"><span class="face-who">${side === 'me' ? '你' : esc(displayName(rel.frame))}</span><p>${esc(m.text)}</p></div>`;
-  }
   // 像 LINE：他連續傳的第一則旁邊放大頭照，點了看他的個人頁
   if (side === 'him' && ['text', 'voice', 'sticker'].includes(m.kind)) {
     const first = !prev || prev.sender !== 'char' || !['text', 'voice', 'sticker'].includes(prev.kind) || (m.at - prev.at > 10 * 60000);
@@ -1044,7 +1047,7 @@ async function renderRoom(relId) {
   try { rel = await api(`/api/rels/${relId}`); } catch (e) { toast(errMsg(e)); location.hash = '#/chat'; return; }
   if (location.hash !== `#/chat/${relId}`) return; // 等資料時已經換到別頁了
   S.room = { rel, messages: [], sending: false, recorder: null, charReadId: rel.charReadId || 0, presence: rel.presence };
-  const sub = () => rel.status !== 'active' ? '這段關係已經結束了' : `${presenceDot(S.room.presence)}${esc(presenceText(S.room.presence))}`;
+  const sub = () => rel.status !== 'active' ? '這段關係已經結束了' : rel.phase === 'in_person' ? `${presenceDot({ code: 'online' })}就在你面前` : `${presenceDot(S.room.presence)}${esc(presenceText(S.room.presence))}`;
   const ACT = { watch: '🎬 一起看', focus: '⏳ 陪你專心', bedtime: '🌙 睡前聊聊' };
   app.innerHTML = `<div class="room" data-theme="${esc(rel.theme || 'default')}">
     <header class="room-head">
