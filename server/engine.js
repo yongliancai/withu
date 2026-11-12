@@ -13,7 +13,9 @@ import { jsonCall, tts } from './llm.js';
 import { BASE_RULES, personaBlock, contextBlock, TURN_SCHEMA, STAGES } from './prompt.js';
 import { selectMemories, addMemory, correctMemory, forgetMemory, habitsOf, addTold, toldOf, similarity, consolidateMemories, episodesFor } from './memory.js';
 import { buildMealCard, loadTrends } from './ordering.js';
-import { crisisSignal, HELP_CARD } from './safety.js';
+import { crisisSignal, crisisLevel, HELP_CARD } from './safety.js';
+import { planTurn, planBlock } from './planner.js';
+import { reviewReply, stripNarration } from './turncheck.js';
 import { taipeiParts, JOBS } from './characters.js';
 import { notify } from './push.js';
 import { mockTurn } from './mock.js';
@@ -387,7 +389,11 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const before = db.prepare('SELECT MAX(id) m FROM messages WHERE rel_id=?').get(rel.id).m || 0;
 
   const t = taipeiParts();
-  const crisis = !trigger && crisisSignal(userText);
+  // 危機分級（關鍵字＋內容審核）和天氣同時跑，不增加延遲
+  const planning = !trigger && !callMode && !lateReply;
+  const worldP = worldContext(persona, rel.id);
+  const level = !trigger && userText ? await crisisLevel(userText) : 'none';
+  const crisis = !trigger && (crisisSignal(userText) || level === 'high');
   const dueFollowups = db.prepare('SELECT * FROM followups WHERE rel_id=? AND done=0 AND due_at<=? ORDER BY due_at LIMIT 3').all(rel.id, now());
   // 對方說「什麼意思」「聽不懂」：上一句他說得不自然，記成語感回饋（有同意的人才記）
   if (userText && !trigger) { try { detectConfusion(user, rel.id, userText); } catch { /* ignore */ } }
@@ -411,8 +417,17 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const instructions = `${BASE_RULES}\n\n${personaBlock(persona)}`;
   const input = historyInput(rel.id, imageMedia);
   const activity = j(rel.activity);
-  const world = await worldContext(persona, rel.id);
+  const world = await worldP;
   const arc = arcContext(rel.id);
+  // 回合規劃：先決定這一輪要做什麼（分享自己的事、接舊話題、開新話題…），再寫回覆
+  const planP = planning ? planTurn({
+    rel, persona, user, userText, crisis, lowEffort: lowEffortStreak(rel.id),
+    material: {
+      life: lifeContext(rel.id), arc, told: toldOf(rel.id), threads: persona.threads || [],
+      followups: dueFollowups.map(f => f.topic), selfTopics: selfTopicsToday(rel.id).map(x => `${x.topic}（${x.n} 次）`),
+      episodes: episodesFor(rel.id, userText).map(e => e.summary).filter(Boolean),
+    },
+  }) : Promise.resolve(null);
   input.push({ role: 'developer', content: contextBlock({
     taste: tasteOf(rel.user_id),
     userLen: [...String(userText || '').replace(/（[^）]*）/g, '').replace(/\s+/g, '')].length,
@@ -428,6 +443,9 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     rel, persona, user, memories, worldEvents, otherChars: otherCharsFor(rel), trends: loadTrends(),
     dueFollowups, trigger, crisis, todayMealProposed, mealAsked, loopHint, voiceAllowed, canConfess, loverElsewhere: lover, photoAttached: !!imageMedia,
   }) });
+  const plan = await planP;
+  if (plan) input.push({ role: 'developer', content: planBlock(plan) });
+  if (level === 'low' && !crisis) input.push({ role: 'developer', content: '對方的話裡可能有一點低落或傷害自己的念頭（沒有很明確）。先溫柔地接住、關心對方現在的感受，不要開玩笑、不要轉移話題，也不要急著叫對方去求助；如果對方說得更明白，就切換到支持模式。' });
 
   const call = () => jsonCall({
     userId: rel.user_id, kind: trigger ? 'proactive' : 'chat', tier, instructions, input, essential: !!crisis,
@@ -435,19 +453,28 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     mock: () => mockTurn({ rel, persona, user, userText, imageMedia, trigger: triggerKey === 'FIRST' ? 'FIRST' : trigger, todayMealProposed, crisis, lateReply }),
   });
   let out = await call();
+  let rewritten = false;
   // 重複偵測：跟他最近說過的話太像就重寫一次
   const rep = findRepeat((out.messages || []).map(m => String(m.text || '')), recentCharTexts(rel.id));
   if (rep) {
     logIssue({ level: 'auto', source: 'llm', message: '角色重複說了類似的話，已自動重寫', detail: { now: rep.now, before: rep.before, trigger: triggerKey }, userId: rel.user_id, relId: rel.id });
     input.push({ role: 'developer', content: `你剛剛想說「${rep.now}」，但這跟你之前說過的「${rep.before}」太像了。換一個說法，或聊新的東西、說新的進展。` });
-    try { out = await call(); } catch { /* keep the first answer */ }
+    try { out = await call(); rewritten = true; } catch { /* keep the first answer */ }
   }
   // 繞圈圈：這次又要講最近一直在講的那件事（例如第四次「我幫你點，等等」）就重寫一次
   const loop = !rep && !trigger && findLoop((out.messages || []).map(m => String(m.text || '')), recentCharWithin(rel.id));
   if (loop) {
     logIssue({ level: 'auto', source: 'llm', message: '角色一直在講同一件事（繞圈圈），已自動重寫', detail: { phrase: loop, trigger: triggerKey }, userId: rel.user_id, relId: rel.id });
     input.push({ role: 'developer', content: `你最近已經好幾次說「${loop}」之類的話，對話一直沒有往前。這次不要再說類似的話：直接給出具體內容或結果、做個決定，或坦白說你做不到。${mealAsked ? '對方在請你幫忙點餐：在 meal 給 2–3 個具體選項，messages 只說一句帶出選項。' : ''}` });
-    try { out = await call(); } catch { /* keep the first answer */ }
+    try { out = await call(); rewritten = true; } catch { /* keep the first answer */ }
+  }
+  // 送出前檢查（一般回覆）：規則層每次都跑，模型層對照最近的對話和這輪的規劃；最多改寫一次
+  if (planning && !crisis && !rewritten) {
+    const draft = (out.messages || []).map(m => String(m.text || '').trim()).filter(Boolean);
+    if (draft.length) {
+      const fixed = await reviewReply({ rel, persona, user, userText, texts: draft, plan });
+      if (fixed.join('\n') !== draft.join('\n')) out.messages = fixed.map(text => ({ text }));
+    }
   }
   // 發送前檢查：主動訊息、晚回的訊息要對得上現在的時間和最近的對話
   if ((trigger || lateReply) && !['FIRST', 'reunion'].includes(triggerKey) && !String(triggerKey || '').startsWith('nudge')) {
@@ -480,7 +507,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
       logIssue({ level: 'auto', source: 'llm', message: '角色覺得上一句不妥，自己收回重說', userId: rel.user_id, relId: rel.id });
     }
   }
-  let texts = (out.messages || []).flatMap(m => String(m.text || '').split(/\n+/)).map(x => x.trim()).filter(Boolean).slice(0, 4);
+  let texts = stripNarration((out.messages || []).flatMap(m => String(m.text || '').split(/\n+/)).map(x => x.trim()).filter(Boolean)).slice(0, 4);
   // 剛認識最多 2 則、朋友最多 3 則（第一次相遇、危機、講電話例外）：超過就保留開頭和最後一則
   const maxB = crisis || callMode || triggerKey === 'FIRST' ? 4 : rel.stage === 0 ? 2 : rel.stage === 1 ? 3 : 4;
   if (texts.length > maxB) texts = [...texts.slice(0, maxB - 1), texts.at(-1)];
