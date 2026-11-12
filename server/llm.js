@@ -31,6 +31,15 @@ export function cleanNulls(v) {
 export async function jsonCall({ userId, kind, tier = 'cheap', instructions, input, schema, schemaName, cacheKey, mock, essential = false }) {
   // 超過預算且設定為暫停：除了危機時的回覆，其他 AI 呼叫都先停下來
   if (!essential && budgetPaused()) throw Object.assign(new Error('超過預算，AI 暫停中'), { code: 'budget_paused' });
+  // 除錯用：設定 DUMP_PROMPTS=資料夾，把每次送給模型的完整提示存成檔案（看角色實際收到什麼指示）
+  if (process.env.DUMP_PROMPTS) {
+    try {
+      const fs = await import('node:fs');
+      fs.mkdirSync(process.env.DUMP_PROMPTS, { recursive: true });
+      const body = [`# ${kind}（${tier}）`, '## instructions', instructions, ...(input || []).map(m => `## ${m.role}\n${typeof m.content === 'string' ? m.content : JSON.stringify(m.content, null, 1)}`)].join('\n\n');
+      fs.writeFileSync(`${process.env.DUMP_PROMPTS}/${Date.now()}-${kind}.md`, body);
+    } catch { /* 除錯用，失敗就算了 */ }
+  }
   if (config.mock) {
     const out = typeof mock === 'function' ? mock() : mock;
     logUsage(userId, kind, 'mock', { input_tokens: 0, output_tokens: 0 });
