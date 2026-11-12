@@ -28,6 +28,8 @@ export const config = {
   effortCheap: env.REASONING_CHEAP || 'none',
   effortGood: env.REASONING_GOOD || 'low',
   // 對話邏輯（行為模組）：回合規劃、送出前檢查的模型層。設成 0 可以關掉，比較前後差異
+  // 使用者超過幾天沒回某個角色，那個角色就停止主動傳訊息（對方再傳訊息就恢復）；設 0 關閉
+  quietDays: Number(env.QUIET_DAYS ?? 3),
   planner: env.TURN_PLANNER !== '0',
   checkModel: env.CHECK_MODEL !== '0',
   ttsModel: env.TTS_MODEL || 'gpt-4o-mini-tts',
