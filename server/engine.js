@@ -524,9 +524,10 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   }
   let texts = stripNarration((out.messages || []).flatMap(m => String(m.text || '').split(/\n+/)).map(x => x.trim()).filter(Boolean)).slice(0, 4);
   // 動作描述（＊她把茶葉蛋推過來＊）：當面時變成小小的旁白，傳訊息時拿掉
-  const ACT = /^[＊*]\s*(.+?)\s*[＊*]$/;
-  const actions = face ? texts.filter(x => ACT.test(x)).map(x => x.match(ACT)[1]).slice(0, 1) : [];
-  texts = texts.filter(x => !ACT.test(x));
+  // 模型常把動作寫在句子中間（「＊她笑了一下＊ 你拿吧」），整段抓出來：當面時第一個動作變旁白，其他都拿掉
+  const ACT = /[＊*]\s*([^＊*\n]{1,40}?)\s*[＊*]/g;
+  const actions = [];
+  texts = texts.map(x => x.replace(ACT, (_, a) => { if (face && !actions.length) actions.push(a); return ' '; }).replace(/\s{2,}/g, ' ').trim()).filter(Boolean);
   // 剛認識最多 2 則、朋友最多 3 則（第一次相遇、危機、講電話例外）：超過就保留開頭和最後一則
   const maxB = crisis || callMode || triggerKey === 'FIRST' ? 4 : rel.stage === 0 ? 2 : rel.stage === 1 ? 3 : 4;
   if (texts.length > maxB) texts = [...texts.slice(0, maxB - 1), texts.at(-1)];
