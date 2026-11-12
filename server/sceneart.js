@@ -31,7 +31,10 @@ export const ART = {
   breakfast_shop: { src: 'PnElnTkpcq2mOVlrQpTER/4oGDwvbbldHwXFK0KUlUs.jpg', label: '早餐店', kw: /早餐/ },
   home_alley_night: { src: 'U74Oztnm4ck5a4QMBmpO4/EZVyvFLGGl4-2MUFxWQbB.jpg', label: '住家巷口', kw: /巷口|巷子|鄰居|樓下|社區/, fx: 'night' },
 };
-const BY_SCENARIO = { cafe: 'cafe', mrt: 'mrt', colleague: 'office_day', store: 'convenience_store_night', rain: 'rain_arcade', friends: 'bistro', gym: 'gym', bookstore: 'bookstore', exhibition: 'museum' };
+const BY_SCENARIO = { cafe: 'cafe', mrt: 'mrt', colleague: 'office_day', store: 'convenience_store_night', rain: 'rain_arcade', friends: 'bistro', gym: 'gym', bookstore: 'bookstore', exhibition: 'museum',
+  night_market: 'night_market', library: 'library', last_bus: 'bus_stop', supermarket: 'supermarket', club_fair: 'campus', sunset_beach: 'beach_sunset', breakfast: 'breakfast_shop',
+  parcel: 'home_alley_night', clinic: 'hospital', dog_park: 'park_dusk', late_office: 'office_night', blackout: 'office_night', livehouse: 'bistro', delayed_flight: 'mrt',
+  bar_counter: 'bistro', salon: 'cafe', flower_shop: 'cafe', tea_hill: 'park_dusk', workshop: 'office_day', book_talk: 'bookstore' };
 
 /** 依情境（預設情境 id 或自己寫的文字）和現在的時間挑一張場景圖。 */
 export function artFor({ scenarioId, text = '', ts = Date.now() } = {}) {

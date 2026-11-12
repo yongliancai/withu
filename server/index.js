@@ -146,7 +146,7 @@ app.get('/api/me', auth, (req, res) => {
 app.patch('/api/me', auth, (req, res) => {
   const b = req.body || {};
   const settings = { ...j(req.user.settings, {}), ...(b.settings || {}) };
-  const allowed = ['dailyCap', 'proactiveLevel', 'dndStart', 'dndEnd', 'notifyPreview', 'lunchAt', 'dinnerAt', 'discreetNames', 'portraitStyle', 'showSuggestions', 'realisticDelay', 'notifyAsked', 'appTheme', 'nightOwl', 'customMoods', 'tourDone', 'roomTourDone', 'seenNews', 'feedbackConsent', 'chatTaste'];
+  const allowed = ['dailyCap', 'proactiveLevel', 'dndStart', 'dndEnd', 'notifyPreview', 'lunchAt', 'dinnerAt', 'discreetNames', 'portraitStyle', 'showSuggestions', 'realisticDelay', 'notifyAsked', 'appTheme', 'nightOwl', 'customMoods', 'tourDone', 'roomTourDone', 'seenNews', 'feedbackConsent', 'chatTaste', 'tips'];
   for (const k of Object.keys(settings)) if (!allowed.includes(k)) delete settings[k];
   if (settings.chatTaste) { // 聊天口味：只收三個欄位的固定選項
     const t = settings.chatTaste || {}, ok = { length: ['short', 'mid', 'long'], warm: ['slow', 'mid', 'fast'], lead: ['him', 'turns', 'me'] };
