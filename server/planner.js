@@ -9,6 +9,7 @@ import { STAGES } from './prompt.js';
 import { describeNow, charStatus } from './characters.js';
 import { recentLines } from './review.js';
 import { logIssue } from './logger.js';
+import { isAwkward, isBye } from './encounter.js';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS turn_plans (
@@ -28,9 +29,9 @@ export const MOVES = {
   follow_up: '問對方之前提過的事後來怎樣了（具體提到那件事）',
   new_topic: '自然地開一個新話題：從你剛遇到的事、天氣、節日、或你們共同的興趣帶出來，不要像在找話題',
   comfort: '陪著對方：先接住對方的感受、替情緒說出名字，不急著給建議，不轉移話題',
-  repair: '對方覺得你剛剛怪怪的或在質疑你：先坦白承認或解釋，用輕鬆的方式把氣氛拉回來',
+  repair: '對方覺得突兀或在質疑你（「我們認識嗎」「不熟」）：四件事都要做到——坦白承認有點突然、說出你真正開口的理由、給對方退路（「不打擾你了」）、不追問；語氣輕鬆，不要放棄或冷掉',
   tease: '照你的個性吐槽、開玩笑或鬥嘴，輕鬆一點',
-  wind_down: '對方要去忙、要睡或明顯想結束：簡短自然地收尾，不再丟問題',
+  wind_down: '對方要去忙、要睡或明顯想結束：簡短自然地收尾，不再丟問題；道別要符合你們的關係（剛認識不說「晚點見」「想你」「明天見」）',
 };
 const LEADING = new Set(['share_life', 'continue_thread', 'new_topic', 'follow_up']);
 const STANCES = { agree: '同意', partly: '部分同意、補一個自己的看法', disagree: '不同意，照你的個性說出來', tease: '吐槽', neutral: '沒有特別的立場' };
@@ -58,7 +59,7 @@ export function recentMoves(relId, n = 4) {
  * 寫回覆前先規劃。回傳 plan 物件，失敗時回傳 null（照舊流程寫，不擋聊天）。
  * material：{ life, arc, told, threads, followups, episodes, selfTopics }，都是現成的文字陣列。
  */
-export async function planTurn({ rel, persona, user, userText, material = {}, lowEffort = false, crisis = false }) {
+export async function planTurn({ rel, persona, user, userText, material = {}, lowEffort = false, crisis = false, encounter = null }) {
   if (!config.planner) return null;
   const moves = recentMoves(rel.id);
   const reactiveStreak = moves.findIndex(m => LEADING.has(m)) === -1 ? moves.length : moves.findIndex(m => LEADING.has(m));
@@ -67,6 +68,10 @@ export async function planTurn({ rel, persona, user, userText, material = {}, lo
   if (reactiveStreak >= 3) hints.push(`你已經連續 ${reactiveStreak} 輪只在回應對方，這輪除非對方需要被陪伴或要結束，否則換你帶話題（share_life、continue_thread、new_topic 或 follow_up）。`);
   if (lowEffort || userShort) hints.push('對方回得很短：不要再丟問題給對方，換你帶一件具體的事（ask 設 false）。');
   if (crisis) hints.push('對方的訊息可能有危機訊號：move 用 comfort，ask 設 false。');
+  const awkward = !crisis && isAwkward(userText);
+  if (awkward) hints.push(`對方覺得突兀或在質疑你：move 用 repair${encounter?.reason ? `，material 用你開口的真正理由「${encounter.reason}」` : ''}，ask 設 false。`);
+  else if (!crisis && isBye(userText)) hints.push('對方在道別：move 用 wind_down，ask 設 false。');
+  if (encounter?.face) hints.push(`你們現在是當面說話（剛剛發生的事：${encounter.incident}）。只聊眼前的事和一點自己，不要 new_topic 跳太遠，也不要 follow_up 你們沒聊過的事。`);
   if (moves[0] && moves[0] === moves[1]) hints.push(`最近兩輪都是 ${moves[0]}，這輪換一個不同的動作。`);
   const block = (title, arr) => (arr && arr.length ? `## ${title}\n${arr.map(x => '- ' + x).join('\n')}` : '');
   const st = charStatus(persona);
@@ -109,6 +114,7 @@ ${hints.length ? `\n這輪特別注意：\n${hints.map(h => '- ' + h).join('\n')
   }
   if (!MOVES[plan.move]) return null;
   if (crisis) { plan.move = 'comfort'; plan.ask = false; }
+  else if (awkward) { plan.move = 'repair'; plan.ask = false; if (encounter?.reason && !plan.material) plan.material = encounter.reason; }
   db.prepare('INSERT INTO turn_plans (rel_id, move, plan, created_at) VALUES (?,?,?,?)').run(rel.id, plan.move, JSON.stringify(plan), now());
   return plan;
 }

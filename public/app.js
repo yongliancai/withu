@@ -415,7 +415,7 @@ function renderRecover() {
 // ======================================================================
 // Meeting: 我想認識他（先選人） / 來場偶遇吧（先選情境）
 // ======================================================================
-const M = { templateId: null, custom: null, frame: null, scenarioId: null, scenarioText: '', reunionRelId: null, mood: null };
+const M = { templateId: null, custom: null, frame: null, scenarioId: null, scenarioText: '', reunionRelId: null, mood: null, entry: null, opening: null };
 
 // 分類篩選列
 function catChips(list, cur) {
@@ -443,7 +443,7 @@ async function renderMeet(step) {
   tabs.hidden = true;
   const back = `<a class="icon-btn back" href="${S.rels.length ? '#/chat' : '#/meet'}" aria-label="返回">${icon('back')}</a>`;
   if (!step) {
-    Object.assign(M, { templateId: null, custom: null, frame: null, scenarioId: null, scenarioText: '', reunionRelId: null, mood: null });
+    Object.assign(M, { templateId: null, custom: null, frame: null, scenarioId: null, scenarioText: '', reunionRelId: null, mood: null, entry: null, opening: null });
     app.innerHTML = `<div class="page" style="padding-bottom:32px">${back}
       <h1>你想怎麼遇見${TA()}？</h1>
       <button class="choice" data-go="person"><b>我想認識${TA()}</b><span>先選一個人，再決定你們在哪裡遇見</span></button>
@@ -464,7 +464,7 @@ async function renderMeet(step) {
       $$('[data-cat]').forEach(b => b.onclick = () => { cat = S.meetCat = b.dataset.cat; draw(); });
       $$('.person').forEach(b => b.onclick = () => {
         const t = list.find(x => x.id === b.dataset.id);
-        M.templateId = t.id; M.frame = t.frame; M.custom = null;
+        M.templateId = t.id; M.frame = t.frame; M.custom = null; M.entry = 'person';
         location.hash = '#/meet/where';
       });
       $('#custom').onclick = () => { location.hash = '#/meet/custom'; };
@@ -630,7 +630,7 @@ async function renderWho() {
     ${r.picks.length ? `<div class="people">${r.picks.map(t => personCard(t)).join('')}</div>` : (r.reunion ? '' : '<p class="muted">今天這裡好像沒有新面孔。換個情境，或到「我想認識${TA()}」自己捏一個。</p>')}</div>`;
   $$('.person').forEach(b => b.onclick = () => {
     const t = r.picks.find(x => x.id === b.dataset.id);
-    M.templateId = t.id; M.frame = t.frame; doMeet();
+    M.templateId = t.id; M.frame = t.frame; M.entry = 'scene'; doMeet();
   });
   if (r.reunion) $('#reunion').onclick = () => { M.reunionRelId = r.reunion.relId; M.frame = r.reunion.frame; doMeet(); };
 }
@@ -669,11 +669,25 @@ function goingScreen() {
   return () => clearInterval(t);
 }
 
+// 你想怎麼開始？（重逢不用選）。預設推薦：這個人以前哪種開頭聊得最久，資料不夠就用上次選的
+const OPENING_DESC = { him: '讓對方先開口', me: '你自己說第一句', slow: '低調一點，不接話也沒關係', drama: '來點小插曲' };
+async function chooseOpening() {
+  let rec = 'him';
+  try { rec = (await api('/api/opening-pref')).recommended || 'him'; } catch { /* 用預設 */ }
+  const ops = S.meta.openings || { him: '他主動搭話', me: '我先開口', slow: '慢慢來', drama: '戲劇性一點' };
+  const order = [rec, ...Object.keys(ops).filter(k => k !== rec)];
+  return new Promise(resolve => {
+    openSheet(`<h3>你想怎麼開始？</h3>${order.map(k => `<button class="choice" data-op="${k}"><b>${esc(ops[k].replace('他', TA()))}${k === rec ? '（推薦）' : ''}</b><span>${esc(OPENING_DESC[k] || '')}</span></button>`).join('')}`,
+      (sheet, close) => $$('[data-op]', sheet).forEach(b => b.onclick = () => { close(); resolve(b.dataset.op); }));
+  });
+}
+
 async function doMeet() {
+  if (!M.reunionRelId && !M.opening) { M.opening = await chooseOpening(); if (!M.opening) return; }
   const stop = goingScreen();
   const started = Date.now();
   try {
-    const r = await api('/api/meet', { method: 'POST', body: { templateId: M.templateId, custom: M.custom, scenarioId: M.scenarioId, scenarioText: M.scenarioText, reunionRelId: M.reunionRelId, mood: M.mood } });
+    const r = await api('/api/meet', { method: 'POST', body: { templateId: M.templateId, custom: M.custom, scenarioId: M.scenarioId, scenarioText: M.scenarioText, reunionRelId: M.reunionRelId, mood: M.mood, entry: M.entry, opening: M.opening } });
     // 太快的話稍微停一下，讓過場看得完第一句
     const wait = 1800 - (Date.now() - started); if (wait > 0) await new Promise(res => setTimeout(res, wait));
     stop(); location.hash = `#/chat/${r.relId}`;
@@ -867,6 +881,10 @@ function messageHtml(m, rel, prev) {
     return out + `${art}<div class="scene" data-id="${m.id}">${esc(m.text)}</div>`;
   }
   if (m.kind === 'card') return out + cardHtml(m, rel);
+  // 當面相遇：用置中的對白框，不是聊天泡泡
+  if (m.card?.face && m.kind === 'text') {
+    return out + `<div class="face ${side}" data-id="${m.id}"><span class="face-who">${side === 'me' ? '你' : esc(displayName(rel.frame))}</span><p>${esc(m.text)}</p></div>`;
+  }
   // 像 LINE：他連續傳的第一則旁邊放大頭照，點了看他的個人頁
   if (side === 'him' && ['text', 'voice', 'sticker'].includes(m.kind)) {
     const first = !prev || prev.sender !== 'char' || !['text', 'voice', 'sticker'].includes(prev.kind) || (m.at - prev.at > 10 * 60000);
@@ -901,6 +919,8 @@ function cardHtml(m, rel) {
   switch (c.type) {
     case 'milestone': return `<div class="milestone" data-id="${id}"><span>今天，${esc(c.title)}</span></div>`;
     case 'hint': return `<div class="note" data-id="${id}">${esc(c.text)}</div>`;
+    case 'exchange': return `<div class="card exchange-card" data-id="${id}"><p>要跟${esc(c.name || ta(rel.frame))}交換 LINE 嗎？</p>
+      ${c.done ? `<p class="small muted" style="margin:6px 0 0">${c.done === 'yes' ? '你們交換了 LINE' : '你們沒有交換'}</p>` : `<div class="actions"><button class="btn ghost sm" data-exch="0">先不要</button><button class="btn sm" data-exch="1">好啊</button></div>`}</div>`;
     case 'outing': return `<div class="note" data-id="${id}">${esc(c.text)}・出遊模式</div>`;
     case 'walk': return `<div class="note" data-id="${id}">${esc(c.text)}</div>`;
     case 'nudge': return `<div class="note" data-id="${id}">${esc(c.text)}</div>`;
@@ -978,11 +998,13 @@ async function renderRoom(relId) {
     </header>
     ${rel.activity ? `<div class="walk-banner"><span>${ACT[rel.activity.type] || '一起'}${rel.activity.title ? `：${esc(rel.activity.title)}` : ''}・<span id="actMin"></span></span><button class="linkbtn small" id="actEnd">結束</button></div>` : ''}
     <div class="stream" id="stream"></div>
-    ${rel.status === 'active' ? `<div class="composer" id="composer">
+    ${rel.status === 'active' && rel.phase === 'deciding' ? `<div class="composer"><p class="small muted" style="margin:6px auto">決定要不要交換 LINE 之後才能傳訊息</p></div>`
+    : rel.status === 'active' && rel.phase === 'parted' ? `<div class="composer"><p class="small muted" style="margin:6px auto">你們沒有交換聯絡方式。</p><button class="btn sm" id="reenc">再去那裡看看</button></div>`
+    : rel.status === 'active' ? `<div class="composer" id="composer">
       <button class="icon-btn" id="topicBtn" aria-label="話題錦囊" title="不知道說什麼？">${icon('spark')}</button>
       <button class="icon-btn" id="photoBtn" aria-label="傳照片">${icon('photo')}</button>
       <input type="file" id="photoIn" accept="image/*" hidden>
-      <textarea id="txt" rows="1" placeholder="跟${ta(rel.frame)}說…" aria-label="訊息"></textarea>
+      <textarea id="txt" rows="1" placeholder="${rel.phase === 'in_person' ? `當面跟${ta(rel.frame)}說…` : `跟${ta(rel.frame)}說…`}" aria-label="訊息"></textarea>
       <button class="icon-btn" id="stkBtn" aria-label="貼圖">${icon('smile')}</button>
       <button class="icon-btn" id="micBtn" aria-label="錄語音">${icon('mic')}</button>
       <button class="icon-btn send" id="sendBtn" aria-label="送出" hidden>${icon('send')}</button>
@@ -996,6 +1018,10 @@ async function renderRoom(relId) {
   </div>`;
   $('#who').onclick = () => { location.hash = `#/profile/${rel.id}`; };
   $('#more').onclick = () => openRoomMenu(rel);
+  $('#reenc') && ($('#reenc').onclick = async () => {
+    $('#reenc').disabled = true;
+    try { await api(`/api/rels/${rel.id}/reencounter`, { method: 'POST' }); renderRoom(rel.id); } catch (e) { toast(errMsg(e)); $('#reenc').disabled = false; }
+  });
   $('#moodBtn') && ($('#moodBtn').onclick = () => rel.status === 'active' ? openMoodButton(rel.id) : toast('這段關係已經結束了'));
   $('#callBtn') && ($('#callBtn').onclick = () => openCall(rel));
   const stream = $('#stream');
@@ -1133,6 +1159,8 @@ async function renderRoom(relId) {
       if (!typing) { markLocalRead(nodes); typing = showTyping(); typingAt = Date.now(); }
       locals().forEach(n => n.remove());
       await revealSequential(res.messages || [], { typing, typingAt });
+      // 當面相遇結束（交換了 LINE、或要決定要不要交換）：重畫聊天室換成傳訊息的樣子
+      if (res.phase && res.phase !== (S.room.rel.phase || 'chat')) { const id = S.room.rel.id; setTimeout(() => { if (S.room?.rel?.id === id) renderRoom(id); }, 1200); }
     } catch (e) {
       clearTimeout(readTimer); typing?.remove(); ok = e.status === 429 ? 'busy' : false;
       if (ok !== 'busy') { toast(errMsg(e)); setTimeout(() => pollNow(), 2500); } // 連線斷掉但伺服器可能已經回了：馬上再對一次
@@ -1430,6 +1458,11 @@ function bindStream(root) {
     const relId = S.room?.rel?.id; if (!relId || S.room.sending) return;
     S.room.sending = true; $$('[data-choice]', root).forEach(x => x.disabled = true);
     try { const r = await api(`/api/rels/${relId}/choice`, { method: 'POST', body: { msgId: Number(b.dataset.choice), idx: Number(b.dataset.idx) } }); S.room.sending = false; renderRoom(relId); } catch (e) { toast(errMsg(e)); S.room.sending = false; }
+  });
+  $$('[data-exch]', root).forEach(b => b.onclick = async () => {
+    const relId = S.room?.rel?.id; if (!relId) return;
+    $$('[data-exch]', root).forEach(x => x.disabled = true);
+    try { await api(`/api/rels/${relId}/exchange`, { method: 'POST', body: { accept: b.dataset.exch === '1' } }); renderRoom(relId); } catch (e) { toast(errMsg(e)); $$('[data-exch]', root).forEach(x => x.disabled = false); }
   });
   $$('[data-goal]', root).forEach(b => b.onclick = async () => {
     const relId = S.room?.rel?.id; if (!relId || S.room.sending) return;

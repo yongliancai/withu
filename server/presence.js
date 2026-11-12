@@ -65,6 +65,8 @@ function wakeTime(persona, ts) {
 
 /** How long to wait before he starts replying, or 0 for "reply now". */
 export function replyDelayMs(rel, persona, { crisis = false, settings = {}, ts = Date.now() } = {}) {
+  // 當面相遇中：人就在眼前，一定馬上回
+  { let sc = {}; try { sc = JSON.parse(rel.scenario || '{}'); } catch {} if (sc.phase === 'in_person') return 0; }
   if (crisis || settings.realisticDelay === false) return 0;
   if (rel.outing_active || rel.activity) return 0;
   const p = presenceOf(rel, persona, ts);

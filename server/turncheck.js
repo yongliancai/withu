@@ -25,7 +25,7 @@ export function stripNarration(texts) {
 }
 
 /** 規則層：回傳問題清單（空陣列 = 沒問題）。 */
-export function ruleProblems(texts, { persona, rel, plan = null, ts = Date.now() }) {
+export function ruleProblems(texts, { persona, rel, plan = null, face = false, ts = Date.now() }) {
   const all = texts.join('\n');
   const p = [...timeProblems(texts, persona, ts)];
   const svc = SERVICE.find(r => r.test(all));
@@ -35,6 +35,14 @@ export function ruleProblems(texts, { persona, rel, plan = null, ts = Date.now()
   if (qs >= 2) p.push(`一次問了 ${qs} 個問題，最多留一個`);
   if (plan && !plan.ask && qs >= 1 && plan.move !== 'repair') p.push('這輪決定不問問題，但訊息裡有問句');
   if (/^\s*(\d+[.、)]|[-•・])\s/m.test(all)) p.push('用了條列，真人傳訊息不會這樣');
+  // 剛認識：不裝熟、不編共同回憶、不問私人狀態
+  if (rel.stage === 0) {
+    const close = all.match(/晚點見|明天見|想你|寶貝|親愛的|抱抱/);
+    if (close) p.push(`你們剛認識，「${close[0]}」太親近了`);
+    if (/你那邊.{0,8}(還好|好嗎|沒事吧)/.test(all)) p.push('對剛認識的人問「你那邊還好嗎」太親近，也可能是在講對方沒經歷過的事');
+    if (rel.start_type !== 'friend' && ts - rel.created_at < 864e5 && /(上次|之前我們|我們之前|記得我們|那天我們)/.test(all)) p.push('你們今天才認識，不能提「之前」一起發生的事');
+  }
+  if (face && /(LINE|傳訊息|私訊|訊息給你)/i.test(all) && !/交換|加/.test(all)) p.push('你們現在是當面說話，還沒有對方的聯絡方式，不能說傳訊息');
   if (texts.some(t => [...t].length > 70)) p.push('有一則泡泡太長，拆短或刪掉一些');
   return p;
 }
@@ -75,10 +83,10 @@ ${problems.length ? `規則檢查已發現：${problems.join('；')}。這些一
  * 一般回覆的送出前檢查：規則層每次都跑；有問題、或開啟模型層時再問模型。最多改寫一次。
  * 回傳要送出的泡泡。
  */
-export async function reviewReply({ rel, persona, user, userText, texts, plan }) {
+export async function reviewReply({ rel, persona, user, userText, texts, plan, face = false }) {
   const cleaned = stripNarration(texts);
   if (!cleaned.length) return texts;
-  const problems = ruleProblems(cleaned, { persona, rel, plan });
+  const problems = ruleProblems(cleaned, { persona, rel, plan, face });
   if (!problems.length && !config.checkModel) return cleaned;
   try {
     const rv = await checkReply({ rel, persona, user, userText, texts: cleaned, plan, problems });

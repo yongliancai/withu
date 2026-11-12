@@ -10,6 +10,7 @@ import { JOBS, ARCHETYPES, SCENARIOS, OFFICIAL, MOODS, frameFromOfficial, AVATAR
 import { personaBlock } from './prompt.js';
 import { addMemory } from './memory.js';
 import { id, addMessage, runTurn, ta, getPersona } from './engine.js';
+import { makeEncounterCard, OPENINGS } from './encounter.js';
 
 export function seedOfficial() {
   // 新角色直接加入；已存在的只補上缺少的欄位，不覆蓋你在後台改過的設定。
@@ -107,7 +108,7 @@ export async function structureScenario(userId, text, frame) {
 }
 
 /** Create character + relationship + opening scene, then let him speak first. */
-export async function meet(user, { templateId, custom, scenarioId, scenarioText, reunionRelId, mood: moodId }) {
+export async function meet(user, { templateId, custom, scenarioId, scenarioText, reunionRelId, mood: moodId, entry: entry0, opening: opening0 }) {
   const active = db.prepare(`SELECT COUNT(*) n FROM relationships WHERE user_id=? AND status='active'`).get(user.id).n;
   if (active >= S('maxActive')) return { error: `目前最多同時和 ${S('maxActive')} 位角色往來。` };
 
@@ -182,20 +183,24 @@ export async function meet(user, { templateId, custom, scenarioId, scenarioText,
     friends: `你們是朋友聚會上被介紹認識的，${who}。`,
   };
   const roles = scenarioText ? '' : (ROLES[scenarioId] || `你們都只是剛好在這裡的人（不是店員），${who}。`);
-  // Opening scene narration
-  const narration = await jsonCall({
-    userId: user.id, kind: 'scene', tier: 'good',
-    instructions: `${personaBlock(frame)}\n\n寫一段 2–3 句的相遇場景旁白（第二人稱「你」指用戶），台灣日常、具體、有畫面。場景的時間要符合「現在的真實時間」：情境名稱裡的時間（例如「深夜」「下班」）跟現在不符時，改成現在的時段來寫（例如下午就寫下午的便利商店），最後停在角色注意到你的那一刻（角色是${frame.gender === 'female' ? '女生，用「她」' : '男生，用「他」'}）。不要寫角色的台詞。只輸出 JSON。`,
-    input: [{ role: 'user', content: `現在的真實時間：${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', weekday: 'long', hour: 'numeric', minute: '2-digit' })}\n情境：${label}\n${roles ? '身份：' + roles + '\n' : ''}地點：${scene.place}｜時間：${scene.time}｜氣氛：${scene.mood}\n起始關係：${startFriend ? '本來就認識的朋友' : '陌生人'}${scene.implied_lover ? '（用戶原本寫的是戀人，但你們目前只是朋友）' : ''}` }],
-    schema: { type: 'object', additionalProperties: false, properties: { narration: { type: 'string' } }, required: ['narration'] },
-    schemaName: 'scene_text',
-    mock: { narration: `${label}。你抬起頭的時候，剛好對上一雙有點驚訝的眼睛。` },
-  });
-  addMessage(rel, 'system', 'scene', { text: narration.narration });
+  // 相遇卡：旁白、搭話理由、開場白、怎麼交換聯絡方式都從同一張卡來，才不會互相矛盾
+  const entry = moodId ? 'mood' : ['person', 'scene'].includes(entry0) ? entry0 : 'person';
+  const opening = OPENINGS[opening0] ? opening0 : 'him';
+  const card = await makeEncounterCard({ userId: user.id, frame, label, roles, scene, entry, opening, startFriend });
+  addMessage(rel, 'system', 'scene', { text: card.narration });
   if (scene.implied_lover) addMessage(rel, 'system', 'card', { card: { type: 'hint', text: '戀人關係要靠你們一起慢慢走到，先從朋友開始吧。' } });
-
-  logEvent(user.id, 'meet', { rel: relId, origin, scenario: scenarioId || 'free', start: rel.start_type });
-  await runTurn({ user, relId, trigger: `這是你們的第一次相遇（${label}）。${roles.replace(/你（用戶）/g, '對方')}${startFriend ? '你們本來就認識，語氣自然但還只是朋友。' : '你們是陌生人，有禮貌、不叫小名、不說曖昧的話。'}${scene.moodId ? `對方今天的心情是「${scene.mood}」，你看得出來；先輕輕關心，不追問。` : ''}由你先開口，一兩句就好：先對剛剛發生的事自然反應（例如「欸抱歉，沒撞痛你吧」「你也在等這班車喔」），不用急著自我介紹，名字等聊開了再說；最後留一個對方很好回答的小問題，但不要每次都問「你常來這裡嗎」。suggestions 給三個符合這個場景的回覆。`, triggerKey: 'FIRST' });
+  // 朋友起始：本來就有 LINE，直接傳訊息；其他：先當面聊 2–4 輪，交換聯絡方式後才進聊天
+  const sc = j(db.prepare('SELECT scenario FROM relationships WHERE id=?').get(relId).scenario, {});
+  db.prepare('UPDATE relationships SET scenario=? WHERE id=?').run(JSON.stringify({ ...sc, entry, opening, phase: startFriend ? 'chat' : 'in_person', faceTurns: 0,
+    card: { incident: card.incident, reason_type: card.reason_type, reason_to_talk: card.reason_to_talk, contact_exchange: card.contact_exchange } }), relId);
+  logEvent(user.id, 'meet', { rel: relId, origin, scenario: scenarioId || 'free', start: rel.start_type, entry, opening });
+  let lastId = null;
+  for (const line of card.opener) lastId = addMessage(rel, 'char', 'text', { text: line, card: startFriend ? null : { face: true }, reason: 'FIRST' });
+  if (lastId && card.suggestions?.length) db.prepare('UPDATE messages SET suggest=? WHERE id=?').run(JSON.stringify(card.suggestions.map(x => ({ label: String(x.label).slice(0, 10), text: String(x.text).slice(0, 40) }))), lastId);
+  if (!lastId && opening !== 'me') {
+    // 卡片沒給開場白（不太會發生）：退回原本的方式讓他開口
+    await runTurn({ user, relId, trigger: `這是你們的第一次相遇（${label}）。剛剛發生的事：${card.incident}。你開口的理由：${card.reason_to_talk}。只說旁白裡發生過的事。`, triggerKey: 'FIRST' });
+  }
   // 第一次報備或小問題：當天稍晚
   db.prepare('INSERT INTO followups (rel_id,due_at,topic) VALUES (?,?,?)').run(relId, now() + (3 + Math.random() * 3) * 3600e3,
     '你們今天剛認識。傳一個小小的報備或小問題，讓對方感覺你真的存在（例如你正要下班、或想到剛剛的事）');
@@ -218,7 +223,7 @@ export function cleanupOrphans() {
   const r = db.prepare(`DELETE FROM characters WHERE id IN (
     SELECT c.id FROM characters c JOIN relationships r ON r.character_id=c.id
     WHERE r.status='active' AND r.created_at < ?
-      AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.rel_id=r.id AND m.sender='char'))`).run(now() - 5 * 60000);
+      AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.rel_id=r.id AND m.sender IN ('char','system')))`).run(now() - 5 * 60000);
   if (r.changes) console.log(`removed ${r.changes} unfinished meeting(s)`);
 }
 
