@@ -18,6 +18,8 @@ import { planTurn, planBlock } from './planner.js';
 import { reviewReply, stripNarration } from './turncheck.js';
 import { encounterOf, setEncounter, faceBlock, shouldWrap } from './encounter.js';
 import { syncTalkFromTemplate } from './persona.js';
+import { WRITER_CORE, packBlock, writerSchema, bookkeep } from './turnrules.js';
+const WRITER_SCHEMA = writerSchema(TURN_SCHEMA);
 import { taipeiParts, JOBS } from './characters.js';
 import { notify } from './push.js';
 import { mockTurn } from './mock.js';
@@ -427,7 +429,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
 
   const tier = (crisis || canConfess || triggerKey === 'FIRST' || (rel.stage >= 2 && userText.length > 60) || SAD.test(userText)) ? 'good' : 'cheap';
 
-  const instructions = `${BASE_RULES}\n\n${personaBlock(persona)}`;
+  const instructions = config.splitTurn ? `${WRITER_CORE}\n\n${personaBlock(persona)}` : `${BASE_RULES}\n\n${personaBlock(persona)}`;
   const input = historyInput(rel.id, imageMedia);
   const activity = j(rel.activity);
   const world = await worldP;
@@ -436,7 +438,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const planP = planning ? planTurn({
     rel, persona, user, userText, crisis, lowEffort: lowEffortStreak(rel.id), encounter: enc.card ? { reason: enc.card.reason_to_talk, incident: enc.card.incident, face } : null,
     material: {
-      life: lifeContext(rel.id), arc, told: toldOf(rel.id), threads: persona.threads || [],
+      life: face ? [] : lifeContext(rel.id), arc: face ? null : arc, told: toldOf(rel.id), threads: persona.threads || [],
       followups: dueFollowups.map(f => f.topic), selfTopics: selfTopicsToday(rel.id).map(x => `${x.topic}（${x.n} 次）`),
       episodes: episodesFor(rel.id, userText).map(e => e.summary).filter(Boolean),
     },
@@ -459,11 +461,16 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
   const plan = await planP;
   if (plan) input.push({ role: 'developer', content: planBlock(plan) });
   if (face) input.push({ role: 'developer', content: faceBlock({ card: enc.card, entry: enc.entry, turn: faceTurn, wrap: faceWrap, persona }) });
+  if (config.splitTurn) {
+    const pb = packBlock({ userText, trigger, face, crisis, imageMedia, activity, outingActive: !!rel.outing_active,
+      mealAllowed: mealAsked || (!todayMealProposed && now() - rel.created_at > 864e5) });
+    if (pb) input.push({ role: 'developer', content: pb });
+  }
   if (level === 'low' && !crisis) input.push({ role: 'developer', content: '對方的話裡可能有一點低落或傷害自己的念頭（沒有很明確）。先溫柔地接住、關心對方現在的感受，不要開玩笑、不要轉移話題，也不要急著叫對方去求助；如果對方說得更明白，就切換到支持模式。' });
 
   const call = () => jsonCall({
     userId: rel.user_id, kind: trigger ? 'proactive' : 'chat', tier, instructions, input, essential: !!crisis,
-    schema: TURN_SCHEMA, schemaName: 'turn', cacheKey: `persona:${persona._char.id}`,
+    schema: config.splitTurn ? WRITER_SCHEMA : TURN_SCHEMA, schemaName: 'turn', cacheKey: `persona:${persona._char.id}`,
     mock: () => mockTurn({ rel, persona, user, userText, imageMedia, trigger: triggerKey === 'FIRST' ? 'FIRST' : trigger, todayMealProposed, crisis, lateReply }),
   });
   let out = await call();
@@ -702,6 +709,10 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     if (last) db.prepare('UPDATE messages SET suggest=? WHERE id=?').run(JSON.stringify(sugg), last.id);
   }
 
+  // 寫手／記帳員分開時：記憶、好感、跟進、動態等在背景整理，不讓對方多等
+  if (config.splitTurn && (texts.length || out.meal)) {
+    bookkeep({ rel: refreshRel(rel.id), persona, user, apply: (b) => applyBook(refreshRel(rel.id), persona, user, b, { trigger, crisis: crisis || out.crisis }) });
+  }
   maybeSummarize(refreshRel(rel.id)).catch(err => logIssue({ level: 'warn', source: 'llm', message: `對話摘要失敗：${err.message}`, error: err, userId: rel.user_id, relId: rel.id }));
   if (!trigger || lateReply) consolidateMemories(refreshRel(rel.id), persona, user);
   maybeShapePersona(refreshRel(rel.id), persona).catch(err => logIssue({ level: 'warn', source: 'llm', message: `個性整理失敗：${err.message}`, error: err, userId: rel.user_id, relId: rel.id }));
@@ -712,6 +723,53 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     if (first) notify(user, { name: persona.name, text: first.text, relId: rel.id }).catch(() => {});
   }
   return fresh;
+}
+
+// 背景記帳的結果：和以前一次呼叫時的處理方式相同
+function applyBook(rel, persona, user, b, { trigger, crisis }) {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei' }).format(new Date());
+  const gainedToday = rel.aff_day === today ? rel.aff_gain || 0 : 0;
+  let delta = Math.max(-10, Math.min(5, b.affection_delta || 0));
+  if (delta > 0) delta = Math.max(0, Math.min(delta, Math.round(S('affDailyCap') * config.stageSpeed) - gainedToday));
+  const aff = Math.max(0, Math.min(100, rel.affection + delta));
+  const und = Math.max(0, Math.min(100, rel.understanding + Math.max(0, Math.min(3, b.understanding_delta || 0))));
+  db.prepare('UPDATE relationships SET affection=?, understanding=?, aff_day=?, aff_gain=? WHERE id=?').run(aff, und, today, gainedToday + Math.max(0, delta), rel.id);
+  rel.affection = aff; rel.understanding = und;
+  for (const m of b.memories_add || []) addMemory(rel, m.kind, m.content, m.weight);
+  if ((b.memories_add || []).some(m => m.kind === 'style')) updateUserPrefs(rel.user_id, { force: true }).catch(() => {});
+  for (const m of b.memories_correct || []) correctMemory(rel, m.id, m.content);
+  for (const mid of b.memories_forget || []) forgetMemory(rel, mid);
+  for (const f of b.followups || []) {
+    const mins = Math.max(10, Math.min(7 * 24 * 60, f.in_minutes));
+    db.prepare('INSERT INTO followups (rel_id,due_at,topic) VALUES (?,?,?)').run(rel.id, now() + mins * 60000, String(f.topic).slice(0, 120));
+  }
+  if (b.user_busy_until_minutes && !trigger) {
+    const mins = Math.max(10, Math.min(8 * 60, b.user_busy_until_minutes));
+    db.prepare('UPDATE relationships SET user_busy_until=? WHERE id=?').run(now() + mins * 60000, rel.id);
+    if (!(b.followups || []).length) db.prepare('INSERT INTO followups (rel_id,due_at,topic) VALUES (?,?,?)').run(rel.id, now() + (mins + 5) * 60000, '對方剛剛在忙，問對方順不順利、累不累');
+  }
+  if (b.signature) {
+    const c = db.prepare('SELECT persona FROM characters WHERE id=?').get(persona._char.id);
+    const p = j(c.persona, {});
+    if (!p.signature_at || now() - p.signature_at > 20 * 3600e3) { p.signature = b.signature.slice(0, 24); p.signature_at = now(); db.prepare('UPDATE characters SET persona=? WHERE id=?').run(JSON.stringify(p), persona._char.id); }
+  }
+  if (b.life_post) addPost(rel, b.life_post.slice(0, 100), b.life_post_photo);
+  if (b.told) addTold(rel.id, b.told);
+  if (b.self_topic) addSelfTopic(rel.id, b.self_topic);
+  if (b.note && !crisis) {
+    const t = b.note.trim().slice(0, 40);
+    if (t && !db.prepare('SELECT 1 FROM notes WHERE rel_id=? AND text=?').get(rel.id, t)) {
+      db.prepare('INSERT INTO notes (rel_id,author,text,created_at) VALUES (?,?,?,?)').run(rel.id, 'char', t, now());
+      addMessage(rel, 'system', 'card', { card: { type: 'note', text: t } });
+    }
+  }
+  if (b.status_line) db.prepare('UPDATE relationships SET status_line=?, status_line_at=? WHERE id=?').run(b.status_line.slice(0, 40), now(), rel.id);
+  if (b.place_name) {
+    const recentPhoto = db.prepare(`SELECT id FROM story WHERE rel_id=? AND type='photo' AND place IS NULL AND created_at>? ORDER BY id DESC LIMIT 1`).get(rel.id, now() - 45 * 60000);
+    if (recentPhoto) db.prepare('UPDATE story SET place=? WHERE id=?').run(b.place_name.slice(0, 40), recentPhoto.id);
+  }
+  if (b.milestone && rel.stage >= 1) milestone(rel, b.milestone.slice(0, 40));
+  if (!crisis) evaluateStage(rel, persona, user, { relationship_event: 'none' });
 }
 
 // ---------- 一起做點什麼 ----------

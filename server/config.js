@@ -31,6 +31,8 @@ export const config = {
   // 使用者超過幾天沒回某個角色，那個角色就停止主動傳訊息（對方再傳訊息就恢復）；設 0 關閉
   quietDays: Number(env.QUIET_DAYS ?? 3),
   planner: env.TURN_PLANNER !== '0',
+  // 寫手／記帳員分開、規則依情境分包；設 0 退回舊的一次大提示
+  splitTurn: env.SPLIT_TURN !== '0',
   checkModel: env.CHECK_MODEL !== '0',
   ttsModel: env.TTS_MODEL || 'gpt-4o-mini-tts',
   sttModel: env.STT_MODEL || 'gpt-4o-mini-transcribe',

@@ -200,7 +200,7 @@ function afterRoute(hash) {
   // 新使用者（註冊時 tourDone=false）才看完整導覽；舊使用者只看更新介紹
   const done = st.tourDone !== false;
   if (hash === '#/chat' && !done) return setTimeout(() => runTour(MAIN_TOUR(), { key: 'tourDone', after: { seenNews: LATEST_NEWS } }), 500);
-  if (/^#\/chat\/[\w-]+$/.test(hash) && done && st.roomTourDone === false) return setTimeout(() => runTour(ROOM_TOUR(), { key: 'roomTourDone' }), 900);
+  // 聊天室裡的按鈕不再一進來就導覽：第一次按到某個功能時才介紹那一個（firstTip）
   if (done && (st.seenNews || '') < LATEST_NEWS && ['#/chat', '#/feed', '#/explore', '#/story', '#/me'].includes(hash)) setTimeout(showWhatsNew, 600);
 }
 function showWhatsNew() {
@@ -226,6 +226,28 @@ const ROOM_TOUR = () => [
   { title: '更多', text: '相簿、記事本、回憶錄、依主題搜尋聊過的事、換聊天室主題；他說話怪怪的，就從這裡「回報問題」，會馬上修正。', sel: '#more' },
   { title: '這句怪怪的？', text: '長按（電腦按右鍵）他說的話，可以評「很像真人」或「怪怪的」，也可以寫他應該怎麼說。大家的回饋會讓所有角色說話越來越自然。', sel: '#stream' },
 ];
+
+// 第一次用到某個功能時，才在畫面下方輕輕介紹一次（不擋操作，幾秒後自己收起）
+const TIPS = {
+  topic: '話題錦囊：讓對方帶你聊、問一件事、玩小遊戲、一起做點什麼。',
+  sug: '這三個是回覆方向，點了會幫你寫好一句，可以改了再送。',
+  mood: '心情按鈕：不想打字時選一個心情傳給對方；連按越多下代表越強烈。',
+  more: '這裡有相簿、記事本、搜尋聊過的事；對方說話怪怪的，可以從這裡「回報問題」。',
+  rate: '長按對方說的話，可以評「很像真人」或「怪怪的」，也能寫他應該怎麼說。',
+};
+function firstTip(key) {
+  const seen = S.me?.settings?.tips || {};
+  if (!TIPS[key] || seen[key] || tourOn) return;
+  S.me.settings.tips = { ...seen, [key]: 1 };
+  api('/api/me', { method: 'PATCH', body: { settings: { tips: S.me.settings.tips } } }).catch(() => {});
+  const el = document.createElement('div');
+  el.className = 'first-tip'; el.setAttribute('role', 'status');
+  el.innerHTML = `<span>${esc(TIPS[key])}</span><button type="button">知道了</button>`;
+  document.body.appendChild(el);
+  const close = () => el.remove();
+  el.querySelector('button').onclick = close;
+  setTimeout(close, 7000);
+}
 
 // 一步一步的導覽：把要介紹的地方圈起來，旁邊放說明和「下一步」
 async function runTour(steps, { key, value = true, after = {}, doneLabel = '完成' } = {}) {
@@ -305,7 +327,7 @@ function renderJoin() {
       <p class="small muted">作息、喜好不用填，對方會從聊天裡慢慢認識你。</p>
       <label class="check"><input type="checkbox" name="adult" required><span>我已年滿 18 歲</span></label>
       <label class="check"><input type="checkbox" name="aiAck" required><span>我了解對方是 AI 角色，不是真人；對話會交由 AI 服務（OpenAI，美國）處理。</span></label>
-      <label class="check"><input type="checkbox" name="feedbackConsent"><span>（可不勾）同意把我評價過、或我說「聽不懂」的那幾句對話，去掉名字後用來讓角色說話更自然。</span></label>
+      <!-- 測試期不另外問回饋同意：預設提供，「我 → 隱私與資料」可以關掉；隱私權政策已說明 -->
       <p class="small muted">繼續即表示你同意<a href="/privacy" target="_blank">隱私權政策與使用條款</a>。</p>
       <button class="btn block" style="margin-top:14px">繼續</button>
     </form></div>`;
@@ -327,7 +349,7 @@ function renderJoin() {
     const fd = Object.fromEntries(new FormData(e.target));
     if (!pick.seeks) return toast('選一下你想遇見誰');
     try {
-      const r = await api('/api/auth/join', { method: 'POST', body: { ...fd, ...pick, adult: !!fd.adult, aiAck: !!fd.aiAck, feedbackConsent: !!fd.feedbackConsent } });
+      const r = await api('/api/auth/join', { method: 'POST', body: { ...fd, ...pick, adult: !!fd.adult, aiAck: !!fd.aiAck, feedbackConsent: true } });
       S.me = await api('/api/me');
       // 用真的表單（帳號＋密碼欄位）顯示登入碼：按下去時瀏覽器會問要不要「儲存密碼」，下次登入自動填入
       app.innerHTML = `<div class="page" style="padding-bottom:32px"><h1>這是你的登入碼</h1>
@@ -341,7 +363,7 @@ function renderJoin() {
           <button class="btn block" id="go">好，去認識${TA()}</button></form></div>`;
       $('#copyCode').onclick = () => copyText(r.recoveryCode);
       $('#keepCode').onclick = async () => toast(await keepLoginCode(S.me.nickname, r.recoveryCode) ? '已經存好了' : '這個瀏覽器不支援直接存；按下面的按鈕時，瀏覽器問要不要儲存密碼，選「儲存」');
-      $('#saveF').onsubmit = (ev) => { ev.preventDefault(); keepLoginCode(S.me.nickname, r.recoveryCode, true); location.hash = '#/taste'; };
+      $('#saveF').onsubmit = (ev) => { ev.preventDefault(); keepLoginCode(S.me.nickname, r.recoveryCode, true); location.hash = '#/meet'; };
     } catch (err) { toast(errMsg(err)); }
   };
 }
@@ -701,7 +723,8 @@ function playPrologue(rel, msgs, { portrait } = {}) {
     <button class="vn-skip" type="button">跳過</button>
     <button class="vn-sound" type="button" aria-label="環境音" aria-pressed="false" hidden>🔈</button>
     <div class="vn-who">${who}</div>
-    <div class="vn-box" role="button" tabindex="0" aria-live="polite"><span class="vn-name" hidden></span><p class="vn-text"></p><span class="vn-next" aria-hidden="true">▼</span></div>`;
+    <div class="vn-box" role="button" tabindex="0" aria-live="polite"><span class="vn-name" hidden></span><p class="vn-text"></p><span class="vn-next" aria-hidden="true">▼</span></div>
+    <button class="vn-prev" type="button" aria-label="上一段" hidden>‹ 上一段</button>`;
   document.body.appendChild(el);
   const text = $('.vn-text', el), name = $('.vn-name', el), whoEl = $('.vn-who', el), box = $('.vn-box', el);
   const steps = [{ narr: scene.text }, ...lines.map(l => l.act ? { narr: l.act, show: true } : l)];
@@ -713,17 +736,29 @@ function playPrologue(rel, msgs, { portrait } = {}) {
     let k = 0; const cs = [...s];
     typing = setInterval(() => { text.textContent += cs[k++] || ''; if (k >= cs.length) { clearInterval(typing); typing = null; } }, 42);
   };
+  const prevBtn = $('.vn-prev', el);
+  const show = (k, animate = true) => {
+    const st = steps[k];
+    prevBtn.hidden = k <= 0;
+    if (st.show || st.say || k > (steps.findIndex(s => s.show || s.say) === -1 ? 99 : steps.findIndex(s => s.show || s.say))) whoEl.classList.add('in');
+    if (st.say) { name.hidden = false; name.textContent = displayName(rel.frame); box.classList.add('say'); }
+    else { name.hidden = true; box.classList.remove('say'); }
+    if (animate) type(st.narr || st.say); else { clearInterval(typing); typing = null; full = st.narr || st.say; text.textContent = full; }
+  };
   const next = () => {
     if (typing) { clearInterval(typing); typing = null; text.textContent = full; return; } // 打字中：先一次顯示完
     i++;
     if (i >= steps.length) return done();
-    const st = steps[i];
-    if (st.show) whoEl.classList.add('in');
-    if (st.say) { whoEl.classList.add('in'); name.hidden = false; name.textContent = displayName(rel.frame); box.classList.add('say'); }
-    else { name.hidden = true; box.classList.remove('say'); }
-    type(st.narr || st.say);
+    show(i);
   };
-  box.onclick = next; box.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); next(); } };
+  // 回上一段：忘了前面發生什麼時可以回去看（不重新打字）
+  const prev = () => { if (i <= 0) return; i--; show(i, false); };
+  prevBtn.onclick = (e) => { e.stopPropagation(); prev(); };
+  box.onclick = next;
+  const onKey = (e) => { if (!document.body.contains(el)) return document.removeEventListener('keydown', onKey);
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowRight') { e.preventDefault(); next(); }
+    else if (e.key === 'ArrowLeft' || e.key === 'Backspace') { e.preventDefault(); prev(); } };
+  document.addEventListener('keydown', onKey);
   $('.vn-skip', el).onclick = done;
   // 環境音：下雨的場景用合成的雨聲，預設關閉、使用者自己打開
   if (rel.sceneFx === 'rain' && window.AudioContext) {
@@ -1080,6 +1115,12 @@ async function renderRoom(relId) {
   </div>`;
   $('#who').onclick = () => { location.hash = `#/profile/${rel.id}`; };
   $('#more').onclick = () => openRoomMenu(rel);
+  // 第一次按到聊天室裡的功能時，才介紹那一個
+  if (!app._tipBound) app._tipBound = true, app.addEventListener('click', (e) => {
+    const t = e.target.closest?.('#topicBtn, .sug-toggle, #moodBtn, #more');
+    if (!t) return;
+    setTimeout(() => firstTip(t.id === 'topicBtn' ? 'topic' : t.id === 'moodBtn' ? 'mood' : t.id === 'more' ? 'more' : 'sug'), 400);
+  }, { capture: true });
   $('#reenc') && ($('#reenc').onclick = async () => {
     $('#reenc').disabled = true;
     try { await api(`/api/rels/${rel.id}/reencounter`, { method: 'POST' }); renderRoom(rel.id); } catch (e) { toast(errMsg(e)); $('#reenc').disabled = false; }
@@ -1222,6 +1263,7 @@ async function renderRoom(relId) {
       if (!typing) { markLocalRead(nodes); typing = showTyping(); typingAt = Date.now(); }
       locals().forEach(n => n.remove());
       await revealSequential(res.messages || [], { typing, typingAt });
+      if (($$('.msg.me', $('#stream')).length) >= 6) setTimeout(() => firstTip('rate'), 1500);
       // 當面相遇結束（交換了 LINE、或要決定要不要交換）：重畫聊天室換成傳訊息的樣子
       if (res.phase && res.phase !== (S.room.rel.phase || 'chat')) { const id = S.room.rel.id; setTimeout(() => { if (S.room?.rel?.id === id) renderRoom(id); }, 1200); }
     } catch (e) {

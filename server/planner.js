@@ -37,9 +37,29 @@ export const MOVES = {
 const LEADING = new Set(['share_life', 'continue_thread', 'new_topic', 'follow_up']);
 const STANCES = { agree: '同意', partly: '部分同意、補一個自己的看法', disagree: '不同意，照你的個性說出來', tease: '吐槽', neutral: '沒有特別的立場' };
 
+// 先讀懂對方這句話（意圖、言外之意、情緒、期待），再決定這輪要做什麼
+export const NEEDS = {
+  answer: '問了問題，想要答案', share: '分享自己的事或近況', vent: '抱怨、發洩', comfort: '難過、想被安慰',
+  advice: '想聽建議或意見', joke: '開玩笑、鬥嘴', small_talk: '隨口聊、打招呼', challenge: '質疑或試探你',
+  flirt: '撒嬌、曖昧', closing: '要去忙、要睡或想結束', low_effort: '敷衍或沒話說（嗯、哈哈、好）', unclear: '看不懂在說什麼',
+};
+const READ_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    need: { type: 'string', enum: Object.keys(NEEDS), description: '對方這句話最主要的意圖' },
+    meaning: { type: 'string', description: '對方真正想表達的意思，包含言外之意、反話、玩笑（30 字內）' },
+    emotion: { type: 'string', description: '對方此刻的情緒與強弱，例如「有點煩（中）」「開心（強）」「平淡」' },
+    expects: { type: 'string', description: '對方期待你怎麼回（例如「回答他的問題再分享你的」「先站在他這邊」「接住玩笑」）' },
+    must_address: { type: 'array', items: { type: 'string' }, description: '回覆裡一定要回應到的點（例如對方問的問題、對方提到的具體事情），0–3 條' },
+    unclear: { type: ['string', 'null'], description: '看不懂、需要先確認的地方（例如不認識的詞），沒有就 null' },
+  },
+  required: ['need', 'meaning', 'emotion', 'expects', 'must_address', 'unclear'],
+};
+
 const PLAN_SCHEMA = {
   type: 'object', additionalProperties: false,
   properties: {
+    read: READ_SCHEMA,
     move: { type: 'string', enum: Object.keys(MOVES) },
     material: { type: 'string', description: '要用的具體素材（例如「今天店裡阿伯又點三杯美式」），沒有就空字串' },
     stance: { type: 'string', enum: Object.keys(STANCES) },
@@ -48,7 +68,7 @@ const PLAN_SCHEMA = {
     inner: { type: 'string', description: '角色此刻心裡真正的想法，第一人稱，30 字內' },
     avoid: { type: 'array', items: { type: 'string' }, description: '這輪要避免的說法（例如最近重複的開頭），0–3 條' },
   },
-  required: ['move', 'material', 'stance', 'ask', 'bubbles', 'inner', 'avoid'],
+  required: ['read', 'move', 'material', 'stance', 'ask', 'bubbles', 'inner', 'avoid'],
 };
 
 /** 最近幾輪用了哪些動作（新的在前）。 */
@@ -80,7 +100,14 @@ export async function planTurn({ rel, persona, user, userText, material = {}, lo
   const block = (title, arr) => (arr && arr.length ? `## ${title}\n${arr.map(x => '- ' + x).join('\n')}` : '');
   const st = charStatus(persona);
   const instructions = `你是聊天角色「${persona.name}」的內心。對方（${user.call_name}）剛傳了訊息。先不要寫回覆，只決定這一輪要「做什麼」，讓聊天像真人：有來有往，不是只會回應和發問。
+第一步：先讀懂對方這句話（read）。看最近的對話脈絡，不要只看字面：
+- need：對方最主要想做什麼。短短的「嗯」「哈哈」「好」大多是 low_effort；「然後呢」是想聽下去；反話、玩笑、試探要看出來。
+- meaning：對方真正的意思（包含言外之意）。emotion：情緒和強弱。expects：對方期待你怎麼回。
+- must_address：對方問的問題、提到的具體事情，回覆一定要回應到（問題要先回答，不能跳過）。
+- unclear：有看不懂的詞或意思不清楚，就寫下來，這輪先自然地確認，不要猜、不要裝懂。
+第二步：依讀到的意思決定這輪要做什麼。
 規則：
+- move 要配合 need：answer 先回答再看要不要分享；vent／comfort 先站在對方這邊、接住情緒（comfort）；challenge 用 repair 或照個性回嘴；closing 用 wind_down；low_effort 換你帶話題；unclear 用 respond 並確認。
 - move 從清單挑一個最自然的。真人聊天大約一半在回應對方，另一半會分享自己的事、接回舊話題或開新話題。
 - material 要具體，從下面「你手上的素材」挑；挑 share_life／continue_thread／follow_up 時一定要填，而且不能挑「已經講過」或今天講過 2 次以上的事。
 - stance：依你的個性（${persona.traits || ''}）決定同不同意，不要每次都同意。你跟人意見不同時：${LABELS.pushback[tk.pushback]}。
@@ -122,6 +149,7 @@ ${hints.length ? `\n這輪特別注意：\n${hints.map(h => '- ' + h).join('\n')
   if (!MOVES[plan.move]) return null;
   if (crisis) { plan.move = 'comfort'; plan.ask = false; }
   else if (awkward) { plan.move = 'repair'; plan.ask = false; if (encounter?.reason && !plan.material) plan.material = encounter.reason; }
+  else if (plan.read?.unclear) { plan.move = 'respond'; plan.ask = true; } // 看不懂就先確認
   db.prepare('INSERT INTO turn_plans (rel_id, move, plan, created_at) VALUES (?,?,?,?)').run(rel.id, plan.move, JSON.stringify(plan), now());
   return plan;
 }
@@ -129,7 +157,16 @@ ${hints.length ? `\n這輪特別注意：\n${hints.map(h => '- ' + h).join('\n')
 /** 給寫回覆那一步的指示（developer 訊息）。 */
 export function planBlock(plan) {
   if (!plan) return '';
+  const r = plan.read || {};
   return [
+    '## 對方這句話的意思',
+    r.need ? `- 意圖：${NEEDS[r.need] || r.need}` : '',
+    r.meaning ? `- 真正想說的：${r.meaning}` : '',
+    r.emotion ? `- 情緒：${r.emotion}` : '',
+    r.expects ? `- 對方期待你：${r.expects}` : '',
+    r.must_address?.length ? `- 一定要回應到：${r.must_address.join('；')}` : '',
+    r.unclear ? `- 看不懂的地方（這輪先自然地確認，不要猜）：${r.unclear}` : '',
+    '',
     '## 這一輪你決定這樣做（照做，但不要在訊息裡提到「計畫」）',
     `- 動作：${MOVES[plan.move]}`,
     plan.material ? `- 要用的素材：${plan.material}` : '',
@@ -144,7 +181,8 @@ export function planBlock(plan) {
 function mockPlan({ reactiveStreak, userShort, crisis, material }) {
   const life = material.life?.[0] || material.threads?.[0] || '';
   const move = crisis ? 'comfort' : (reactiveStreak >= 3 || userShort) && life ? 'share_life' : 'respond';
-  return { move, material: move === 'share_life' ? life : '', stance: 'neutral', ask: !userShort && !crisis, bubbles: userShort ? 1 : 2, inner: '', avoid: [] };
+  return { read: { need: crisis ? 'comfort' : userShort ? 'low_effort' : 'small_talk', meaning: '', emotion: '平淡', expects: '', must_address: [], unclear: null },
+    move, material: move === 'share_life' ? life : '', stance: 'neutral', ask: !userShort && !crisis, bubbles: userShort ? 1 : 2, inner: '', avoid: [] };
 }
 
 export function plansOf(relId, limit = 30) {
