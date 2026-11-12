@@ -443,7 +443,7 @@ async function renderMeet(step) {
   tabs.hidden = true;
   const back = `<a class="icon-btn back" href="${S.rels.length ? '#/chat' : '#/meet'}" aria-label="返回">${icon('back')}</a>`;
   if (!step) {
-    Object.assign(M, { templateId: null, custom: null, frame: null, scenarioId: null, scenarioText: '', reunionRelId: null, mood: null, entry: null, opening: null });
+    Object.assign(M, { templateId: null, custom: null, frame: null, scenarioId: null, scenarioText: '', reunionRelId: null, mood: null, entry: null, opening: null, portrait: null });
     app.innerHTML = `<div class="page" style="padding-bottom:32px">${back}
       <h1>你想怎麼遇見${TA()}？</h1>
       <button class="choice" data-go="person"><b>我想認識${TA()}</b><span>先選一個人，再決定你們在哪裡遇見</span></button>
@@ -464,7 +464,7 @@ async function renderMeet(step) {
       $$('[data-cat]').forEach(b => b.onclick = () => { cat = S.meetCat = b.dataset.cat; draw(); });
       $$('.person').forEach(b => b.onclick = () => {
         const t = list.find(x => x.id === b.dataset.id);
-        M.templateId = t.id; M.frame = t.frame; M.custom = null; M.entry = 'person';
+        M.templateId = t.id; M.frame = t.frame; M.custom = null; M.entry = 'person'; M.portrait = t.portrait || null;
         location.hash = '#/meet/where';
       });
       $('#custom').onclick = () => { location.hash = '#/meet/custom'; };
@@ -616,7 +616,7 @@ async function renderMood() {
     M.mood = r.mood.id; M.scenarioId = r.mood.scenario; M.scenarioText = '';
     $('#moodPicks').innerHTML = `<h2>此刻適合遇見的人</h2>${r.mood.friend ? `<p class="small muted">先從朋友開始，${TA()}會陪你把心情說清楚。</p>` : ''}
       ${r.picks.length ? `<div class="people">${r.picks.map(t => personCard(t)).join('')}</div>` : '<p class="muted">現有的角色你都認識了。</p>'}`;
-    $$('#moodPicks .person').forEach(p => p.onclick = () => { const t = r.picks.find(x => x.id === p.dataset.id); M.templateId = t.id; M.frame = t.frame; doMeet(); });
+    $$('#moodPicks .person').forEach(p => p.onclick = () => { const t = r.picks.find(x => x.id === p.dataset.id); M.templateId = t.id; M.frame = t.frame; M.portrait = t.portrait || null; doMeet(); });
     $('#moodPicks').scrollIntoView({ behavior: 'smooth' });
   });
 }
@@ -630,7 +630,7 @@ async function renderWho() {
     ${r.picks.length ? `<div class="people">${r.picks.map(t => personCard(t)).join('')}</div>` : (r.reunion ? '' : '<p class="muted">今天這裡好像沒有新面孔。換個情境，或到「我想認識${TA()}」自己捏一個。</p>')}</div>`;
   $$('.person').forEach(b => b.onclick = () => {
     const t = r.picks.find(x => x.id === b.dataset.id);
-    M.templateId = t.id; M.frame = t.frame; M.entry = 'scene'; doMeet();
+    M.templateId = t.id; M.frame = t.frame; M.entry = 'scene'; M.portrait = t.portrait || null; doMeet();
   });
   if (r.reunion) $('#reunion').onclick = () => { M.reunionRelId = r.reunion.relId; M.frame = r.reunion.frame; doMeet(); };
 }
@@ -682,6 +682,65 @@ async function chooseOpening() {
   });
 }
 
+// 前導劇情（輕量視覺小說）：場景插圖 → 旁白打字 → 角色淡入 → 他當面說的第一句。點一下前進，可以跳過
+function playPrologue(rel, msgs, { portrait } = {}) {
+  const scene = msgs.find(m => m.kind === 'scene');
+  if (!scene) return;
+  const lines = msgs.filter(m => m.sender === 'char' && m.kind === 'text').slice(0, 2).map(m => m.text);
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // 向量場景圖墊底；插圖載入成功就蓋在上面，載不到就移除，看到的是向量圖
+  const bg = `<div class="vn-bg vn-svg">${sceneSVG(rel.scenarioId || 'city', { label: '' })}</div>${rel.sceneArt ? `<img class="vn-bg" src="/scene-art/${esc(rel.sceneArt)}" alt="" onerror="this.remove()">` : ''}`;
+  const who = portrait ? `<img src="${esc(portrait)}" alt="${esc(displayName(rel.frame))}">` : avatar(rel.frame, 120, { season: false });
+  const el = document.createElement('div');
+  el.className = `vn ${rel.sceneFx ? 'fx-' + rel.sceneFx : ''}`;
+  el.innerHTML = `${bg}<div class="vn-fx" aria-hidden="true"></div>
+    <button class="vn-skip" type="button">跳過</button>
+    <button class="vn-sound" type="button" aria-label="環境音" aria-pressed="false" hidden>🔈</button>
+    <div class="vn-who">${who}</div>
+    <div class="vn-box" role="button" tabindex="0" aria-live="polite"><span class="vn-name" hidden></span><p class="vn-text"></p><span class="vn-next" aria-hidden="true">▼</span></div>`;
+  document.body.appendChild(el);
+  const text = $('.vn-text', el), name = $('.vn-name', el), whoEl = $('.vn-who', el), box = $('.vn-box', el);
+  const steps = [{ narr: scene.text }, ...lines.map(t => ({ say: t }))];
+  let i = -1, typing = null, full = '', audio = null;
+  const done = () => { clearInterval(typing); audio?.stop(); el.classList.add('out'); setTimeout(() => el.remove(), reduce ? 0 : 450); };
+  const type = (s) => {
+    clearInterval(typing); full = s; text.textContent = '';
+    if (reduce) { text.textContent = s; return; }
+    let k = 0; const cs = [...s];
+    typing = setInterval(() => { text.textContent += cs[k++] || ''; if (k >= cs.length) { clearInterval(typing); typing = null; } }, 42);
+  };
+  const next = () => {
+    if (typing) { clearInterval(typing); typing = null; text.textContent = full; return; } // 打字中：先一次顯示完
+    i++;
+    if (i >= steps.length) return done();
+    const st = steps[i];
+    if (st.say) { whoEl.classList.add('in'); name.hidden = false; name.textContent = displayName(rel.frame); box.classList.add('say'); }
+    else { name.hidden = true; box.classList.remove('say'); }
+    type(st.narr || st.say);
+  };
+  box.onclick = next; box.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); next(); } };
+  $('.vn-skip', el).onclick = done;
+  // 環境音：下雨的場景用合成的雨聲，預設關閉、使用者自己打開
+  if (rel.sceneFx === 'rain' && window.AudioContext) {
+    const btn = $('.vn-sound', el); btn.hidden = false;
+    btn.onclick = () => {
+      if (audio) { audio.stop(); audio = null; btn.setAttribute('aria-pressed', 'false'); btn.textContent = '🔈'; return; }
+      audio = rainSound(); btn.setAttribute('aria-pressed', 'true'); btn.textContent = '🔊';
+    };
+  }
+  setTimeout(next, reduce ? 0 : 500);
+}
+function rainSound() {
+  const ctx = new AudioContext();
+  const len = ctx.sampleRate * 2, buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+  let last = 0; for (let n = 0; n < len; n++) { const w = Math.random() * 2 - 1; last = (last + 0.02 * w) / 1.02; d[n] = last * 3.5; }
+  const src = ctx.createBufferSource(); src.buffer = buf; src.loop = true;
+  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1400;
+  const g = ctx.createGain(); g.gain.value = 0; g.gain.linearRampToValueAtTime(0.35, ctx.currentTime + 1.2);
+  src.connect(f).connect(g).connect(ctx.destination); src.start();
+  return { stop: () => { g.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.4); setTimeout(() => ctx.close(), 500); } };
+}
+
 async function doMeet() {
   if (!M.reunionRelId && !M.opening) { M.opening = await chooseOpening(); if (!M.opening) return; }
   const stop = goingScreen();
@@ -690,7 +749,7 @@ async function doMeet() {
     const r = await api('/api/meet', { method: 'POST', body: { templateId: M.templateId, custom: M.custom, scenarioId: M.scenarioId, scenarioText: M.scenarioText, reunionRelId: M.reunionRelId, mood: M.mood, entry: M.entry, opening: M.opening } });
     // 太快的話稍微停一下，讓過場看得完第一句
     const wait = 1800 - (Date.now() - started); if (wait > 0) await new Promise(res => setTimeout(res, wait));
-    stop(); location.hash = `#/chat/${r.relId}`;
+    stop(); S.prologue = M.reunionRelId ? null : { relId: r.relId, portrait: M.portrait || null }; location.hash = `#/chat/${r.relId}`;
   } catch (e) {
     stop();
     const back = M.templateId && !M.reunionRelId && location.hash !== '#/meet/who' ? '#/meet/where' : (M.scenarioText ? '#/meet/scene' : null);
@@ -877,7 +936,7 @@ function messageHtml(m, rel, prev) {
   const side = m.sender === 'user' ? 'me' : 'him';
   const glow = side === 'him' && rel.mode === 'practice' && rel.stage === 2 ? ' glow' : '';
   if (m.kind === 'scene') {
-    const art = m.id === S.room?.firstSceneId ? `<div class="scene-art">${sceneSVG(rel.scenarioId || 'city', { label: '你們相遇的地方' })}</div>` : '';
+    const art = m.id === S.room?.firstSceneId ? (rel.sceneArt ? `<div class="scene-art scene-img"><img src="/scene-art/${esc(rel.sceneArt)}" alt="你們相遇的地方" loading="lazy" onerror="this.parentNode.innerHTML=this.parentNode.dataset.svg" ></div>`.replace('class="scene-art scene-img"', `class="scene-art scene-img" data-svg="${esc(sceneSVG(rel.scenarioId || 'city', { label: '你們相遇的地方' }))}"`) : `<div class="scene-art">${sceneSVG(rel.scenarioId || 'city', { label: '你們相遇的地方' })}</div>`) : '';
     return out + `${art}<div class="scene" data-id="${m.id}">${esc(m.text)}</div>`;
   }
   if (m.kind === 'card') return out + cardHtml(m, rel);
@@ -1031,6 +1090,7 @@ async function renderRoom(relId) {
   S.room.messages = msgs;
   S.room.firstSceneId = msgs.find(m => m.kind === 'scene')?.id;
   stream.innerHTML = msgs.map((m, i) => messageHtml(m, rel, msgs[i - 1])).join('');
+  if (S.prologue?.relId === rel.id) { const pr = S.prologue; S.prologue = null; playPrologue(rel, msgs, pr); }
   stream.scrollTop = stream.scrollHeight;
   markRead();
   bindStream(stream);
@@ -2029,7 +2089,7 @@ async function renderExplore() {
     ${shared.length ? `<div class="grid">${shared.map(tile).join('')}</div>` : `<p class="muted">${cat ? '這個分類還沒有人分享。' : `還沒有人分享。你和${TA()}聊得夠熟之後，可以讓其他人也認識${TA()}。`}</p>`}
   </div>`;
   $$('[data-cat]').forEach(b => b.onclick = () => { cat = S.exploreCat = b.dataset.cat; draw(); });
-  $('#exCustom').onclick = () => { Object.assign(M, { templateId: null, custom: null, frame: null, scenarioId: null, scenarioText: '', reunionRelId: null, mood: null }); location.hash = '#/meet/custom'; };
+  $('#exCustom').onclick = () => { Object.assign(M, { templateId: null, custom: null, frame: null, scenarioId: null, scenarioText: '', reunionRelId: null, mood: null, entry: 'person', opening: null, portrait: null }); location.hash = '#/meet/custom'; };
   $$('.tile').forEach(b => b.onclick = () => {
     const t = list.find(x => x.id === b.dataset.id);
     const f = t.frame;
@@ -2043,7 +2103,7 @@ async function renderExplore() {
       <button class="btn block" id="meetHim">認識${ta(f)}</button>
       ${t.kind === 'shared' ? '<p style="text-align:center;margin-top:12px"><button class="linkbtn small" id="report">檢舉這個角色</button></p>' : ''}`,
     (sheet, close) => {
-      $('#meetHim', sheet).onclick = () => { close(); Object.assign(M, { templateId: t.id, frame: f, custom: null, reunionRelId: null }); location.hash = '#/meet/where'; };
+      $('#meetHim', sheet).onclick = () => { close(); Object.assign(M, { templateId: t.id, frame: f, custom: null, reunionRelId: null, entry: 'person', opening: null, portrait: t.portrait || null }); location.hash = '#/meet/where'; };
       $('#report', sheet) && ($('#report', sheet).onclick = async () => {
         const reason = prompt('哪裡不適合？（例如：模仿真人、未成年設定）'); if (reason === null) return;
         await api(`/api/templates/${t.id}/report`, { method: 'POST', body: { reason } }); close(); toast('謝謝，我們會處理');

@@ -10,6 +10,7 @@ import { describeNow, charStatus } from './characters.js';
 import { recentLines } from './review.js';
 import { logIssue } from './logger.js';
 import { isAwkward, isBye } from './encounter.js';
+import { talkOf, LABELS, discloseLayer } from './persona.js';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS turn_plans (
@@ -73,13 +74,17 @@ export async function planTurn({ rel, persona, user, userText, material = {}, lo
   else if (!crisis && isBye(userText)) hints.push('對方在道別：move 用 wind_down，ask 設 false。');
   if (encounter?.face) hints.push(`你們現在是當面說話（剛剛發生的事：${encounter.incident}）。只聊眼前的事和一點自己，不要 new_topic 跳太遠，也不要 follow_up 你們沒聊過的事。`);
   if (moves[0] && moves[0] === moves[1]) hints.push(`最近兩輪都是 ${moves[0]}，這輪換一個不同的動作。`);
+  const tk = talkOf(persona);
   const block = (title, arr) => (arr && arr.length ? `## ${title}\n${arr.map(x => '- ' + x).join('\n')}` : '');
   const st = charStatus(persona);
   const instructions = `你是聊天角色「${persona.name}」的內心。對方（${user.call_name}）剛傳了訊息。先不要寫回覆，只決定這一輪要「做什麼」，讓聊天像真人：有來有往，不是只會回應和發問。
 規則：
 - move 從清單挑一個最自然的。真人聊天大約一半在回應對方，另一半會分享自己的事、接回舊話題或開新話題。
 - material 要具體，從下面「你手上的素材」挑；挑 share_life／continue_thread／follow_up 時一定要填，而且不能挑「已經講過」或今天講過 2 次以上的事。
-- stance：依你的個性（${persona.traits || ''}）決定同不同意，不要每次都同意。
+- stance：依你的個性（${persona.traits || ''}）決定同不同意，不要每次都同意。你跟人意見不同時：${LABELS.pushback[tk.pushback]}。
+- 分享自己的事時，這個關係階段最多講到「${discloseLayer(tk.disclose, rel.stage)}」。
+- 對方難過時，照你的方式：${LABELS.comfort[tk.comfort]}。
+${tk.worry ? `- 你最近在忙或在煩：${tk.worry}（可以當素材，但要符合上面的揭露程度）\n` : ''}${tk.likes.length ? `- 你喜歡：${tk.likes.join('、')}；討厭：${tk.dislikes.join('、') || '（沒特別）'}（可以當立場和素材）\n` : ''}
 - ask：大多數輪不用問問題；問的話只問一個好回答的。
 - bubbles：剛認識 1–2、朋友 1–3；對方很短就 1。
 - inner：你心裡真正的想法（可以和你說出口的不一樣）。

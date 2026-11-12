@@ -28,6 +28,8 @@ import { episodesList } from './memory.js';
 import { topicsFor, GAMES, ACTIVITIES, LEAD_REASON, EMOTIONS, pokeReason , EMOTION_GROUPS, BODY_FEELINGS, DIRECTIONS, candidateWords, unsureReason} from './topics.js';
 import { seedOfficial, meet, sharePreview, publishShare, cleanupOrphans } from './meet.js';
 import { encounterOf, setEncounter, makeEncounterCard, OPENINGS } from './encounter.js';
+import { backfillTemplates } from './persona.js';
+import { sceneArtFile } from './sceneart.js';
 import { startScheduler, tick } from './scheduler.js';
 import { pushEnabled } from './push.js';
 import { adminStats } from './admin.js';
@@ -51,6 +53,8 @@ app.use(cookieParser());
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 seedOfficial();
+// 人設細節（行為模組 J）：官方角色缺的喜好、煩惱、禁區在背景補，每 10 分鐘補一批，補完就停
+{ const run = () => backfillTemplates(10).then(n => { if (n > 0) setTimeout(run, 10 * 60000); }).catch(() => {}); setTimeout(run, 30000); }
 cleanupOrphans();
 setInterval(cleanupOrphans, 10 * 60000);
 
@@ -340,7 +344,7 @@ function relSummary(rel) {
     last: last ? { text: last.retracted ? (last.sender === 'user' ? '你已收回訊息' : '已收回訊息') : last.kind === 'voice' ? '［語音訊息］' : last.kind === 'photo' ? '［照片］' : last.kind === 'sticker' ? '［貼圖］' : last.text, at: last.created_at, sender: last.sender } : null,
     unread, endedAt: rel.ended_at, createdAt: rel.created_at,
     scenarioId: (() => { const sc = j(rel.scenario, {}); return sc.id || SCENARIOS.find(x => x.label === sc.label)?.id || null; })(),
-    phase: j(rel.scenario, {}).phase || 'chat', entry: j(rel.scenario, {}).entry || null,
+    phase: j(rel.scenario, {}).phase || 'chat', entry: j(rel.scenario, {}).entry || null, sceneArt: j(rel.scenario, {}).art || null, sceneFx: j(rel.scenario, {}).fx || '',
   };
 }
 
@@ -1177,6 +1181,13 @@ process.on('uncaughtException', (e) => logIssue({ source: 'server', message: `�
 
 // ---------- static PWA ----------
 const pub = path.join(__dirname, '..', 'public');
+// 前導劇情的場景插圖（第一次有人看時才從圖庫抓下來存好）
+app.get('/scene-art/:key', wrap(async (req, res) => {
+  const f = await sceneArtFile(String(req.params.key).replace(/\.webp$/, ''));
+  if (!f) return res.status(404).end();
+  res.set('Cache-Control', 'public, max-age=2592000');
+  res.type('image/webp').sendFile(f);
+}));
 app.use('/lib', express.static(LIB_DIR, { maxAge: '30d' }));
 app.use(express.static(pub, {
   setHeaders(res, p) {

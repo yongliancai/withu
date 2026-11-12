@@ -3,6 +3,7 @@ import { styleBlock } from './styles.js';
 import { dayPeriod, gapLabel } from './review.js';
 import { taipeiParts as tp } from './characters.js';
 import { PHOTO_TAGS, PHOTO_TAG_GUIDE } from './photos.js';
+import { talkBlock } from './persona.js';
 
 export const STAGES = ['認識', '朋友', '曖昧', '交往', '長期伴侶'];
 const ACT_LABEL = { watch: '一起看劇', focus: '陪對方專心做事（不要打擾）', bedtime: '睡前聊聊' };
@@ -144,6 +145,8 @@ export function personaBlock(p) {
 ${p.emergent ? `在相處中長出來的樣子：${p.emergent}` : ''}
 ${p.threads?.length ? `你生活中正在進行的事：${p.threads.join('；')}` : ''}
 ${p.signature ? `你目前的個性簽名：${p.signature}` : ''}
+
+${talkBlock(p)}
 
 ${styleBlock(p)}
 `.trim();
