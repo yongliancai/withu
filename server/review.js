@@ -2,6 +2,7 @@
 // 避免下午說早安、對方剛說在忙還硬開話題、跟前面的對話接不上這類「亂傳」。
 import { db, now } from './db.js';
 import { jsonCall } from './llm.js';
+import { config } from './config.js';
 import { taipeiParts, describeNow, charStatus } from './characters.js';
 import { logIssue } from './logger.js';
 
@@ -51,6 +52,8 @@ export function recentLines(relId, n = 14) {
 export function shouldHoldProactive(rel, persona, key, ts = Date.now()) {
   // 還沒交換聯絡方式（當面相遇中、還在決定、或沒有交換）：他沒辦法傳訊息給對方
   { let sc = {}; try { sc = JSON.parse(rel.scenario || '{}'); } catch {} if (sc.phase && sc.phase !== 'chat') return '你們還沒交換聯絡方式'; }
+  // 對方超過 N 天（預設 3 天）沒回這個角色：停止主動傳訊息（包含跟進），對方再傳訊息就自動恢復
+  if (config.quietDays > 0 && ts - (rel.last_user_msg_at || rel.created_at) > config.quietDays * 864e5) return `對方超過 ${config.quietDays} 天沒回，先不打擾`;
   if (key === 'followup' || key === 'focus_end') {
     if (charStatus(persona, ts).code === 'sleeping') return '他在睡覺，醒來再跟進';
     return null;
