@@ -1,9 +1,10 @@
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 
 // Load .env from the project folder when present (CloudPanel / plain `npm start`).
 // Variables already set in the environment (e.g. by Docker) take precedence.
-const envFile = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '.env');
+const envFile = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.env');
 if (fs.existsSync(envFile) && typeof process.loadEnvFile === 'function') {
   const before = { ...process.env };
   process.loadEnvFile(envFile);

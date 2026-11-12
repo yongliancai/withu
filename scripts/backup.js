@@ -8,10 +8,11 @@
 // 建議用 crontab 每天凌晨 4 點跑一次（見 docs/security.md）。
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import Database from 'better-sqlite3';
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = path.resolve(process.env.DATA_DIR || path.join(root, 'data'));
 const outDir = path.resolve(process.env.BACKUP_DIR || path.join(dataDir, 'backups'));
 const keep = Number(process.env.BACKUP_KEEP) || 14;
