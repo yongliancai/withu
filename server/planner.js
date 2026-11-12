@@ -69,6 +69,8 @@ export async function planTurn({ rel, persona, user, userText, material = {}, lo
   if (reactiveStreak >= 3) hints.push(`你已經連續 ${reactiveStreak} 輪只在回應對方，這輪除非對方需要被陪伴或要結束，否則換你帶話題（share_life、continue_thread、new_topic 或 follow_up）。`);
   if (lowEffort || userShort) hints.push('對方回得很短：不要再丟問題給對方，換你帶一件具體的事（ask 設 false）。');
   if (crisis) hints.push('對方的訊息可能有危機訊號：move 用 comfort，ask 設 false。');
+  const meta = !crisis && /(你不會這樣說話|不像你|講話好?怪|好怪|怪怪的|你是\s*(AI|ai|機器人)|像機器人|好做作)/.test(userText || '');
+  if (meta) hints.push('對方覺得你剛剛講話怪：move 用 repair，照真人的反應（有點不好意思地笑、反問哪裡怪、換個自然的說法），絕對不要談「版本」「台詞」「設定」這類跳出角色的話。');
   const awkward = !crisis && isAwkward(userText);
   if (awkward) hints.push(`對方覺得突兀或在質疑你：move 用 repair${encounter?.reason ? `，material 用你開口的真正理由「${encounter.reason}」` : ''}，ask 設 false。`);
   else if (!crisis && isBye(userText)) hints.push('對方在道別：move 用 wind_down，ask 設 false。');

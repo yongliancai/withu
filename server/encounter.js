@@ -43,11 +43,12 @@ const CARD_SCHEMA = {
     reason_type: { type: 'string', enum: Object.keys(REASONS) },
     reason_to_talk: { type: 'string', description: '角色開口的真正理由（被問「我們認識嗎」時可以老實說出來）' },
     narration: { type: 'string', description: '2–3 句第二人稱旁白，寫出地點、時間感和 incident' },
+    action: { type: 'string', description: '角色開口前一個看得到的小動作（第三人稱，15 字內，例如「她把夾子往你那邊遞」），不寫心理' },
     openers: { type: 'array', minItems: 3, maxItems: 3, items: { type: 'array', minItems: 1, maxItems: 2, items: { type: 'string' } }, description: '3 組不同的開場白，每組 1–2 句當面說的話' },
     contact_exchange: { type: 'string', description: '之後兩人怎麼自然地交換 LINE（一句話，例如「他說之後咖啡豆到貨可以通知你，問要不要加 LINE」）' },
     suggestions: { type: 'array', minItems: 3, maxItems: 3, items: { type: 'object', additionalProperties: false, properties: { label: { type: 'string' }, text: { type: 'string' } }, required: ['label', 'text'] } },
   },
-  required: ['incident', 'reason_type', 'reason_to_talk', 'narration', 'openers', 'contact_exchange', 'suggestions'],
+  required: ['incident', 'reason_type', 'reason_to_talk', 'narration', 'action', 'openers', 'contact_exchange', 'suggestions'],
 };
 
 /** 這位使用者最近遇過的角色開場（拿來避免同一個範本）。 */
@@ -80,7 +81,8 @@ export async function makeEncounterCard({ userId, frame, label, roles, scene, en
 - reason_type 只能從下面挑一種，reason_to_talk 要是真人會開口的理由：
 ${Object.entries(REASONS).map(([k, v]) => `  - ${k}：${v}`).join('\n')}
 - ${startFriend ? '你們本來就認識、有彼此的 LINE：旁白寫你們在這裡碰到的那一刻，開場白是你事後傳的訊息，接著旁白的事講。' : '這是「當面」相遇，還沒有對方的聯絡方式。開場白是當面說的話，不是傳訊息。'}
-- 開場照 ARE：先講你們眼前共同看到的事，再透露一點自己，最多一個好回答、跟場景有關的問題。不讚美外表、不講套路、不硬搞笑。
+- 開場要像真人第一次見面會說的話：平淡、短、口語，直接回應剛剛發生的事（例如「啊 你先」「這個是你的嗎」）。不用比喻、不講金句或俏皮的形容、不解釋自己為什麼這樣做、不讚美外表、不講套路。第二句可以透露一點自己或問一個跟眼前有關、好回答的問題，也可以不要第二句。
+- action：開口前一個看得到的小動作，讓畫面更清楚（第三人稱、15 字內、不寫心理）。
 - ${startFriend ? '你們本來就認識，語氣自然但還只是朋友，只能引用設定裡的過去。' : '你們是陌生人：不裝熟、不編共同回憶、不問私人狀態（「你那邊還好嗎」對陌生人太親近）、不叫小名。'}
 - 3 組開場白要明顯不同（開頭的字、句型、有沒有問句都不同），也不要像下面這些「這位使用者最近遇過的開場」：
 ${recent.length ? recent.map(r => `  - ${r}`).join('\n') : '  （還沒有）'}
@@ -94,6 +96,7 @@ ${recent.length ? recent.map(r => `  - ${r}`).join('\n') : '  （還沒有）'}
       incident: '你伸手去拿最後一個位子旁邊的插座，剛好對方也伸了手',
       reason_type: 'shared', reason_to_talk: '兩個人都要用同一個插座',
       narration: `${label}。你伸手去拿桌邊的插座，旁邊的人也剛好伸了手，兩個人都停在半空中。`,
+      action: `${frame.gender === 'female' ? '她' : '他'}先把手收了回去`,
       openers: [['啊，你先用吧', '我手機還有一點電'], ['這間店插座真的太少了', '你先'], ['欸 同時'], ],
       contact_exchange: `${frame.name}說之後找到不缺插座的店可以分享，問要不要加 LINE`,
       suggestions: [{ label: '😊 謝謝他', text: '謝謝，那我用一下就好' }, { label: '😂 吐槽', text: '這店插座真的很難搶欸' }, { label: '🙋 問他', text: '你常來這間嗎？' }],
@@ -133,13 +136,16 @@ export function faceBlock({ card, entry, turn, wrap, persona }) {
     `你開口的真正理由：${card.reason_to_talk}`,
     `這是你們當面的第 ${turn} 輪。說話要像當面講的：短、口語，可以帶一點動作感，但不要寫括號旁白。`,
     '不要說「剛加上 LINE」「傳訊息給你」這類話；不要提議之後一起去哪裡。sticker、voice、meal、postcard、activity、outing 都不要用。',
+    '可以用一則動作描述讓畫面更清楚：整則用全形星號包起來，第三人稱、看得到的動作、15 字內、不寫心理，例如「＊她把茶葉蛋往你那邊推了推＊」。一輪最多一則，放在說話之前。',
+    '說話要像真人當面講的：平淡、短、口語。不用比喻、不講金句、不解釋自己剛剛為什麼那樣做。',
+    '對方評論你說話的方式（「你不會這樣說話」「好怪」「你是 AI 嗎」）：照真人的反應——有點不好意思地笑、反問哪裡怪，或換個自然的說法接下去。絕對不要談「版本」「台詞」「設定」「剛那句太做作」這類跳出角色的話。',
   ];
   if (wrap) {
     lines.push(entry === 'mood'
       ? '這輪自然地收尾、道別（例如你要回去上班了）。不要主動要聯絡方式，App 會讓對方自己決定要不要交換。'
       : `這輪自然地收尾，並照這個方式提出交換 LINE：${card.contact_exchange}。說完就道別，不要再丟新問題。`);
-  } else if (turn >= 2) {
-    lines.push('如果對方表現出想走或想結束，就自然收尾。');
+  } else {
+    lines.push('對方沒有要走，就不要收尾，也不要說「先這樣」「我先走了」；接著聊眼前的事。');
   }
   return lines.join('\n');
 }

@@ -534,6 +534,7 @@ app.post('/api/rels/:id/reencounter', auth, wrap(async (req, res) => {
   addMessage(rel, 'system', 'scene', { text: card.narration });
   setEncounter(rel.id, { phase: 'in_person', faceTurns: 0, card: { incident: card.incident, reason_type: card.reason_type, reason_to_talk: card.reason_to_talk, contact_exchange: card.contact_exchange } });
   let lastId = null;
+  if (card.action) addMessage(rel, 'system', 'scene', { text: card.action, card: { action: true } });
   for (const line of card.opener) lastId = addMessage(rel, 'char', 'text', { text: line, card: { face: true }, reason: 'reencounter' });
   if (lastId && card.suggestions?.length) db.prepare('UPDATE messages SET suggest=? WHERE id=?').run(JSON.stringify(card.suggestions), lastId);
   logEvent(req.user.id, 'reencounter', { rel: rel.id });

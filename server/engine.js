@@ -523,6 +523,10 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     }
   }
   let texts = stripNarration((out.messages || []).flatMap(m => String(m.text || '').split(/\n+/)).map(x => x.trim()).filter(Boolean)).slice(0, 4);
+  // 動作描述（＊她把茶葉蛋推過來＊）：當面時變成小小的旁白，傳訊息時拿掉
+  const ACT = /^[＊*]\s*(.+?)\s*[＊*]$/;
+  const actions = face ? texts.filter(x => ACT.test(x)).map(x => x.match(ACT)[1]).slice(0, 1) : [];
+  texts = texts.filter(x => !ACT.test(x));
   // 剛認識最多 2 則、朋友最多 3 則（第一次相遇、危機、講電話例外）：超過就保留開頭和最後一則
   const maxB = crisis || callMode || triggerKey === 'FIRST' ? 4 : rel.stage === 0 ? 2 : rel.stage === 1 ? 3 : 4;
   if (texts.length > maxB) texts = [...texts.slice(0, maxB - 1), texts.at(-1)];
@@ -538,6 +542,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     if (media) addMessage(rel, 'char', 'voice', { text: joined, media, proactive: isProactive, reason: triggerKey });
     else texts.forEach(tx => addMessage(rel, 'char', 'text', { text: tx, proactive: isProactive, reason: triggerKey }));
   } else {
+    actions.forEach(tx => addMessage(rel, 'system', 'scene', { text: tx, card: { action: true } }));
     texts.forEach(tx => addMessage(rel, 'char', 'text', { text: tx, proactive: isProactive, reason: triggerKey, card: face ? { face: true } : null }));
   }
   // 當面相遇收尾：交換聯絡方式（依心情認識的人自己決定要不要換）

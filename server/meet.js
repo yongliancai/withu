@@ -198,6 +198,7 @@ export async function meet(user, { templateId, custom, scenarioId, scenarioText,
     card: { incident: card.incident, reason_type: card.reason_type, reason_to_talk: card.reason_to_talk, contact_exchange: card.contact_exchange } }), relId);
   logEvent(user.id, 'meet', { rel: relId, origin, scenario: scenarioId || 'free', start: rel.start_type, entry, opening });
   let lastId = null;
+  if (!startFriend && card.opener.length && card.action) addMessage(rel, 'system', 'scene', { text: card.action, card: { action: true } });
   for (const line of card.opener) lastId = addMessage(rel, 'char', 'text', { text: line, card: startFriend ? null : { face: true }, reason: 'FIRST' });
   if (lastId && card.suggestions?.length) db.prepare('UPDATE messages SET suggest=? WHERE id=?').run(JSON.stringify(card.suggestions.map(x => ({ label: String(x.label).slice(0, 10), text: String(x.text).slice(0, 40) }))), lastId);
   if (!lastId && opening !== 'me') {
