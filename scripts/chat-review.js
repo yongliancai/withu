@@ -35,6 +35,15 @@ if (moves.length) {
   for (const m of moves) P(`- ${m.move}：${m.n}（${Math.round(m.n / total * 100)}%）`);
 }
 
+const needs = q(`SELECT json_extract(plan,'$.read.need') need, COUNT(*) n FROM turn_plans WHERE created_at>=? AND json_extract(plan,'$.read.need') IS NOT NULL GROUP BY need ORDER BY n DESC`, since);
+if (needs.length) {
+  const total = needs.reduce((a, b) => a + b.n, 0);
+  P(`\n## 角色讀到的對方意圖（共 ${total} 輪）`);
+  for (const m of needs) P(`- ${m.need}：${m.n}（${Math.round(m.n / total * 100)}%）`);
+  const samples = q(`SELECT plan FROM turn_plans WHERE created_at>=? ORDER BY id DESC LIMIT 15`, since).map(r => j(r.plan, {})).filter(p => p.read?.meaning);
+  if (samples.length) { P('\n最近幾輪「讀到的意思 → 決定的動作」：'); for (const p of samples) P(`- ${p.read.need}｜${clip(p.read.meaning, 60)}｜期待：${clip(p.read.expects, 40)} → ${p.move}`); }
+}
+
 // ---------- 語感回饋 ----------
 const fb = q(`SELECT * FROM msg_feedback WHERE created_at>=? ORDER BY id DESC LIMIT 200`, since);
 const bad = fb.filter(f => f.rating < 0), good = fb.filter(f => f.rating > 0);
