@@ -30,7 +30,7 @@ export const MOVES = {
   follow_up: '問對方之前提過的事後來怎樣了（具體提到那件事）',
   new_topic: '自然地開一個新話題：從你剛遇到的事、天氣、節日、或你們共同的興趣帶出來，不要像在找話題',
   comfort: '陪著對方：先接住對方的感受、替情緒說出名字，不急著給建議，不轉移話題',
-  repair: '對方覺得突兀或在質疑你（「我們認識嗎」「不熟」）：四件事都要做到——坦白承認有點突然、說出你真正開口的理由、給對方退路（「不打擾你了」）、不追問；語氣輕鬆，不要放棄或冷掉',
+  repair: '對方覺得突兀、在質疑你，或指出你前後說的不一樣：像真人一樣一兩句帶過——老實說出理由或把事情講清楚就好；不長篇解釋、不連續道歉、不說「不打擾你了」這種退場的話',
   tease: '照你的個性吐槽、開玩笑或鬥嘴，輕鬆一點',
   wind_down: '對方要去忙、要睡或明顯想結束：簡短自然地收尾，不再丟問題；道別要符合你們的關係（剛認識不說「晚點見」「想你」「明天見」）',
 };
@@ -80,19 +80,23 @@ export function recentMoves(relId, n = 4) {
  * 寫回覆前先規劃。回傳 plan 物件，失敗時回傳 null（照舊流程寫，不擋聊天）。
  * material：{ life, arc, told, threads, followups, episodes, selfTopics }，都是現成的文字陣列。
  */
-export async function planTurn({ rel, persona, user, userText, material = {}, lowEffort = false, crisis = false, encounter = null }) {
+export async function planTurn({ rel, persona, user, userText, material = {}, lowEffort = false, crisis = false, encounter = null, sceneText = '', sceneLocked = false }) {
   if (!config.planner) return null;
   const moves = recentMoves(rel.id);
   const reactiveStreak = moves.findIndex(m => LEADING.has(m)) === -1 ? moves.length : moves.findIndex(m => LEADING.has(m));
   const userShort = [...String(userText || '').replace(/\s+/g, '')].length <= 8;
   const hints = [];
-  if (reactiveStreak >= 3) hints.push(`你已經連續 ${reactiveStreak} 輪只在回應對方，這輪除非對方需要被陪伴或要結束，否則換你帶話題（share_life、continue_thread、new_topic 或 follow_up）。`);
-  if (lowEffort || userShort) hints.push('對方回得很短：不要再丟問題給對方，換你帶一件具體的事（ask 設 false）。');
+  // 剛相遇（場景鎖定中）：不逼角色帶新話題，先把眼前的事聊完
+  if (reactiveStreak >= 3 && !sceneLocked) hints.push(`你已經連續 ${reactiveStreak} 輪只在回應對方，這輪除非對方需要被陪伴或要結束，否則換你帶話題（share_life、continue_thread、new_topic 或 follow_up）。`);
+  if ((lowEffort || userShort) && !sceneLocked) hints.push('對方回得很短：不要再丟問題給對方，換你帶一件具體的事（ask 設 false）。');
+  if ((lowEffort || userShort) && sceneLocked) hints.push('對方回得很短：接一句，再順著眼前的事多說一點新的（看到的東西、自己一句小感想），不要硬跳到別的話題，也不要重複你上一句講過的內容或只回「嗯」「對」。');
+  if (lowEffort && sceneLocked) hints.push('對方已經連續兩次只回很短的話，剛剛那件事也講完了：不要再提同一件事。這輪換你往前帶一小步——問對方一個跟眼前有關、很好回答的小問題（ask 設 true），或說一句你自己為什麼在這裡。');
+  if (sceneLocked) hints.push('你們才剛遇到：只聊眼前這個場景、剛剛發生的事和一點點自己；material 留空，除非是眼前看得到的東西。不要 share_life、continue_thread、follow_up。');
   if (crisis) hints.push('對方的訊息可能有危機訊號：move 用 comfort，ask 設 false。');
   const meta = !crisis && /(你不會這樣說話|不像你|講話好?怪|好怪|怪怪的|你是\s*(AI|ai|機器人)|像機器人|好做作)/.test(userText || '');
   if (meta) hints.push('對方覺得你剛剛講話怪：move 用 repair，照真人的反應（有點不好意思地笑、反問哪裡怪、換個自然的說法），絕對不要談「版本」「台詞」「設定」這類跳出角色的話。');
   const awkward = !crisis && isAwkward(userText);
-  if (awkward) hints.push(`對方覺得突兀或在質疑你：move 用 repair${encounter?.reason ? `，material 用你開口的真正理由「${encounter.reason}」` : ''}，ask 設 false。`);
+  if (awkward) hints.push(`對方覺得有點突兀：可以用 repair${encounter?.reason ? `（你開口的真正理由是「${encounter.reason}」）` : ''}，一兩句帶過就好。`);
   else if (!crisis && isBye(userText)) hints.push('對方在道別：move 用 wind_down，ask 設 false。');
   if (encounter?.face) hints.push(`你們現在是當面說話（剛剛發生的事：${encounter.incident}）。只聊眼前的事和一點自己，不要 new_topic 跳太遠，也不要 follow_up 你們沒聊過的事。`);
   if (moves[0] && moves[0] === moves[1]) hints.push(`最近兩輪都是 ${moves[0]}，這輪換一個不同的動作。`);
@@ -109,6 +113,7 @@ export async function planTurn({ rel, persona, user, userText, material = {}, lo
 規則：
 - move 要配合 need：answer 先回答再看要不要分享；vent／comfort 先站在對方這邊、接住情緒（comfort）；challenge 用 repair 或照個性回嘴；closing 用 wind_down；low_effort 換你帶話題；unclear 用 respond 並確認。
 - move 從清單挑一個最自然的。真人聊天大約一半在回應對方，另一半會分享自己的事、接回舊話題或開新話題。
+- material 不能跟「你此刻的狀態」衝突（人在 A 地就不能挑發生在 B 地的事當作現在）。
 - material 要具體，從下面「你手上的素材」挑；挑 share_life／continue_thread／follow_up 時一定要填，而且不能挑「已經講過」或今天講過 2 次以上的事。
 - stance：依你的個性（${persona.traits || ''}）決定同不同意，不要每次都同意。你跟人意見不同時：${LABELS.pushback[tk.pushback]}。
 - 分享自己的事時，這個關係階段最多講到「${discloseLayer(tk.disclose, rel.stage)}」。
@@ -122,7 +127,8 @@ ${tk.worry ? `- 你最近在忙或在煩：${tk.worry}（可以當素材，但�
 ${Object.entries(MOVES).map(([k, v]) => `- ${k}：${v}`).join('\n')}
 ${hints.length ? `\n這輪特別注意：\n${hints.map(h => '- ' + h).join('\n')}` : ''}`;
   const ctx = [
-    `現在：${describeNow()}。你此刻：${st.label}。關係：${STAGES[rel.stage]}。`,
+    `現在：${describeNow()}。關係：${STAGES[rel.stage]}。`,
+    sceneText || `你此刻：${st.label}。`,
     `最近幾輪你做的動作（新的在前）：${moves.join('、') || '（還沒有）'}`,
     `## 最近的對話\n${recentLines(rel.id, 12).join('\n') || '（還沒有）'}`,
     `## 你手上的素材`,
@@ -148,7 +154,6 @@ ${hints.length ? `\n這輪特別注意：\n${hints.map(h => '- ' + h).join('\n')
   }
   if (!MOVES[plan.move]) return null;
   if (crisis) { plan.move = 'comfort'; plan.ask = false; }
-  else if (awkward) { plan.move = 'repair'; plan.ask = false; if (encounter?.reason && !plan.material) plan.material = encounter.reason; }
   else if (plan.read?.unclear) { plan.move = 'respond'; plan.ask = true; } // 看不懂就先確認
   db.prepare('INSERT INTO turn_plans (rel_id, move, plan, created_at) VALUES (?,?,?,?)').run(rel.id, plan.move, JSON.stringify(plan), now());
   return plan;

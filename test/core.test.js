@@ -54,3 +54,57 @@ test('同一段關係的回合會排隊，排程的主動訊息遇到忙碌就�
   assert.deepEqual(order, ['a:relationship not active', 'b:[]']);
   assert.equal(turnBusy(relId), false);
 });
+
+test('場景狀態：相遇後以相遇場景為準，交代換地方才更新，過期才退回作息', async () => {
+  const { sceneOf, sceneLine, startEncounterScene, moveScene, setScene } = await import('../server/scene.js');
+  const { db: d } = await import('../server/db.js');
+  d.prepare(`INSERT INTO users (id,nickname,call_name,recovery_code,created_at) VALUES ('u_s','a','a','S-1',?)`).run(Date.now());
+  d.prepare(`INSERT INTO characters (id,user_id,origin,persona,created_at) VALUES ('c_s','u_s','custom','{}',?)`).run(Date.now());
+  d.prepare(`INSERT INTO relationships (id,user_id,character_id,created_at) VALUES ('r_s','u_s','c_s',?)`).run(Date.now());
+  const persona = { gender: 'female', workplace: '設計公司', schedule: { start: '09:00', end: '18:00', days: [1, 2, 3, 4, 5] } };
+  const get = () => d.prepare('SELECT * FROM relationships WHERE id=?').get('r_s');
+  assert.equal(sceneOf(get(), persona).fixed, false);
+  startEncounterScene('r_s', { place: '大學社團博覽會', incident: '她撿起小卡', narration: '她彎身撿起小卡', face: true });
+  let s = sceneOf(get(), persona);
+  assert.equal(s.fixed, true); assert.equal(s.mode, 'face');
+  assert.match(sceneLine(s, persona), /大學社團博覽會/);
+  assert.match(sceneLine(s, persona), /當面/);
+  setScene('r_s', { mode: 'remote' });
+  assert.match(sceneLine(sceneOf(get(), persona), persona), /必須先在訊息裡交代/);
+  moveScene('r_s', '捷運站');
+  s = sceneOf(get(), persona);
+  assert.equal(s.place, '捷運站'); assert.equal(s.source, 'said');
+  setScene('r_s', { until: Date.now() - 1 });
+  assert.equal(sceneOf(get(), persona).fixed, false);
+});
+
+test('送出前檢查：抓到鸚鵡式附和與當面時換地方，只回報問題不改寫', async () => {
+  const { reviewReply } = await import('../server/turncheck.js');
+  const rel = { id: 'r_s', user_id: 'u_s', stage: 0, created_at: Date.now(), start_type: 'stranger' };
+  const persona = { name: '測', gender: 'female', schedule: { start: '09:00', end: '18:00', days: [1, 2, 3, 4, 5] } };
+  const a = await reviewReply({ rel, persona, user: { call_name: 'a' }, userText: '我也不確定欸\n這張是你的嗎', texts: ['不是我的，我也不確定欸。'], rulesOnly: true });
+  assert.deepEqual(a.texts, ['不是我的，我也不確定欸。']);
+  assert.ok(a.problems.some(p => /原封不動/.test(p)));
+  const b = await reviewReply({ rel, persona, user: { call_name: 'a' }, userText: '嗨', texts: ['我到咖啡店了'], face: true, rulesOnly: true, out: { scene: { moved: true, place: '咖啡店' } } });
+  assert.ok(b.problems.some(p => /當面/.test(p)));
+  const c = await reviewReply({ rel, persona, user: { call_name: 'a' }, userText: '今天好熱', texts: ['真的，我剛剛走出去差點融化'], rulesOnly: true });
+  assert.deepEqual(c.problems, []);
+});
+
+test('相遇：不再聊滿 3 輪就自動交換', async () => {
+  const { shouldWrap } = await import('../server/encounter.js');
+  assert.equal(shouldWrap({ turn: 3, userText: '喔喔' }), false);
+  assert.equal(shouldWrap({ turn: 2, userText: '我先走了掰掰' }), true);
+  assert.equal(shouldWrap({ turn: 6, userText: '嗯' }), true);
+});
+
+test('送出前檢查：對方只回很短時，角色重講前面的事會被抓到', async () => {
+  const { reviewReply } = await import('../server/turncheck.js');
+  const rel = { id: 'r_s', user_id: 'u_s', stage: 0, created_at: Date.now(), start_type: 'stranger' };
+  const persona = { name: '測', gender: 'male', schedule: { start: '09:00', end: '18:00', days: [1, 2, 3, 4, 5] } };
+  const base = { rel, persona, user: { call_name: 'a' }, rulesOnly: true, recentChar: ['好，那我拿去櫃台。', '笑死 那他第一天就要被嚇一下了'] };
+  const a = await reviewReply({ ...base, userText: '好', texts: ['我先拿去櫃台喔'], userLow: true });
+  assert.ok(a.problems.some(p => /卡在原地/.test(p)));
+  const b = await reviewReply({ ...base, userText: '你要拿去哪', texts: ['我先拿去櫃台喔'], userLow: false });
+  assert.deepEqual(b.problems, []);
+});

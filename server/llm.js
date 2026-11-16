@@ -39,7 +39,7 @@ export function wellFormed(v) {
   return v;
 }
 
-export async function jsonCall({ userId, kind, tier = 'cheap', instructions, input, schema, schemaName, cacheKey, mock, essential = false }) {
+export async function jsonCall({ userId, kind, tier = 'cheap', instructions, input, schema, schemaName, cacheKey, mock, essential = false, effort: effortOverride = null }) {
   // 超過預算且設定為暫停：除了危機時的回覆，其他 AI 呼叫都先停下來
   if (!essential && budgetPaused()) throw Object.assign(new Error('超過預算，AI 暫停中'), { code: 'budget_paused' });
   // 除錯用：設定 DUMP_PROMPTS=資料夾，把每次送給模型的完整提示存成檔案（看角色實際收到什麼指示）
@@ -57,7 +57,7 @@ export async function jsonCall({ userId, kind, tier = 'cheap', instructions, inp
     return out;
   }
   const model = tier === 'good' ? config.modelGood : config.modelCheap;
-  const effort = tier === 'good' ? config.effortGood : config.effortCheap;
+  const effort = effortOverride || (tier === 'good' ? config.effortGood : config.effortCheap);
   let res;
   try {
     res = await openai.responses.create({

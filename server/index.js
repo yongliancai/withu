@@ -28,6 +28,7 @@ import { episodesList } from './memory.js';
 import { topicsFor, GAMES, ACTIVITIES, LEAD_REASON, EMOTIONS, pokeReason , EMOTION_GROUPS, BODY_FEELINGS, DIRECTIONS, candidateWords, unsureReason} from './topics.js';
 import { seedOfficial, meet, sharePreview, publishShare, cleanupOrphans } from './meet.js';
 import { encounterOf, setEncounter, makeEncounterCard, OPENINGS } from './encounter.js';
+import { setScene, startEncounterScene } from './scene.js';
 import { backfillTemplates } from './persona.js';
 import { sceneArtFile } from './sceneart.js';
 import { startScheduler, tick } from './scheduler.js';
@@ -522,6 +523,7 @@ app.post('/api/rels/:id/exchange', auth, wrap(async (req, res) => {
   if (accept) {
     addMessage(rel, 'system', 'scene', { text: '你們交換了 LINE。' });
     setEncounter(rel.id, { phase: 'chat' });
+    setScene(rel.id, { mode: 'remote' });
   } else {
     addMessage(rel, 'system', 'scene', { text: `你們沒有交換聯絡方式，各自離開了。也許哪天還會在那裡遇到${ta(getPersona(rel))}。` });
     setEncounter(rel.id, { phase: 'parted' });
@@ -538,7 +540,8 @@ app.post('/api/rels/:id/reencounter', auth, wrap(async (req, res) => {
   const persona = getPersona(rel);
   const card = await makeEncounterCard({ userId: req.user.id, frame: persona, label: `${enc.sc.label || '上次的地方'}（你們之前在這裡見過一次，這次又遇到）`, roles: '', scene: enc.sc, entry: 'mood', opening: 'him', startFriend: false });
   addMessage(rel, 'system', 'scene', { text: card.narration });
-  setEncounter(rel.id, { phase: 'in_person', faceTurns: 0, card: { incident: card.incident, reason_type: card.reason_type, reason_to_talk: card.reason_to_talk, contact_exchange: card.contact_exchange } });
+  setEncounter(rel.id, { phase: 'in_person', faceTurns: 0, card: { incident: card.incident, facts: card.facts || '', why_here: card.why_here || '', reason_type: card.reason_type, reason_to_talk: card.reason_to_talk, contact_exchange: card.contact_exchange } });
+  startEncounterScene(rel.id, { place: enc.sc.place || enc.sc.label, incident: card.incident, narration: card.narration, action: card.action, whyHere: card.why_here, facts: card.facts, face: true });
   let lastId = null;
   if (card.action) addMessage(rel, 'system', 'scene', { text: card.action, card: { action: true } });
   for (const line of card.opener) lastId = addMessage(rel, 'char', 'text', { text: line, card: { face: true }, reason: 'reencounter' });
