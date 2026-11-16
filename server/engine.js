@@ -527,7 +527,8 @@ async function runTurnInner({ user, relId, userText = '', imageMedia = null, tri
   if (planning && !crisis) {
     const draft = (out.messages || []).map(m => String(m.text || '').trim()).filter(Boolean);
     if (draft.length) {
-      const rv = await reviewReply({ rel, persona, user, userText, texts: draft, plan, face, rulesOnly: rewritten, sceneText, scene, out });
+      const rv = await reviewReply({ rel, persona, user, userText, texts: draft, plan, face, rulesOnly: rewritten, sceneText, scene, out,
+        userLow: [...String(userText || '').replace(/\s+/g, '')].length <= 3 || SHORT.test(String(userText || '').trim()), recentChar: recentCharWithin(rel.id, 30 * 60000) });
       if (rv.problems.length) {
         // 檢查只負責指出問題；重寫交回寫手（他有完整的人設和說話風格），而且不能比原本長、不能多泡泡
         input.push({ role: 'developer', content: `你剛剛想傳：\n${draft.map(x => '- ' + x).join('\n')}\n但有這些問題：\n${rv.problems.map(x => '- ' + x).join('\n')}\n重寫一次：只修正這些問題，保持你的口吻；不要比原本長、泡泡不要比原本多（最多 ${Math.max(1, draft.length)} 則）、不要加入原本沒有的事、不要解釋或道歉。` });

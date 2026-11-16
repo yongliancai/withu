@@ -97,3 +97,14 @@ test('相遇：不再聊滿 3 輪就自動交換', async () => {
   assert.equal(shouldWrap({ turn: 2, userText: '我先走了掰掰' }), true);
   assert.equal(shouldWrap({ turn: 6, userText: '嗯' }), true);
 });
+
+test('送出前檢查：對方只回很短時，角色重講前面的事會被抓到', async () => {
+  const { reviewReply } = await import('../server/turncheck.js');
+  const rel = { id: 'r_s', user_id: 'u_s', stage: 0, created_at: Date.now(), start_type: 'stranger' };
+  const persona = { name: '測', gender: 'male', schedule: { start: '09:00', end: '18:00', days: [1, 2, 3, 4, 5] } };
+  const base = { rel, persona, user: { call_name: 'a' }, rulesOnly: true, recentChar: ['好，那我拿去櫃台。', '笑死 那他第一天就要被嚇一下了'] };
+  const a = await reviewReply({ ...base, userText: '好', texts: ['我先拿去櫃台喔'], userLow: true });
+  assert.ok(a.problems.some(p => /卡在原地/.test(p)));
+  const b = await reviewReply({ ...base, userText: '你要拿去哪', texts: ['我先拿去櫃台喔'], userLow: false });
+  assert.deepEqual(b.problems, []);
+});

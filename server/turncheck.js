@@ -74,7 +74,7 @@ const TYPES = {
   location_conflict: '說的地點、正在做的事跟「你此刻的狀態」不一致，或沒交代就換了地方',
   contradicts_scene: '跟旁白或之前真的發生的事矛盾（例如把誰撿的、誰掉的講反）',
   contradicts_history: '跟自己前面說過的話矛盾',
-  breaks_character: '跳出角色談自己怎麼說話、時間線、設定（「時間有點跳」「剛剛那句講太快」「像在背稿」）。老實承認自己是 AI 角色不算',
+  breaks_character: '跳出角色談自己怎麼說話、時間線、設定（「時間有點跳」「剛剛那句講太快」「剛剛太刻意」「那句太硬」「像在背稿」）。老實承認自己是 AI 角色不算',
   dodges_ai: '對方認真問是不是 AI，卻否認或閃避（要老實說自己是 AI 角色，再用自己的方式接下去）',
   repeats_self: '跟自己前一兩輪說的內容幾乎一樣，對話沒有往前',
   not_answering: '沒回應到對方剛說的話或問的問題、答非所問',
@@ -113,13 +113,28 @@ ${Object.entries(TYPES).map(([k, v]) => `- ${k}：${v}`).join('\n')}`,
  * 一般回覆的送出前檢查：規則層每次都跑，模型層對照場景狀態、對話和規劃。
  * 回傳 { texts: 清掉括號旁白後的泡泡, problems: 要請寫手修正的問題 }；不在這裡改寫。
  */
-export async function reviewReply({ rel, persona, user, userText, texts, plan, face = false, rulesOnly = false, sceneText = '', scene = null, out = null }) {
+// 對方只回「嗯」「哈哈」時，角色又把前一兩輪講過的事再講一次（對話卡在原地）
+function stallProblem(texts, recentChar) {
+  const han = (x) => String(x).replace(/[^\p{Script=Han}A-Za-z0-9]/gu, '');
+  const prev = recentChar.map(han).filter(Boolean);
+  for (const t of texts) {
+    const c = han(t);
+    for (let i = 0; i + 4 <= c.length; i++) {
+      const w = c.slice(i, i + 4);
+      if (new Set(w).size >= 3 && prev.some(p => p.includes(w))) return `「${w}」這件事你前面已經講過了，對話卡在原地：這次不要再提它，換一個新的（問對方一個跟眼前有關的小問題，或說一句關於你自己的事）`;
+    }
+  }
+  return null;
+}
+
+export async function reviewReply({ rel, persona, user, userText, texts, plan, face = false, rulesOnly = false, sceneText = '', scene = null, out = null, userLow = false, recentChar = [] }) {
   const cleaned = stripNarration(texts);
   if (!cleaned.length) return { texts, problems: [] };
   const problems = ruleProblems(cleaned, { persona, rel, plan, face });
   if (!cleaned.some(x => x.replace(/[＊*][^＊*\n]{1,40}[＊*]/g, '').trim())) problems.push('這一輪只有動作、沒有說出口的話：至少要說一句');
   const echo = echoProblem(cleaned, userText);
   if (echo) problems.push(echo);
+  if (userLow) { const st = stallProblem(cleaned, recentChar); if (st) problems.push(st); }
   if (face && out?.scene?.moved) problems.push('你們正在當面說話，不能說自己已經到了別的地方');
   if (rulesOnly || !config.checkModel) return { texts: cleaned, problems };
   try {
