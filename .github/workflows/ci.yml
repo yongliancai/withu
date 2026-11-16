@@ -19,6 +19,8 @@ jobs:
       - run: npm ci
       - name: 語法檢查
         run: for f in server/*.js public/app.js public/art.js public/sw.js; do node --check "$f"; done
+      - name: 回歸測試
+        run: npm test
       - name: 測試模式啟動
         run: |
           export DATA_DIR=$(mktemp -d) ADMIN_TOKEN=ci PORT=5099 OPENAI_API_KEY=

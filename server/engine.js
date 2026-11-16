@@ -388,14 +388,37 @@ function mealAskedRecently(relId) {
  * One exchange. Either `userText`/`imageMedia` (she sent something) or `trigger` (he reaches out).
  * Returns the list of new message ids.
  */
-export async function runTurn({ user, relId, userText = '', imageMedia = null, trigger = null, triggerKey = null, voiceMoment = false, lateReply = null, notifyUser = false, callMode = false }) {
+// 同一段關係一次只跑一個回合：使用者送訊息、排程的晚回與主動訊息共用這把鎖，
+// 不會兩個回合同時寫回覆（造成重複或交錯的訊息）。排隊等前一個跑完再開始。
+const turnQueue = new Map();
+export const turnBusy = (relId) => turnQueue.has(relId);
+export function runTurn(opts) {
+  const waited = turnQueue.has(opts.relId);
+  const prev = turnQueue.get(opts.relId) || Promise.resolve();
+  const run = prev.catch(() => {}).then(() => {
+    // 排程發起的回合如果排過隊，表示剛剛才有別的回合：主動訊息這次不傳；晚回只在還有沒回的訊息時才回
+    if (waited && opts.skipIfBusy) return [];
+    if (waited && opts.lateReply) {
+      const lastChar = db.prepare(`SELECT COALESCE(MAX(id),0) m FROM messages WHERE rel_id=? AND sender='char'`).get(opts.relId).m;
+      const pending = db.prepare(`SELECT 1 FROM messages WHERE rel_id=? AND sender='user' AND id>?`).get(opts.relId, lastChar);
+      if (!pending) return [];
+    }
+    return runTurnInner(opts);
+  });
+  turnQueue.set(opts.relId, run);
+  const done = () => { if (turnQueue.get(opts.relId) === run) turnQueue.delete(opts.relId); };
+  run.then(done, done);
+  return run;
+}
+
+async function runTurnInner({ user, relId, userText = '', imageMedia = null, trigger = null, triggerKey = null, voiceMoment = false, lateReply = null, notifyUser = false, callMode = false, crisisLevelPre = null }) {
   let rel = refreshRel(relId);
   if (!rel || rel.status !== 'active') throw new Error('relationship not active');
   const persona = getPersona(rel);
   const before = db.prepare('SELECT MAX(id) m FROM messages WHERE rel_id=?').get(rel.id).m || 0;
 
   const t = taipeiParts();
-  // 危機分級（關鍵字＋內容審核）和天氣同時跑，不增加延遲
+  // 危機分級（關鍵字＋內容審核）：呼叫端算過就直接用，不重複呼叫；天氣在背景同時查
   const planning = !trigger && !callMode && !lateReply;
   // 當面相遇階段：還沒交換聯絡方式，對話用當面的方式進行，2–4 輪後收尾
   const enc = encounterOf(rel);
@@ -407,7 +430,7 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     db.prepare(`UPDATE messages SET card='{"face":true}' WHERE rel_id=? AND sender='user' AND kind='text' AND card IS NULL AND id>(SELECT COALESCE(MAX(id),0) FROM messages WHERE rel_id=? AND sender='char')`).run(rel.id, rel.id);
   }
   const worldP = worldContext(persona, rel.id);
-  const level = !trigger && userText ? await crisisLevel(userText) : 'none';
+  const level = crisisLevelPre || (!trigger && userText ? await crisisLevel(userText) : 'none');
   const crisis = !trigger && (crisisSignal(userText) || level === 'high');
   const dueFollowups = db.prepare('SELECT * FROM followups WHERE rel_id=? AND done=0 AND due_at<=? ORDER BY due_at LIMIT 3').all(rel.id, now());
   // 對方說「什麼意思」「聽不懂」：上一句他說得不自然，記成語感回饋（有同意的人才記）
@@ -490,10 +513,11 @@ export async function runTurn({ user, relId, userText = '', imageMedia = null, t
     try { out = await call(); rewritten = true; } catch { /* keep the first answer */ }
   }
   // 送出前檢查（一般回覆）：規則層每次都跑，模型層對照最近的對話和這輪的規劃；最多改寫一次
-  if (planning && !crisis && !rewritten) {
+  // 剛因為重複而重寫過的：只跑不花錢的規則層，規則有抓到問題才請模型改（不再多一次例行檢查）
+  if (planning && !crisis) {
     const draft = (out.messages || []).map(m => String(m.text || '').trim()).filter(Boolean);
     if (draft.length) {
-      const fixed = await reviewReply({ rel, persona, user, userText, texts: draft, plan, face });
+      const fixed = await reviewReply({ rel, persona, user, userText, texts: draft, plan, face, rulesOnly: rewritten });
       if (fixed.join('\n') !== draft.join('\n')) out.messages = fixed.map(text => ({ text }));
     }
   }

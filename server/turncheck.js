@@ -98,11 +98,11 @@ ${talkOf(persona).never.length ? `- ${persona.name}絕對不會說或做：${tal
  * 一般回覆的送出前檢查：規則層每次都跑；有問題、或開啟模型層時再問模型。最多改寫一次。
  * 回傳要送出的泡泡。
  */
-export async function reviewReply({ rel, persona, user, userText, texts, plan, face = false }) {
+export async function reviewReply({ rel, persona, user, userText, texts, plan, face = false, rulesOnly = false }) {
   const cleaned = stripNarration(texts);
   if (!cleaned.length) return texts;
   const problems = ruleProblems(cleaned, { persona, rel, plan, face });
-  if (!problems.length && !config.checkModel) return cleaned;
+  if (!problems.length && (rulesOnly || !config.checkModel)) return cleaned;
   try {
     const rv = await checkReply({ rel, persona, user, userText, texts: cleaned, plan, problems });
     if (rv.action !== 'rewrite') return cleaned;

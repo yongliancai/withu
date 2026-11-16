@@ -118,13 +118,16 @@ async function tickRel(rel, user, t, userSentToday) {
   let budget = pro.base * STAGE_MULT[rel.stage] * (LEVEL_MULT[settings.proactiveLevel] || 1) * S('proactiveMult');
   if (persona.proactivity === 'slow') budget *= 0.7 + rel.stage * 0.25; // 慢熱型越熟越常找你
   if (rel.unanswered >= 2) budget *= 0.5;                                 // 常已讀不回就收斂
-  const capped = S('proactiveMult') <= 0 || today.count >= Math.max(1, Math.round(budget));
+  // 每個角色每天主動訊息的硬上限（後台可調，預設 3；0 = 不另外限制）：報備、關心、跟進都算在內
+  const perChar = Number(S('proactivePerCharCap')) || 0;
+  const hardCapped = perChar > 0 && today.count >= perChar;
+  const capped = hardCapped || S('proactiveMult') <= 0 || today.count >= Math.max(1, Math.round(budget));
 
   let pick = null;
   const holdFollowup = due && shouldHoldProactive(rel, persona, 'followup');
   const holdOther = shouldHoldProactive(rel, persona, 'other');
-  if (due && !holdFollowup) pick = { key: 'followup', reason: `跟進對方之前提過的事：${due.topic}${now() - due.due_at > 3 * 3600e3 ? `（原本想在 ${gapLabelFn(now() - due.due_at)}前問，現在已經晚了，說法要自然）` : ''}` };
-  else if (!due && !holdOther && !capped && rel.unanswered < 4) {
+  if (due && !holdFollowup && !hardCapped) pick = { key: 'followup', reason: `跟進對方之前提過的事：${due.topic}${now() - due.due_at > 3 * 3600e3 ? `（原本想在 ${gapLabelFn(now() - due.due_at)}前問，現在已經晚了，說法要自然）` : ''}` };
+  else if ((!due || hardCapped) && !holdOther && !capped && rel.unanswered < 4) {
     for (const c of candidates(rel, persona, settings, t, log)) {
       if (today.sent[c.key]) continue;
       if (c.every && log.lastCheckin && now() - log.lastCheckin < c.every * 864e5) continue;
@@ -140,7 +143,7 @@ async function tickRel(rel, user, t, userSentToday) {
   const newLog = { ...today, lastCheckin: pick.key === 'checkin' ? now() : log.lastCheckin, lastPostcard: pick.key === 'postcard' ? now() : log.lastPostcard };
   db.prepare('UPDATE relationships SET proactive_log=?, unanswered=unanswered+1 WHERE id=?').run(JSON.stringify(newLog), rel.id);
   userSentToday.count++;
-  const sentMsgs = await runTurn({ user, relId: rel.id, trigger: `${pick.reason}（如果和「你們之間的相處習慣」衝突，以相處習慣為準，改用其他自然的話。）`, triggerKey: pick.key, voiceMoment: !!pick.voice });
+  const sentMsgs = await runTurn({ user, relId: rel.id, trigger: `${pick.reason}（如果和「你們之間的相處習慣」衝突，以相處習慣為準，改用其他自然的話。）`, triggerKey: pick.key, voiceMoment: !!pick.voice, skipIfBusy: true });
   // 發送前檢查取消了：不算一次主動、也不算對方沒回
   if (!sentMsgs.length) {
     db.prepare('UPDATE relationships SET unanswered=MAX(unanswered-1,0) WHERE id=?').run(rel.id);

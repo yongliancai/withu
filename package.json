@@ -5,7 +5,8 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "MOCK_LLM=1 node --watch server/index.js",
-    "vapid": "node scripts/gen-vapid.js"
+    "vapid": "node scripts/gen-vapid.js",
+    "test": "node --test test/core.test.js"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

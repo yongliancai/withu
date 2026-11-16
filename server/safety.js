@@ -26,7 +26,7 @@ export const HELP_CARD = {
 //   high：有自傷意圖或方法 → 走危機流程（支持模式＋求助資源）
 //   low：有自傷相關但沒有意圖 → 只提醒角色溫柔關心，不跳求助卡
 //   none：沒有
-import { openai } from './llm.js';
+import { openai, wellFormed } from './llm.js';
 import { config } from './config.js';
 import { logIssue } from './logger.js';
 
@@ -35,7 +35,7 @@ export async function crisisLevel(text = '') {
   if (crisisSignal(text)) return 'high';
   if (config.mock || !openai) return 'none';
   try {
-    const r = await openai.moderations.create({ model: 'omni-moderation-latest', input: text });
+    const r = await openai.moderations.create({ model: 'omni-moderation-latest', input: wellFormed(text) }, { timeout: config.moderationTimeoutMs, maxRetries: 0 });
     const c = r.results[0]?.categories || {};
     if (c['self-harm/intent'] || c['self-harm/instructions']) return 'high';
     if (c['self-harm']) return 'low';
