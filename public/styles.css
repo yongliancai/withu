@@ -821,11 +821,11 @@ button.pf-face { border:0; padding:0; cursor:zoom-in; }
 .vn-who { position: absolute; left: 50%; bottom: 31%; transform: translate(-50%, 12px); opacity: 0; transition: opacity .9s ease, transform .9s ease; }
 .vn-who.in { opacity: 1; transform: translate(-50%, 0); }
 .vn-who img, .vn-who svg { width: 132px; height: 132px; border-radius: 50%; object-fit: cover; border: 3px solid rgba(255,255,255,.85); box-shadow: 0 8px 24px rgba(0,0,0,.3); display: block; }
-.vn-box { position: absolute; left: 14px; right: 14px; bottom: calc(18px + env(safe-area-inset-bottom)); min-height: 120px; padding: 16px 18px 26px;
+.vn-box { position: absolute; left: 14px; right: 14px; bottom: calc(64px + env(safe-area-inset-bottom)); min-height: 140px; padding: 16px 18px 26px;
   border-radius: 16px; background: rgba(255,255,255,.9); color: #2a2633; box-shadow: 0 8px 30px rgba(0,0,0,.25); cursor: pointer; backdrop-filter: blur(6px); }
 .vn-box.say { background: rgba(255,252,246,.95); }
-.vn-name { position: absolute; top: -13px; left: 16px; padding: 3px 12px; border-radius: 999px; background: var(--accent, #6E4C7E); color: #fff; font-size: 13px; }
-.vn-text { margin: 0; font: 16px/1.8 var(--hand, inherit); white-space: pre-wrap; }
+.vn-name { position: absolute; top: -14px; left: 16px; padding: 4px 14px; border-radius: 999px; background: var(--accent, #6E4C7E); color: #fff; font-size: 15px; }
+.vn-text { margin: 0; font: 19px/1.85 var(--hand, inherit); white-space: pre-wrap; }
 .vn-box.say .vn-text { font-family: var(--sans, inherit); }
 .vn-next { position: absolute; right: 16px; bottom: 8px; font-size: 11px; opacity: .5; animation: vnBlink 1.2s ease-in-out infinite; }
 .vn-skip, .vn-sound { position: absolute; top: calc(14px + env(safe-area-inset-top)); padding: 6px 14px; border-radius: 999px; border: 0; background: rgba(0,0,0,.35); color: #fff; font-size: 13px; }
@@ -839,3 +839,9 @@ button.pf-face { border:0; padding:0; cursor:zoom-in; }
 @media (prefers-reduced-motion: reduce) { .vn, .vn-bg, .vn.fx-rain .vn-fx, .vn-next { animation: none; } .vn-who { transition: none; } }
 
 .scene.act { font-style: italic; font-size: 13px; opacity: .75; margin: 4px auto 6px; }
+
+.vn-prev { position: absolute; left: 14px; bottom: calc(16px + env(safe-area-inset-bottom)); padding: 8px 16px; border-radius: 999px; border: 0; background: rgba(0,0,0,.4); color: #fff; font-size: 15px; }
+.first-tip { position: fixed; left: 12px; right: 12px; bottom: calc(86px + env(safe-area-inset-bottom)); z-index: 55; display: flex; gap: 10px; align-items: center;
+  padding: 12px 14px; border-radius: 14px; background: var(--ink, #2a2633); color: #fff; font-size: 14px; line-height: 1.5; box-shadow: 0 6px 20px rgba(0,0,0,.25); animation: vnIn .25s ease both; }
+.first-tip span { flex: 1; }
+.first-tip button { border: 0; background: rgba(255,255,255,.18); color: #fff; border-radius: 999px; padding: 6px 12px; font-size: 13px; white-space: nowrap; }

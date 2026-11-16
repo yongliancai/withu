@@ -5,7 +5,8 @@ import { db, now } from './db.js';
 import { logIssue } from './logger.js';
 import { budgetPaused } from './budget.js';
 
-export const openai = config.mock ? null : new OpenAI({ apiKey: config.openaiKey });
+// maxRetries 1：連線錯誤、429、5xx 只自動重試一次；文字類呼叫另外在每次呼叫設逾時（生圖比較久，維持預設）
+export const openai = config.mock ? null : new OpenAI({ apiKey: config.openaiKey, maxRetries: 1 });
 
 function logUsage(userId, kind, model, usage, units = 0) {
   db.prepare(`INSERT INTO usage (user_id,kind,model,input_tokens,cached_tokens,output_tokens,units,created_at)
@@ -28,9 +29,28 @@ export function cleanNulls(v) {
   return v;
 }
 
+// 字串用 slice 截斷時可能把表情符號（兩個 UTF-16 單位）切成一半，留下孤立的代理字元。
+// JSON.stringify 會把它寫成 "\ud83d" 這種跳脫，OpenAI 會整包拒絕（400 Invalid body: failed to parse JSON value）。
+// 送出前一律換成合法字串（孤立代理字元變成 U+FFFD）。
+export function wellFormed(v) {
+  if (typeof v === 'string') return v.isWellFormed() ? v : v.toWellFormed();
+  if (Array.isArray(v)) return v.map(wellFormed);
+  if (v && typeof v === 'object') { const o = {}; for (const k of Object.keys(v)) o[k] = wellFormed(v[k]); return o; }
+  return v;
+}
+
 export async function jsonCall({ userId, kind, tier = 'cheap', instructions, input, schema, schemaName, cacheKey, mock, essential = false }) {
   // 超過預算且設定為暫停：除了危機時的回覆，其他 AI 呼叫都先停下來
   if (!essential && budgetPaused()) throw Object.assign(new Error('超過預算，AI 暫停中'), { code: 'budget_paused' });
+  // 除錯用：設定 DUMP_PROMPTS=資料夾，把每次送給模型的完整提示存成檔案（看角色實際收到什麼指示）
+  if (process.env.DUMP_PROMPTS) {
+    try {
+      const fs = await import('node:fs');
+      fs.mkdirSync(process.env.DUMP_PROMPTS, { recursive: true });
+      const body = [`# ${kind}（${tier}）`, '## instructions', instructions, ...(input || []).map(m => `## ${m.role}\n${typeof m.content === 'string' ? m.content : JSON.stringify(m.content, null, 1)}`)].join('\n\n');
+      fs.writeFileSync(`${process.env.DUMP_PROMPTS}/${Date.now()}-${kind}.md`, body);
+    } catch { /* 除錯用，失敗就算了 */ }
+  }
   if (config.mock) {
     const out = typeof mock === 'function' ? mock() : mock;
     logUsage(userId, kind, 'mock', { input_tokens: 0, output_tokens: 0 });
@@ -42,14 +62,14 @@ export async function jsonCall({ userId, kind, tier = 'cheap', instructions, inp
   try {
     res = await openai.responses.create({
     model,
-    instructions,
-    input,
+    instructions: wellFormed(instructions),
+    input: wellFormed(input),
     reasoning: effort ? { effort } : undefined,
     text: { format: { type: 'json_schema', name: schemaName || 'out', schema, strict: true } },
     prompt_cache_key: cacheKey,
     safety_identifier: userId || undefined,
     store: false,
-    });
+    }, { timeout: config.llmTimeoutMs });
   } catch (e) {
     logIssue({ source: 'llm', message: `AI 呼叫失敗（${kind}）：${e.message}`, error: e, detail: { kind, model }, userId });
     throw e;
@@ -67,7 +87,7 @@ export async function tts({ userId, text, voice, instructions }) {
   if (config.mock) { logUsage(userId, 'tts', 'mock', null, text.length); return null; }
   let res;
   try {
-    res = await openai.audio.speech.create({ model: config.ttsModel, voice, input: text, instructions, response_format: 'mp3' });
+    res = await openai.audio.speech.create({ model: config.ttsModel, voice, input: wellFormed(text), instructions: wellFormed(instructions), response_format: 'mp3' }, { timeout: config.llmTimeoutMs });
   } catch (e) {
     logIssue({ level: 'warn', source: 'tts', message: `語音合成失敗，改傳文字：${e.message}`, error: e, detail: { voice, length: text.length }, userId });
     throw e;
@@ -81,7 +101,7 @@ export async function stt({ userId, buffer, filename, durationSec }) {
   const file = await toFile(buffer, filename || 'voice.webm');
   let res;
   try {
-    res = await openai.audio.transcriptions.create({ model: config.sttModel, file, language: 'zh' });
+    res = await openai.audio.transcriptions.create({ model: config.sttModel, file, language: 'zh' }, { timeout: config.llmTimeoutMs });
   } catch (e) {
     logIssue({ source: 'stt', message: `語音轉文字失敗：${e.message}`, error: e, detail: { filename, bytes: buffer?.length, durationSec }, userId });
     throw e;
@@ -95,7 +115,7 @@ const SEVERE = ['sexual', 'sexual/minors', 'hate', 'hate/threatening', 'harassme
 export async function moderate(text) {
   if (config.mock || !text) return { flagged: false };
   try {
-    const r = await openai.moderations.create({ model: 'omni-moderation-latest', input: text });
+    const r = await openai.moderations.create({ model: 'omni-moderation-latest', input: wellFormed(text) }, { timeout: config.moderationTimeoutMs * 2 });
     const res = r.results[0];
     const hit = Object.keys(res.categories).filter(k => res.categories[k]);
     // 只擋真正不行的類別；一般的戲劇衝突（打架、受傷、被欺負）會被標成 violence，這類放行

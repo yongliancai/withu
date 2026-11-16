@@ -32,7 +32,12 @@ export const config = {
   // 使用者超過幾天沒回某個角色，那個角色就停止主動傳訊息（對方再傳訊息就恢復）；設 0 關閉
   quietDays: Number(env.QUIET_DAYS ?? 3),
   planner: env.TURN_PLANNER !== '0',
+  // 寫手／記帳員分開、規則依情境分包；設 0 退回舊的一次大提示
+  splitTurn: env.SPLIT_TURN !== '0',
   checkModel: env.CHECK_MODEL !== '0',
+  // 每次 AI 呼叫最多等多久（毫秒）：卡住時早點放棄，讓使用者可以重試，不會一直卡在「還在回上一則」
+  llmTimeoutMs: num(env.LLM_TIMEOUT_MS, 45000),
+  moderationTimeoutMs: num(env.MODERATION_TIMEOUT_MS, 5000),
   ttsModel: env.TTS_MODEL || 'gpt-4o-mini-tts',
   sttModel: env.STT_MODEL || 'gpt-4o-mini-transcribe',
   // USD per 1M tokens, used only for the admin cost estimate

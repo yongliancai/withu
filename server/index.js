@@ -23,7 +23,7 @@ import { JOBS, ARCHETYPES, PROACTIVITY, VOICES, SCENARIOS, AVATAR_HUES, charStat
 import { STAGES } from './prompt.js';
 import { id, runTurn, addMessage, getPersona, endRelationship, addStory, ta, startActivity, endActivity, STICKERS, milestone } from './engine.js';
 import { presenceOf, replyDelayMs } from './presence.js';
-import { crisisSignal } from './safety.js';
+import { crisisSignal, crisisLevel } from './safety.js';
 import { episodesList } from './memory.js';
 import { topicsFor, GAMES, ACTIVITIES, LEAD_REASON, EMOTIONS, pokeReason , EMOTION_GROUPS, BODY_FEELINGS, DIRECTIONS, candidateWords, unsureReason} from './topics.js';
 import { seedOfficial, meet, sharePreview, publishShare, cleanupOrphans } from './meet.js';
@@ -78,6 +78,10 @@ const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch(e => {
   if (e?.code === 'budget_paused') return res.status(503).json({ error: '伴旅暫時休息中，晚一點再試一次。' });
   logIssue({ source: 'server', message: `${req.method} ${req.route?.path || req.path}：${e.message}`, error: e,
     detail: { path: req.originalUrl.replace(/[?].*/, '') }, userId: req.user?.id, relId: req.params?.id });
+  // AI 回應逾時或連線中斷：請使用者再試一次（訊息已經存好，不會不見）
+  if (/Timeout|APIConnection/i.test(e?.name || e?.constructor?.name || '') || /timed out/i.test(e?.message || '')) {
+    return res.status(503).json({ error: '對方現在有點忙，等一下再試一次。' });
+  }
   if (e?.status === 429 || e?.code === 'credit_balance_exhausted') {
     return res.status(503).json({ error: e?.code === 'credit_balance_exhausted' || e?.type === 'insufficient_quota'
       ? '對方現在沒辦法回覆（AI 服務額度不足），請稍後再試。' : '對方現在有點忙，等一下再試一次。' });
@@ -146,7 +150,7 @@ app.get('/api/me', auth, (req, res) => {
 app.patch('/api/me', auth, (req, res) => {
   const b = req.body || {};
   const settings = { ...j(req.user.settings, {}), ...(b.settings || {}) };
-  const allowed = ['dailyCap', 'proactiveLevel', 'dndStart', 'dndEnd', 'notifyPreview', 'lunchAt', 'dinnerAt', 'discreetNames', 'portraitStyle', 'showSuggestions', 'realisticDelay', 'notifyAsked', 'appTheme', 'nightOwl', 'customMoods', 'tourDone', 'roomTourDone', 'seenNews', 'feedbackConsent', 'chatTaste'];
+  const allowed = ['dailyCap', 'proactiveLevel', 'dndStart', 'dndEnd', 'notifyPreview', 'lunchAt', 'dinnerAt', 'discreetNames', 'portraitStyle', 'showSuggestions', 'realisticDelay', 'notifyAsked', 'appTheme', 'nightOwl', 'customMoods', 'tourDone', 'roomTourDone', 'seenNews', 'feedbackConsent', 'chatTaste', 'tips'];
   for (const k of Object.keys(settings)) if (!allowed.includes(k)) delete settings[k];
   if (settings.chatTaste) { // 聊天口味：只收三個欄位的固定選項
     const t = settings.chatTaste || {}, ok = { length: ['short', 'mid', 'long'], warm: ['slow', 'mid', 'fast'], lead: ['him', 'turns', 'me'] };
@@ -466,7 +470,9 @@ async function replyOrDefer(user, rel, { userText = '', imageMedia = null, trigg
   const fresh = db.prepare('SELECT * FROM relationships WHERE id=?').get(rel.id);
   const persona = getPersona(fresh);
   const settings = j(user.settings, {});
-  const crisis = crisisSignal(userText);
+  // 危機分級只算一次（關鍵字＋內容審核），之後「要不要馬上回、算不算每日上限、預算暫停」都用同一個結果
+  const level = userText && !trigger ? await crisisLevel(userText) : 'none';
+  const crisis = crisisSignal(userText) || level === 'high';
   // 超過預算、暫停中：一天只提醒一次（危機訊息照常回）
   if (!crisis && budgetPaused()) {
     const day = taipeiDay();
@@ -493,15 +499,15 @@ async function replyOrDefer(user, rel, { userText = '', imageMedia = null, trigg
       } else db.prepare('UPDATE daily_use SET photos=photos+1 WHERE user_id=? AND day=?').run(user.id, use.day);
     }
   }
-  if (fresh.pending_reply_at && !crisisSignal(userText)) return { pending: { at: fresh.pending_reply_at, presence: presenceOf(fresh, persona) } };
-  const delay = replyDelayMs(fresh, persona, { crisis: crisisSignal(userText), settings });
+  if (fresh.pending_reply_at && !crisis) return { pending: { at: fresh.pending_reply_at, presence: presenceOf(fresh, persona) } };
+  const delay = replyDelayMs(fresh, persona, { crisis, settings });
   if (delay > 50000) {
     const at = now() + delay;
     db.prepare('UPDATE relationships SET pending_reply_at=? WHERE id=?').run(at, rel.id);
     if (trigger) db.prepare('INSERT INTO followups (rel_id,due_at,topic) VALUES (?,?,?)').run(rel.id, at, trigger.slice(0, 120));
     return { pending: { at, presence: presenceOf(fresh, persona) } };
   }
-  await runTurn({ user, relId: rel.id, userText, imageMedia, trigger, triggerKey });
+  await runTurn({ user, relId: rel.id, userText, imageMedia, trigger, triggerKey, crisisLevelPre: level });
   return {};
 }
 

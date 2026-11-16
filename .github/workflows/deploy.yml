@@ -24,9 +24,19 @@ jobs:
       - name: 檢查設定
         id: cfg
         env:
-          H: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          HEALTH_URL: ${{ secrets.HEALTH_URL }}
         run: |
-          if [ -n "$H" ]; then echo "ready=true" >> "$GITHUB_OUTPUT"; else echo "::notice::還沒設定部署用的 secrets（見 docs/auto-deploy.md），這次略過自動部署"; fi
+          missing=""
+          for n in DEPLOY_HOST DEPLOY_USER DEPLOY_KEY DEPLOY_KNOWN_HOSTS HEALTH_URL; do [ -n "${!n}" ] || missing="$missing $n"; done
+          if [ -z "$missing" ]; then echo "ready=true" >> "$GITHUB_OUTPUT"; echo "設定齊全"; exit 0; fi
+          msg="找不到這些 secrets：$missing（要放在 Settings → Secrets and variables → Actions 的 Secrets 分頁，名稱大小寫要一樣；見 docs/auto-deploy.md）"
+          # 手動執行時直接失敗，才看得出來沒設定好；合併後的自動部署則只提示、不變紅
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then echo "::error::$msg"; exit 1; fi
+          echo "::notice::$msg，這次略過自動部署"
       - name: 準備 SSH
         if: steps.cfg.outputs.ready == 'true'
         env:
