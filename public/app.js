@@ -127,6 +127,17 @@ const routes = [
   [/^#\/taste$/, renderTaste],
   [/^#\/settings$/, renderSettings],
 ];
+// 讀取 /api/meta；伺服器剛好重啟或網路斷掉時回應可能是空的，稍等再試幾次
+async function loadMeta() {
+  for (let i = 0; i < 3; i++) {
+    try {
+      const r = await fetch('/api/meta', { credentials: 'same-origin' });
+      if (r.ok) return await r.json();
+    } catch {}
+    await new Promise(ok => setTimeout(ok, 600 * (i + 1)));
+  }
+  return null;
+}
 async function route() {
   clearTimers();
   $('#sheet-root').innerHTML = ''; sheetGen++;
@@ -134,7 +145,16 @@ async function route() {
   if (!S.me && !/^#\/(welcome|join|recover)$/.test(hash)) {
     try { S.me = await api('/api/me'); } catch { return; }
   }
-  if (!S.meta) S.meta = await fetch('/api/meta').then(r => r.json());
+  if (!S.meta) {
+    S.meta = await loadMeta();
+    if (!S.meta) {
+      // 主機重啟／網路中斷時 /api/meta 會拿到空白回應：給使用者重試，不要讓整頁卡住
+      tabs.hidden = true;
+      app.innerHTML = `<div class="empty"><p class="muted">連線有點問題，資料還沒載入。</p><button class="btn" id="metaRetry">再試一次</button></div>`;
+      $('#metaRetry').onclick = () => route();
+      return;
+    }
+  }
   for (const [re, fn] of routes) {
     const m = hash.match(re);
     if (m) {
@@ -1077,7 +1097,8 @@ async function renderRoom(relId) {
   // 不然舊的輪詢會把訊息塞進已經不在畫面上的舊聊天室，看起來像訊息不見或重複
   clearTimers();
   const gen = S.roomGen = (S.roomGen || 0) + 1;
-  const live = () => S.roomGen === gen;
+  // 還在這間聊天室的畫面上：沒有被別的聊天室取代，也沒有離開到聊天列表等其他頁
+  const live = () => S.roomGen === gen && location.hash === `#/chat/${relId}`;
   let rel;
   try { rel = await api(`/api/rels/${relId}`); } catch (e) { toast(errMsg(e)); location.hash = '#/chat'; return; }
   if (location.hash !== `#/chat/${relId}`) return; // 等資料時已經換到別頁了
@@ -1148,6 +1169,9 @@ async function renderRoom(relId) {
   // 回覆建議：他最後一則訊息附的 2–3 個好接的回覆
   function drawSuggest() {
     $('#suggest')?.remove();
+    // 回覆動畫還在跑時就離開了聊天室：輸入框已經不在畫面上，不要畫
+    const composer = $('#composer');
+    if (!composer || !live()) return;
     if (S.me?.settings?.showSuggestions === false) return;
     const last = S.room.messages.filter(m => typeof m.id === 'number' && m.kind !== 'card' && m.kind !== 'sticker' || (m.card && ['meal', 'pin_request', 'postcard'].includes(m.card.type))).at(-1);
     if (!last || last.sender !== 'char' || !last.suggest?.length) return;
@@ -1156,7 +1180,7 @@ async function renderRoom(relId) {
     const items = last.suggest.map(x => typeof x === 'string' ? { label: x, text: x } : x);
     // 先只放一顆小按鈕，按了才展開三個方向：不讓人覺得「預設就是要講這些」
     box.innerHTML = `<button class="chip sug-toggle" aria-expanded="false">💡 不知道怎麼回？</button>`;
-    $('#composer').before(box);
+    composer.before(box);
     $('.sug-toggle', box).onclick = () => {
       box.innerHTML = items.map((x, i) => `<button class="chip" data-i="${i}" title="${esc(x.text)}">${esc(x.label)}</button>`).join('');
       bindChips();
@@ -1254,8 +1278,9 @@ async function renderRoom(relId) {
         typing?.remove();
         locals().forEach(n => n.remove());
         await revealSequential(res.messages || [], {});
+        if (!live()) return; // 等回覆時已經離開聊天室：畫面已換掉，不要再改舊的標題列
         S.room.presence = res.pending.presence;
-        $('#sub').innerHTML = sub();
+        $('#sub') && ($('#sub').innerHTML = sub());
         showPendingNote(res.pending);
         return;
       }
@@ -1403,6 +1428,7 @@ async function renderRoom(relId) {
       if (['ended', 'outing'].includes(m.card?.type) || (m.card?.type === 'activity')) { typing?.remove(); setTimeout(() => renderRoom(relId), 1500); return; }
     }
     typing?.remove();
+    if (!live()) return; // 等回覆動畫時已經離開聊天室
     if (gotChar) { S.room.presence = { code: 'online', label: '上線中' }; $('#sub') && ($('#sub').innerHTML = sub()); refreshReads(); setTimeout(() => maybeAskNotify(rel), 1800); }
     markRead();
     S.room.drawSuggest?.();
@@ -1456,7 +1482,7 @@ async function renderRoom(relId) {
   S.timers.push(setInterval(pollNow, 8000));
   S.timers.push(setInterval(async () => {
     if (document.visibilityState !== 'visible' || S.room.sending) return;
-    try { const r = await api(`/api/rels/${relId}`); S.room.presence = r.presence; $('#sub').innerHTML = sub(); } catch {}
+    try { const r = await api(`/api/rels/${relId}`); S.room.presence = r.presence; $('#sub') && ($('#sub').innerHTML = sub()); } catch {}
   }, 60000));
 
   function markRead() {
