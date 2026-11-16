@@ -17,6 +17,7 @@ import { crisisSignal, crisisLevel, HELP_CARD } from './safety.js';
 import { planTurn, planBlock } from './planner.js';
 import { reviewReply, stripNarration } from './turncheck.js';
 import { encounterOf, setEncounter, faceBlock, shouldWrap } from './encounter.js';
+import { sceneOf, sceneLine, moveScene } from './scene.js';
 import { syncTalkFromTemplate } from './persona.js';
 import { WRITER_CORE, packBlock, writerSchema, bookkeep } from './turnrules.js';
 const WRITER_SCHEMA = writerSchema(TURN_SCHEMA);
@@ -74,7 +75,8 @@ const refreshRel = (relId) => db.prepare('SELECT * FROM relationships WHERE id=?
 const texts0Ok = (out) => (out.messages || []).some(m => String(m.text || '').trim());
 
 function historyInput(relId, latestImage) {
-  const rows = db.prepare(`SELECT * FROM messages WHERE rel_id=? AND sender != 'system' ORDER BY id DESC LIMIT 30`).all(relId).reverse();
+  // 場景旁白（相遇時發生的事、交換 LINE）也給模型看：以前被濾掉，角色會跟旁白講的事互相矛盾
+  const rows = db.prepare(`SELECT * FROM messages WHERE rel_id=? AND (sender != 'system' OR kind='scene') ORDER BY id DESC LIMIT 30`).all(relId).reverse();
   const items = [];
   let prevAt = 0;
   for (const m of rows) {
@@ -82,6 +84,7 @@ function historyInput(relId, latestImage) {
     const stamp = prevAt && m.created_at - prevAt > 90 * 60000 ? `［隔了 ${gapLabel(m.created_at - prevAt)}・${new Date(m.created_at).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}］` : '';
     prevAt = m.created_at;
     if (m.kind === 'retract') continue;
+    if (m.sender === 'system') { if (m.text) items.push({ role: 'developer', content: `［旁白：當時真的發生的事］${m.text}` }); continue; }
     if (m.retracted) { items.push({ role: m.sender === 'char' ? 'assistant' : 'user', content: m.sender === 'char' ? '（你收回了一則訊息）' : '（對方收回了一則訊息）' }); continue; }
     if (m.sender === 'char') {
       if (m.kind === 'card') continue;
@@ -430,6 +433,10 @@ async function runTurnInner({ user, relId, userText = '', imageMedia = null, tri
     db.prepare(`UPDATE messages SET card='{"face":true}' WHERE rel_id=? AND sender='user' AND kind='text' AND card IS NULL AND id>(SELECT COALESCE(MAX(id),0) FROM messages WHERE rel_id=? AND sender='char')`).run(rel.id, rel.id);
   }
   const worldP = worldContext(persona, rel.id);
+  // 場景狀態：規劃、寫手、檢查都讀同一份
+  const scene = sceneOf(rel, persona);
+  const sceneText = sceneLine(scene, persona);
+  const sceneLocked = scene.fixed && scene.source === 'encounter'; // 剛相遇：手帳、連續劇先不拿來用
   const level = crisisLevelPre || (!trigger && userText ? await crisisLevel(userText) : 'none');
   const crisis = !trigger && (crisisSignal(userText) || level === 'high');
   const dueFollowups = db.prepare('SELECT * FROM followups WHERE rel_id=? AND done=0 AND due_at<=? ORDER BY due_at LIMIT 3').all(rel.id, now());
@@ -459,14 +466,15 @@ async function runTurnInner({ user, relId, userText = '', imageMedia = null, tri
   const arc = arcContext(rel.id);
   // 回合規劃：先決定這一輪要做什麼（分享自己的事、接舊話題、開新話題…），再寫回覆
   const planP = planning ? planTurn({
-    rel, persona, user, userText, crisis, lowEffort: lowEffortStreak(rel.id), encounter: enc.card ? { reason: enc.card.reason_to_talk, incident: enc.card.incident, face } : null,
+    rel, persona, user, userText, crisis, sceneText, sceneLocked, lowEffort: lowEffortStreak(rel.id), encounter: enc.card ? { reason: enc.card.reason_to_talk, incident: enc.card.incident, face } : null,
     material: {
-      life: face ? [] : lifeContext(rel.id), arc: face ? null : arc, told: toldOf(rel.id), threads: persona.threads || [],
+      life: face || sceneLocked ? [] : lifeContext(rel.id), arc: face || sceneLocked ? null : arc, told: toldOf(rel.id), threads: persona.threads || [],
       followups: dueFollowups.map(f => f.topic), selfTopics: selfTopicsToday(rel.id).map(x => `${x.topic}（${x.n} 次）`),
       episodes: episodesFor(rel.id, userText).map(e => e.summary).filter(Boolean),
     },
   }) : Promise.resolve(null);
   input.push({ role: 'developer', content: contextBlock({
+    sceneText, sceneFixed: sceneLocked,
     taste: tasteOf(rel.user_id),
     userLen: [...String(userText || '').replace(/（[^）]*）/g, '').replace(/\s+/g, '')].length,
     prefs: prefsLines(rel.user_id),
@@ -517,8 +525,19 @@ async function runTurnInner({ user, relId, userText = '', imageMedia = null, tri
   if (planning && !crisis) {
     const draft = (out.messages || []).map(m => String(m.text || '').trim()).filter(Boolean);
     if (draft.length) {
-      const fixed = await reviewReply({ rel, persona, user, userText, texts: draft, plan, face, rulesOnly: rewritten });
-      if (fixed.join('\n') !== draft.join('\n')) out.messages = fixed.map(text => ({ text }));
+      const rv = await reviewReply({ rel, persona, user, userText, texts: draft, plan, face, rulesOnly: rewritten, sceneText, scene, out });
+      if (rv.problems.length) {
+        // 檢查只負責指出問題；重寫交回寫手（他有完整的人設和說話風格），而且不能比原本長、不能多泡泡
+        input.push({ role: 'developer', content: `你剛剛想傳：\n${draft.map(x => '- ' + x).join('\n')}\n但有這些問題：\n${rv.problems.map(x => '- ' + x).join('\n')}\n重寫一次：只修正這些問題，保持你的口吻；不要比原本長、泡泡不要比原本多（最多 ${Math.max(1, draft.length)} 則）、不要加入原本沒有的事、不要解釋或道歉。` });
+        try {
+          const again = await call();
+          let fixed = stripNarration((again.messages || []).map(m => String(m.text || '').trim()).filter(Boolean)).slice(0, Math.max(1, draft.length));
+          if (fixed.length) {
+            logIssue({ level: 'auto', source: 'review', message: `送出前檢查：改寫一般回覆（${rv.problems.join('；').slice(0, 200)}）`, detail: { draft, rewritten: fixed, problems: rv.problems, move: plan?.move }, userId: rel.user_id, relId: rel.id });
+            out = { ...again, messages: fixed.map(text => ({ text })) };
+          }
+        } catch (e) { logIssue({ level: 'warn', source: 'review', message: `重寫失敗，照原本的送：${e.message}`, error: e, userId: rel.user_id, relId: rel.id }); }
+      } else if (rv.texts.join('\n') !== draft.join('\n')) out.messages = rv.texts.map(text => ({ text }));
     }
   }
   // 發送前檢查：主動訊息、晚回的訊息要對得上現在的時間和最近的對話
@@ -578,15 +597,13 @@ async function runTurnInner({ user, relId, userText = '', imageMedia = null, tri
     texts.forEach(tx => addMessage(rel, 'char', 'text', { text: tx, proactive: isProactive, reason: triggerKey, card: face ? { face: true } : null }));
   }
   // 當面相遇收尾：交換聯絡方式（依心情認識的人自己決定要不要換）
-  if (faceWrap) {
-    if (enc.entry === 'mood') {
-      addMessage(rel, 'system', 'card', { card: { type: 'exchange', name: persona.name } });
-      setEncounter(rel.id, { phase: 'deciding' });
-    } else {
-      addMessage(rel, 'system', 'scene', { text: '你們交換了 LINE。' });
-      setEncounter(rel.id, { phase: 'chat' });
-    }
+  // 交換聯絡方式是「事件」：角色開口問了（或對方道別、聊很久了）才跳出交換卡，由使用者自己決定；不再聊滿幾輪就自動交換
+  if (face && texts.length && (faceWrap || (out.propose_exchange && enc.entry !== 'mood' && faceTurn >= 2))) {
+    addMessage(rel, 'system', 'card', { card: { type: 'exchange', name: persona.name } });
+    setEncounter(rel.id, { phase: 'deciding' });
   }
+  // 角色交代自己換了地方：更新場景狀態（當面說話時不會自己走掉）
+  if (!face && out.scene?.moved && out.scene.place && texts.length) moveScene(rel.id, out.scene.place);
 
   // 好感一天最多加 affDailyCap（後台可調）：聊再多，感情也要靠時間慢慢累積
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei' }).format(new Date());

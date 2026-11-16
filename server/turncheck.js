@@ -60,58 +60,70 @@ export function ruleProblems(texts, { persona, rel, plan = null, face = false, t
   return p;
 }
 
+// 對方剛說的整句話被原封不動搬進回覆（鸚鵡式附和）
+function echoProblem(texts, userText) {
+  const mine = texts.join('\n').replace(/\s+/g, '');
+  for (const part of String(userText || '').split(/[\n，。！？!?、,.~～]+/)) {
+    const p = part.replace(/\s+/g, '');
+    if ([...p].length >= 5 && mine.includes(p)) return `把對方的話「${p}」原封不動重說了一遍，換成你自己的反應`;
+  }
+  return null;
+}
+
+const TYPES = {
+  location_conflict: '說的地點、正在做的事跟「你此刻的狀態」不一致，或沒交代就換了地方',
+  contradicts_scene: '跟旁白或之前真的發生的事矛盾（例如把誰撿的、誰掉的講反）',
+  contradicts_history: '跟自己前面說過的話矛盾',
+  breaks_character: '跳出角色談自己怎麼說話、時間線、設定（「時間有點跳」「剛剛那句講太快」）',
+  not_answering: '沒回應到對方剛說的話或問的問題、答非所問',
+  empty_reply: '只有「嗯」「對」這種沒內容的附和，對話接不下去',
+  too_much: '比對方長太多、太熱情、一次解釋太多或連續道歉',
+  service_tone: '像客服或助理',
+  off_plan: '沒照這輪的規劃做',
+};
+
 /**
- * 模型層：看這段回覆接不接得上、像不像真人、有沒有照規劃做。
- * 回傳 { action: 'send' | 'rewrite', messages, reason }。
+ * 模型層：只判定有沒有問題，不改寫（改寫交回寫手）。回傳問題說明的陣列。
  */
-export async function checkReply({ rel, persona, user, userText, texts, plan, problems = [], ts = Date.now() }) {
+export async function checkReply({ rel, persona, user, userText, texts, plan, sceneText = '', ts = Date.now() }) {
   const t = taipeiParts(ts);
   const res = await jsonCall({
-    userId: rel.user_id, kind: 'check', tier: 'cheap',
-    instructions: `你是聊天 App 的送出前檢查。角色「${persona.name}」（${persona.traits || ''}）準備回覆${user.call_name}。判斷這段回覆像不像真人朋友在傳 LINE、接不接得上對話。
-現在：${describeNow(ts)}（${dayPeriod(t.hour)}）。${persona.name}此刻：${charStatus(persona, ts).label}。
-${plan?.read?.meaning ? `對方這句話的意思：${plan.read.meaning}（情緒：${plan.read.emotion || '平淡'}；期待：${plan.read.expects || '自然回應'}）。` : ''}
-${plan?.read?.must_address?.length ? `回覆一定要回應到：${plan.read.must_address.join('；')}。漏掉任何一點就要 rewrite。` : ''}
+    userId: rel.user_id, kind: 'check', tier: 'cheap', effort: 'low',
+    instructions: `你是聊天 App 的送出前檢查。角色「${persona.name}」準備回覆${user.call_name}。你只負責找問題，不用改寫。
+現在：${describeNow(ts)}（${dayPeriod(t.hour)}）。
+${sceneText}
+${plan?.read?.meaning ? `對方這句話的意思：${plan.read.meaning}。` : ''}${plan?.read?.must_address?.length ? `一定要回應到：${plan.read.must_address.join('；')}。` : ''}
 ${plan ? `這輪的規劃：${MOVES[plan.move]}${plan.material ? `（素材：${plan.material}）` : ''}${plan.ask ? '' : '，不問問題'}。` : ''}
-${problems.length ? `規則檢查已發現：${problems.join('；')}。這些一定要改。` : ''}
-判斷標準：
-- 要讀懂並回應到對方剛說的話（包含言外之意和問題），不能答非所問、不能跳過對方的問題、不能重問對方剛回答過的事、不能跟前面說過的事矛盾。
-- 不像客服或助理；不過度熱情、不每句都附和或誇對方；長度跟對方差不多。
-- 有照規劃做（例如規劃要分享自己的事，就要真的分享，而不是只問對方）。
-- 不要和他最近說過的話重複開頭或說法。
-${talkOf(persona).never.length ? `- ${persona.name}絕對不會說或做：${talkOf(persona).never.join('；')}。\n` : ''}沒問題就 send、messages 給空陣列。有問題就 rewrite：messages 給改好的 1–3 則泡泡，保持他的口吻、原本的用意和規劃。reason 一句話。`,
+逐項對照，確定有問題才列出來（type＋一句具體說明，指出是哪一句、哪裡不對）；拿不準就不要列。沒問題回空陣列。
+${Object.entries(TYPES).map(([k, v]) => `- ${k}：${v}`).join('\n')}`,
     input: [{ role: 'user', content: `最近的對話：\n${recentLines(rel.id, 12).join('\n') || '（還沒有）'}\n\n對方剛說：${userText || '（貼圖或照片）'}\n\n準備送出的回覆：\n${texts.map(x => '- ' + x).join('\n')}` }],
     schema: { type: 'object', additionalProperties: false, properties: {
-      action: { type: 'string', enum: ['send', 'rewrite'] },
-      reason: { type: 'string' }, messages: { type: 'array', items: { type: 'string' } },
-    }, required: ['action', 'reason', 'messages'] },
+      problems: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+        type: { type: 'string', enum: Object.keys(TYPES) }, detail: { type: 'string' } }, required: ['type', 'detail'] } },
+    }, required: ['problems'] },
     schemaName: 'check',
-    mock: () => problems.length
-      ? { action: 'rewrite', reason: problems.join('；'), messages: texts.map(x => x.replace(/您/g, '你').replace(/請問/g, '')).slice(0, 3) }
-      : { action: 'send', reason: 'ok', messages: [] },
+    mock: () => ({ problems: [] }),
   });
-  if (res.action === 'rewrite' && !res.messages?.length) res.action = 'send';
-  return res;
+  return (res.problems || []).slice(0, 4).map(p => String(p.detail || TYPES[p.type]).slice(0, 120));
 }
 
 /**
- * 一般回覆的送出前檢查：規則層每次都跑；有問題、或開啟模型層時再問模型。最多改寫一次。
- * 回傳要送出的泡泡。
+ * 一般回覆的送出前檢查：規則層每次都跑，模型層對照場景狀態、對話和規劃。
+ * 回傳 { texts: 清掉括號旁白後的泡泡, problems: 要請寫手修正的問題 }；不在這裡改寫。
  */
-export async function reviewReply({ rel, persona, user, userText, texts, plan, face = false, rulesOnly = false }) {
+export async function reviewReply({ rel, persona, user, userText, texts, plan, face = false, rulesOnly = false, sceneText = '', scene = null, out = null }) {
   const cleaned = stripNarration(texts);
-  if (!cleaned.length) return texts;
+  if (!cleaned.length) return { texts, problems: [] };
   const problems = ruleProblems(cleaned, { persona, rel, plan, face });
-  if (!problems.length && (rulesOnly || !config.checkModel)) return cleaned;
+  const echo = echoProblem(cleaned, userText);
+  if (echo) problems.push(echo);
+  if (face && out?.scene?.moved) problems.push('你們正在當面說話，不能說自己已經到了別的地方');
+  if (rulesOnly || !config.checkModel) return { texts: cleaned, problems };
   try {
-    const rv = await checkReply({ rel, persona, user, userText, texts: cleaned, plan, problems });
-    if (rv.action !== 'rewrite') return cleaned;
-    const out = stripNarration(rv.messages).slice(0, 3);
-    if (!out.length) return cleaned;
-    logIssue({ level: 'auto', source: 'review', message: `送出前檢查：改寫一般回覆（${rv.reason}）`, detail: { draft: cleaned, rewritten: out, problems, move: plan?.move }, userId: rel.user_id, relId: rel.id });
-    return out;
+    const more = await checkReply({ rel, persona, user, userText, texts: cleaned, plan, sceneText });
+    return { texts: cleaned, problems: [...problems, ...more] };
   } catch (e) {
-    logIssue({ level: 'warn', source: 'review', message: `送出前檢查失敗，照原本的送：${e.message}`, error: e, userId: rel.user_id, relId: rel.id });
-    return cleaned;
+    logIssue({ level: 'warn', source: 'review', message: `送出前檢查失敗，只用規則層：${e.message}`, error: e, userId: rel.user_id, relId: rel.id });
+    return { texts: cleaned, problems };
   }
 }

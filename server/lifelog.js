@@ -59,6 +59,29 @@ export function lifeContext(relId) {
   return lines;
 }
 
+/**
+ * 今天真的發生、手帳必須照著寫的事（例如在某個地方遇到對方）。
+ * 已經有今天的手帳：前後 90 分鐘內衝突的安排拿掉、換成這一筆；還沒寫：先記著，寫的時候會帶進去。
+ */
+db.exec(`CREATE TABLE IF NOT EXISTS life_pins (rel_id TEXT NOT NULL, day TEXT NOT NULL, time TEXT NOT NULL, text TEXT NOT NULL)`);
+export function pinEvent(relId, text) {
+  const t = taipeiParts();
+  const time = `${String(Math.floor(t.minutes / 60)).padStart(2, '0')}:${String(t.minutes % 60).padStart(2, '0')}`;
+  db.prepare('INSERT INTO life_pins (rel_id,day,time,text) VALUES (?,?,?,?)').run(relId, t.date, time, String(text).slice(0, 50));
+  const log = logFor(relId, t.date);
+  if (log) db.prepare('UPDATE life_log SET items=? WHERE id=?').run(JSON.stringify(applyPins(log.items, pinsFor(relId, t.date))), log.id);
+}
+const pinsFor = (relId, day) => db.prepare('SELECT time, text FROM life_pins WHERE rel_id=? AND day=? ORDER BY time').all(relId, day);
+function applyPins(items, pins) {
+  let out = items;
+  for (const p of pins) {
+    const m = toMin(p.time);
+    out = out.filter(i => Math.abs(toMin(i.time) - m) > 90 || i.pinned);
+    out.push({ time: p.time, text: p.text, tags: ['外出'], pinned: true });
+  }
+  return out.sort((a, b) => a.time.localeCompare(b.time));
+}
+
 const writing = new Set();
 /** 寫今天的日誌（已經寫過就跳過）。 */
 export async function writeToday(rel, persona) {
@@ -84,7 +107,7 @@ ${arc ? `- 他正在經歷「${arc.title}」（${arc.premise}），已經到第 
 - 不要和過去做過的事重複（可以是固定習慣，但細節要不同；特別的事不要再發生一次）：
 ${logs.map(l => `  ${l.day}：${l.summary}`).join('\n') || '  （還沒有）'}
 ${digests.map(d => `  ${d.month} 大事記：${d.text}`).join('\n')}
-- 不要寫到和你聊天的那個人，也不要有戀愛、重病、意外。
+${pinsFor(rel.id, t.date).length ? `- 今天已經真的發生、不能改的事（其他安排要跟它接得上，那個時間不能在別的地方）：${pinsFor(rel.id, t.date).map(p => `${p.time} ${p.text}`).join('；')}\n` : ''}- 不要寫到和你聊天的那個人，也不要有戀愛、重病、意外。
 - summary：一句話總結今天（30 字內）。
 只輸出 JSON。`,
       input: [{ role: 'user', content: '寫今天' }],
@@ -105,6 +128,7 @@ ${digests.map(d => `  ${d.month} 大事記：${d.text}`).join('\n')}
       .map(i => ({ time: i.time.padStart(5, '0'), text: String(i.text).slice(0, 50), tags: (i.tags || []).slice(0, 3) }))
       .sort((a, b) => a.time.localeCompare(b.time)).slice(0, 6);
     if (!items.length) return null;
+    { const fixed = applyPins(items, pinsFor(rel.id, t.date)); items.length = 0; items.push(...fixed); }
     db.prepare('INSERT OR IGNORE INTO life_log (rel_id,day,items,summary,created_at) VALUES (?,?,?,?,?)')
       .run(rel.id, t.date, JSON.stringify(items), String(res.summary || '').slice(0, 60), now());
     return items;

@@ -23,7 +23,7 @@ export const WRITER_CORE = `
 - 不條列、不加標題、不用客服或書面語氣，少用驚嘆號。
 - 稱呼對方：女生用「妳」，男生或不確定用「你」，前後一致。
 - 對方提到你不知道的東西，不要裝懂、不要亂編，好奇地問。
-- 你現在在哪、在做什麼要前後一致；狀態變了就自然交代（「我下班了」）。
+- 你現在在哪、在做什麼，以「你此刻的狀態」為準，前後一致；狀態變了就自然交代（「我下班了」）。被問到矛盾的地方，像真人一樣簡單說清楚就好，不要談「時間線」「剛剛那句講太快」這種話。
 - 要去上班、下班、去忙時自然說一聲；對方說要開會或在忙，就安靜等，不追問。
 
 ## 分寸
@@ -52,6 +52,8 @@ export const WRITER_CORE = `
 ## 輸出
 - messages：你要傳的泡泡。
 - suggestions：給 3 個「回覆方向」幫不知道怎麼回的人。label 6 字內、開頭一個表情符號（例如「😂 吐槽他」「❓ 問後來呢」「🙋 說說我自己」）；text 是「對方」要傳給你的一句話（25 字內，「我」是對方、「你」是你），三個方向要不同，不要把你自己的生活寫成對方的經歷。
+- scene：你這次的訊息有沒有讓自己「換了地方」。沒有就填 { "moved": false, "place": "" }。要換地方，必須在訊息裡自然地交代（「我先走去捷運站了」「剛到家」），並填 moved: true、place: 新的地點。不能沒交代就出現在別的地方；你說的地點、在做的事一定要跟「你此刻的狀態」一致。
+- propose_exchange：只有當面說話、而且你這次真的開口問要不要交換 LINE（或答應對方的提議）時才是 true；其他時候一律 false。
 - 其他欄位：只有下面「這輪可以用的功能」有寫到的才用，其餘一律 null、false 或 "none"。
 `.trim();
 
@@ -90,7 +92,7 @@ export function packBlock({ userText = '', trigger = '', face = false, crisis = 
 
 // 寫手只輸出這輪要傳的東西；記帳的欄位交給背景
 export function writerSchema(TURN_SCHEMA) {
-  const keep = ['retract_last', 'messages', 'voice', 'hint', 'relationship_event', 'meal', 'outing', 'crisis', 'suggestions', 'activity', 'postcard', 'sticker', 'choice', 'goal'];
+  const keep = ['scene', 'propose_exchange', 'retract_last', 'messages', 'voice', 'hint', 'relationship_event', 'meal', 'outing', 'crisis', 'suggestions', 'activity', 'postcard', 'sticker', 'choice', 'goal'];
   const properties = Object.fromEntries(keep.map(k => [k, TURN_SCHEMA.properties[k]]));
   return { type: 'object', additionalProperties: false, properties, required: keep };
 }

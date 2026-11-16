@@ -125,6 +125,8 @@ export const BASE_RULES = `
 
 ## 輸出
 只輸出符合 schema 的 JSON。messages 是你要傳的泡泡；其他欄位沒有就填 null 或空陣列。
+- scene：你這次的訊息有沒有讓自己「換了地方」。沒有就填 { "moved": false, "place": "" }。要換地方，必須在訊息裡自然地交代（「我先走去捷運站了」「剛到家」），並填 moved: true、place: 新的地點。不能沒交代就出現在別的地方；你說的地點、在做的事一定要跟「你此刻的狀態」一致。
+- propose_exchange：只有當面說話、而且你這次真的開口問要不要交換 LINE（或答應對方的提議）時才是 true；其他時候一律 false。
 `.trim();
 
 export function personaBlock(p) {
@@ -161,14 +163,12 @@ function meetLine(rel) {
   return `你們的相遇：${sc.label || '（未記錄）'}${rel.start_type === 'friend' ? '（本來就認識）' : ''}，${days === 0 ? '就是今天' : `${days} 天前`}${sad}`;
 }
 
-export function contextBlock({ taste = {}, userLen = 0, callMode = false, life = [], episodes = [], selfTopics = [], prefs = null, goals = [], world = [], arc = null, lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, mealAsked = false, loopHint = null, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
+export function contextBlock({ sceneText = '', sceneFixed = false, taste = {}, userLen = 0, callMode = false, life = [], episodes = [], selfTopics = [], prefs = null, goals = [], world = [], arc = null, lastTimes = {}, userStatus = null, userPosts = [], habits = [], notes = [], told = [], summary = '', lowEffort = false, lateReply = null, activity = null, rel, persona, user, memories, worldEvents, otherChars, trends, dueFollowups, trigger, crisis, todayMealProposed, mealAsked = false, loopHint = null, voiceAllowed, canConfess, loverElsewhere, photoAttached }) {
   const st = charStatus(persona);
   // 剛認識的這幾個小時：他的狀態以相遇場景為準，不然會變成「剛剛在咖啡廳上班、下一句說今天休假」
   let sc0 = {}; try { sc0 = JSON.parse(rel.scenario || '{}'); } catch {}
   const justMet = Date.now() - rel.created_at < 3 * 3600e3 && rel.start_type !== 'friend';
-  const stLine = justMet
-    ? `你此刻的狀態：你們 ${Math.max(1, Math.round((Date.now() - rel.created_at) / 60000))} 分鐘前在「${sc0.label || '相遇的地方'}」認識（看對話最前面的相遇場景）。你現在的位置和在做的事要跟那個場景接得上（還在那裡、或剛離開正在回家／回工作的路上）；不要說你今天休假在家或在別的地方，除非你自然地交代自己已經離開。認識之後你們交換了 LINE，現在是用訊息聊天。`
-    : `你此刻的狀態：${st.label}`;
+  const stLine = sceneText || `你此刻的狀態：${st.label}`;
   const stageText = `${STAGES[rel.stage]}——${STAGE_GUIDE[rel.stage]}`;
   // 跟著對方的長度回：避免對方一句「嗯」他回一大段
   const k = taste.length === 'short' ? 0.7 : taste.length === 'long' ? 1.5 : 1;
@@ -187,8 +187,8 @@ export function contextBlock({ taste = {}, userLen = 0, callMode = false, life =
     lastTimes?.u || lastTimes?.c ? `距離上一則訊息：對方最後一句是 ${lastTimes.u ? gapLabel(Date.now() - lastTimes.u) + '前' : '（還沒說過話）'}，你最後一句是 ${lastTimes.c ? gapLabel(Date.now() - lastTimes.c) + '前' : '（還沒說過話）'}。` : '',
     world.length ? `## 你們生活的世界（真實的天氣與日子）\n${world.map(x => '- ' + x).join('\n')}` : '',
     goals.length ? `## 你們一起在做的小目標（不用連續，做不到也沒關係）\n${goals.map(g => '- ' + g).join('\n')}` : '',
-    arc ? `## 你生活中正在發生的事（連續劇）\n${arc}` : '',
-    life.length ? `## 你的生活手帳（你自己的日子，說到自己在做什麼、做過什麼時要跟這裡一致）\n${life.map(x => '- ' + x).join('\n')}` : '',
+    arc && !sceneFixed ? `## 你生活中正在發生的事（連續劇）\n${arc}` : '',
+    life.length && !sceneFixed ? `## 你的生活手帳（你自己的日子，說到自己在做什麼、做過什麼時要跟這裡一致）\n${life.map(x => '- ' + x).join('\n')}` : '',
     userStatus ? `對方現在的狀態（對方自己設定的）：${userStatus}` : '',
     userPosts.length ? `## 對方最近發的動態（你有看到）\n${userPosts.map(x => '- ' + x).join('\n')}\n可以自然地提起或關心，但不要每次都提。` : '',
     stLine,
@@ -274,6 +274,8 @@ export const TURN_SCHEMA = {
     goal: { anyOf: [{ type: 'null' }, { type: 'object', additionalProperties: false, properties: { title: { type: 'string' }, days: { type: 'integer' } }, required: ['title', 'days'] }] },
     life_post_photo: { type: ['string', 'null'], enum: [...Object.keys(PHOTO_TAGS), null] },
     retract_last: { type: 'boolean' },
+    scene: { type: 'object', additionalProperties: false, properties: { moved: { type: 'boolean' }, place: { type: 'string' } }, required: ['moved', 'place'] },
+    propose_exchange: { type: 'boolean' },
   },
-  required: ['retract_last', 'messages', 'voice', 'affection_delta', 'understanding_delta', 'hint', 'relationship_event', 'milestone', 'memories_add', 'memories_correct', 'memories_forget', 'user_busy_until_minutes', 'followups', 'meal', 'outing', 'place_name', 'status_line', 'crisis', 'signature', 'life_post', 'postcard', 'suggestions', 'told', 'self_topic', 'activity', 'life_post_photo', 'sticker', 'note', 'choice', 'goal'],
+  required: ['scene', 'propose_exchange', 'retract_last', 'messages', 'voice', 'affection_delta', 'understanding_delta', 'hint', 'relationship_event', 'milestone', 'memories_add', 'memories_correct', 'memories_forget', 'user_busy_until_minutes', 'followups', 'meal', 'outing', 'place_name', 'status_line', 'crisis', 'signature', 'life_post', 'postcard', 'suggestions', 'told', 'self_topic', 'activity', 'life_post_photo', 'sticker', 'note', 'choice', 'goal'],
 };

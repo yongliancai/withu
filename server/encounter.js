@@ -10,7 +10,7 @@ import { db, now, j } from './db.js';
 import { jsonCall } from './llm.js';
 import { personaBlock } from './prompt.js';
 import { similarity } from './memory.js';
-import { describeNow } from './characters.js';
+import { describeNow, charStatus } from './characters.js';
 
 export const REASONS = {
   job: '職業需要（店員服務、護理師問訪客、消防員確認警報）',
@@ -39,7 +39,8 @@ const ENTRY = {
 const CARD_SCHEMA = {
   type: 'object', additionalProperties: false,
   properties: {
-    incident: { type: 'string', description: '這次相遇真的發生的一件小事（一句話），旁白一定要寫到' },
+    incident: { type: 'string', description: '這次相遇真的發生的一件小事：只寫事情本身（誰做了什麼），一句話' },
+    why_here: { type: 'string', description: '角色這個時間為什麼會在這個地方（一句話，要符合他的職業和作息，例如「下班後回母校幫學妹顧攤」）' },
     reason_type: { type: 'string', enum: Object.keys(REASONS) },
     reason_to_talk: { type: 'string', description: '角色開口的真正理由（被問「我們認識嗎」時可以老實說出來）' },
     narration: { type: 'string', description: '2–3 句第二人稱旁白，寫出地點、時間感和 incident' },
@@ -48,7 +49,7 @@ const CARD_SCHEMA = {
     contact_exchange: { type: 'string', description: '之後兩人怎麼自然地交換 LINE（一句話，例如「他說之後咖啡豆到貨可以通知你，問要不要加 LINE」）' },
     suggestions: { type: 'array', minItems: 3, maxItems: 3, items: { type: 'object', additionalProperties: false, properties: { label: { type: 'string' }, text: { type: 'string' } }, required: ['label', 'text'] } },
   },
-  required: ['incident', 'reason_type', 'reason_to_talk', 'narration', 'action', 'openers', 'contact_exchange', 'suggestions'],
+  required: ['incident', 'why_here', 'reason_type', 'reason_to_talk', 'narration', 'action', 'openers', 'contact_exchange', 'suggestions'],
 };
 
 /** 這位使用者最近遇過的角色開場（拿來避免同一個範本）。 */
@@ -77,7 +78,8 @@ export async function makeEncounterCard({ userId, frame, label, roles, scene, en
 
 你要為這次相遇做一張「相遇卡」。旁白和角色當面說的話都從這張卡產生，所以不能互相矛盾。
 規則：
-- incident：這次真的發生的一件小事。旁白一定要寫到；開場白只能提旁白裡發生的事（旁白沒寫撞到就不能說「差點撞到你」，旁白沒下雨就不能問「雨大嗎」）。
+- why_here：你（角色）這個時間出現在這裡要說得通：對照你的職業、上班時間和現在的時間，寫一句真實的理由。之後被問到「你怎麼在這」就照這個回答。
+- incident：這次真的發生的一件小事，只寫事情本身，寫清楚是誰做了什麼（誰掉的、誰撿的）。旁白要寫到這件事；開場白只能提旁白裡發生的事（旁白沒寫撞到就不能說「差點撞到你」，旁白沒下雨就不能問「雨大嗎」）。
 - reason_type 只能從下面挑一種，reason_to_talk 要是真人會開口的理由：
 ${Object.entries(REASONS).map(([k, v]) => `  - ${k}：${v}`).join('\n')}
 - ${startFriend ? '你們本來就認識、有彼此的 LINE：旁白寫你們在這裡碰到的那一刻，開場白是你事後傳的訊息，接著旁白的事講。' : '這是「當面」相遇，還沒有對方的聯絡方式。開場白是當面說的話，不是傳訊息。'}
@@ -90,10 +92,10 @@ ${recent.length ? recent.map(r => `  - ${r}`).join('\n') : '  （還沒有）'}
 - suggestions：給使用者 3 個回話方向（label 6 字內、開頭一個表情符號；text 是使用者當面會說的一句話，20 字內）。
 入口：${ENTRY[entry] || ENTRY.person}
 使用者想要的開始方式：${op.label}——${op.guide}`,
-    input: [{ role: 'user', content: `現在的真實時間：${describeNow()}\n情境：${label}\n${roles ? '身份：' + roles + '\n' : ''}地點：${scene.place || label}${scene.mood ? `\n使用者此刻的心情：${scene.mood}` : ''}` }],
+    input: [{ role: 'user', content: `現在的真實時間：${describeNow()}\n依角色的作息，他現在原本是：${charStatus(frame).label}\n情境：${label}\n${roles ? '身份：' + roles + '\n' : ''}地點：${scene.place || label}${scene.mood ? `\n使用者此刻的心情：${scene.mood}` : ''}` }],
     schema: CARD_SCHEMA, schemaName: 'encounter_card',
     mock: () => ({
-      incident: '你伸手去拿最後一個位子旁邊的插座，剛好對方也伸了手',
+      incident: '你伸手去拿最後一個位子旁邊的插座，剛好對方也伸了手', why_here: '下班後來這裡坐一下',
       reason_type: 'shared', reason_to_talk: '兩個人都要用同一個插座',
       narration: `${label}。你伸手去拿桌邊的插座，旁邊的人也剛好伸了手，兩個人都停在半空中。`,
       action: `${frame.gender === 'female' ? '她' : '他'}先把手收了回去`,
@@ -142,15 +144,18 @@ export function faceBlock({ card, entry, turn, wrap, persona }) {
   ];
   if (wrap) {
     lines.push(entry === 'mood'
-      ? '這輪自然地收尾、道別（例如你要回去上班了）。不要主動要聯絡方式，App 會讓對方自己決定要不要交換。'
-      : `這輪自然地收尾，並照這個方式提出交換 LINE：${card.contact_exchange}。說完就道別，不要再丟新問題。`);
+      ? '這輪自然地收尾、道別（例如你要回去上班了）。不要主動要聯絡方式，App 會讓對方自己決定要不要交換；propose_exchange 填 false。'
+      : `這輪自然地收尾，並開口問對方要不要交換 LINE（可以參考：${card.contact_exchange}），propose_exchange 填 true。說完就停，不要再丟新問題。`);
+  } else if (entry !== 'mood' && turn >= 2) {
+    lines.push(`對方沒有要走，就不要收尾，接著聊眼前的事。聊得來、時機自然的時候（不用急，也不是每次都要），你可以開口問要不要交換 LINE（可以參考：${card.contact_exchange}）；只有你這則訊息真的開口問了，或對方先提、你答應了，propose_exchange 才填 true。App 會讓對方自己決定要不要換。`);
   } else {
-    lines.push('對方沒有要走，就不要收尾，也不要說「先這樣」「我先走了」；接著聊眼前的事。');
+    lines.push('對方沒有要走，就不要收尾，也不要說「先這樣」「我先走了」；接著聊眼前的事。propose_exchange 填 false。');
   }
   return lines.join('\n');
 }
 
 /** 這輪結束後，當面階段要不要收尾。 */
 export function shouldWrap({ turn, userText }) {
-  return turn >= 3 || isBye(userText);
+  // 不再「聊滿 3 輪就自動交換」：對方道別才收尾；聊很久（第 6 輪）還沒人提，才請角色開口
+  return turn >= 6 || isBye(userText);
 }

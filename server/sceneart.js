@@ -33,12 +33,15 @@ export const ART = {
 };
 const BY_SCENARIO = { cafe: 'cafe', mrt: 'mrt', colleague: 'office_day', store: 'convenience_store_night', rain: 'rain_arcade', friends: 'bistro', gym: 'gym', bookstore: 'bookstore', exhibition: 'museum',
   night_market: 'night_market', library: 'library', last_bus: 'bus_stop', supermarket: 'supermarket', club_fair: 'campus', sunset_beach: 'beach_sunset', breakfast: 'breakfast_shop',
-  parcel: 'home_alley_night', clinic: 'hospital', dog_park: 'park_dusk', late_office: 'office_night', blackout: 'office_night', livehouse: 'bistro', delayed_flight: 'mrt',
-  bar_counter: 'bistro', salon: 'cafe', flower_shop: 'cafe', tea_hill: 'park_dusk', workshop: 'office_day', book_talk: 'bookstore' };
+  parcel: 'home_alley_night', clinic: 'hospital', dog_park: 'park_dusk', late_office: 'office_night', blackout: 'office_night', 
+  bar_counter: 'bistro', book_talk: 'bookstore' };
+// 沒有相符插圖的情境（Livehouse、機場、髮廊、花店、茶園、工作坊）不硬配別張圖，前端會用向量場景圖
+const NO_ART = new Set(['livehouse', 'delayed_flight', 'salon', 'flower_shop', 'tea_hill', 'workshop']);
 
 /** 依情境（預設情境 id 或自己寫的文字）和現在的時間挑一張場景圖。 */
 export function artFor({ scenarioId, text = '', ts = Date.now() } = {}) {
   const h = taipeiParts(ts).hour;
+  if (NO_ART.has(scenarioId)) return null;
   let key = BY_SCENARIO[scenarioId] || null;
   if (!key && text) key = Object.keys(ART).find(k => ART[k].kw.test(text)) || null;
   if (key === 'office_day' && (h >= 20 || h < 6)) key = 'office_night';
