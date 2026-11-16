@@ -79,7 +79,7 @@ export function packBlock({ userText = '', trigger = '', face = false, crisis = 
   const t = `${userText || ''} ${trigger || ''}`;
   const on = [];
   if (!face && !crisis) on.push(PACKS.sticker);
-  if (!trigger && CONFUSED.test(userText || '')) on.push(PACKS.retract);
+  if (!face && !trigger && CONFUSED.test(userText || '')) on.push(PACKS.retract);
   if (face || crisis) return on.length ? `## 這輪可以用的功能\n${on.map(x => '- ' + x).join('\n')}` : '';
   if (activity || ACTIVITY.test(t)) on.push(PACKS.activity);
   if (imageMedia) on.push(PACKS.photo);

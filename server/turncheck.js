@@ -74,7 +74,9 @@ const TYPES = {
   location_conflict: '說的地點、正在做的事跟「你此刻的狀態」不一致，或沒交代就換了地方',
   contradicts_scene: '跟旁白或之前真的發生的事矛盾（例如把誰撿的、誰掉的講反）',
   contradicts_history: '跟自己前面說過的話矛盾',
-  breaks_character: '跳出角色談自己怎麼說話、時間線、設定（「時間有點跳」「剛剛那句講太快」）',
+  breaks_character: '跳出角色談自己怎麼說話、時間線、設定（「時間有點跳」「剛剛那句講太快」「像在背稿」）。老實承認自己是 AI 角色不算',
+  dodges_ai: '對方認真問是不是 AI，卻否認或閃避（要老實說自己是 AI 角色，再用自己的方式接下去）',
+  repeats_self: '跟自己前一兩輪說的內容幾乎一樣，對話沒有往前',
   not_answering: '沒回應到對方剛說的話或問的問題、答非所問',
   empty_reply: '只有「嗯」「對」這種沒內容的附和，對話接不下去',
   too_much: '比對方長太多、太熱情、一次解釋太多或連續道歉',
@@ -115,6 +117,7 @@ export async function reviewReply({ rel, persona, user, userText, texts, plan, f
   const cleaned = stripNarration(texts);
   if (!cleaned.length) return { texts, problems: [] };
   const problems = ruleProblems(cleaned, { persona, rel, plan, face });
+  if (!cleaned.some(x => x.replace(/[＊*][^＊*\n]{1,40}[＊*]/g, '').trim())) problems.push('這一輪只有動作、沒有說出口的話：至少要說一句');
   const echo = echoProblem(cleaned, userText);
   if (echo) problems.push(echo);
   if (face && out?.scene?.moved) problems.push('你們正在當面說話，不能說自己已經到了別的地方');

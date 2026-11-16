@@ -89,7 +89,7 @@ export async function planTurn({ rel, persona, user, userText, material = {}, lo
   // 剛相遇（場景鎖定中）：不逼角色帶新話題，先把眼前的事聊完
   if (reactiveStreak >= 3 && !sceneLocked) hints.push(`你已經連續 ${reactiveStreak} 輪只在回應對方，這輪除非對方需要被陪伴或要結束，否則換你帶話題（share_life、continue_thread、new_topic 或 follow_up）。`);
   if ((lowEffort || userShort) && !sceneLocked) hints.push('對方回得很短：不要再丟問題給對方，換你帶一件具體的事（ask 設 false）。');
-  if ((lowEffort || userShort) && sceneLocked) hints.push('對方回得很短：簡單接一句就好，可以順著眼前的事多說一點點，不要硬開新話題，也不要只回「嗯」「對」。');
+  if ((lowEffort || userShort) && sceneLocked) hints.push('對方回得很短：接一句，再順著眼前的事多說一點新的（看到的東西、自己一句小感想），不要硬跳到別的話題，也不要重複你上一句講過的內容或只回「嗯」「對」。');
   if (sceneLocked) hints.push('你們才剛遇到：只聊眼前這個場景、剛剛發生的事和一點點自己；material 留空，除非是眼前看得到的東西。不要 share_life、continue_thread、follow_up。');
   if (crisis) hints.push('對方的訊息可能有危機訊號：move 用 comfort，ask 設 false。');
   const meta = !crisis && /(你不會這樣說話|不像你|講話好?怪|好怪|怪怪的|你是\s*(AI|ai|機器人)|像機器人|好做作)/.test(userText || '');

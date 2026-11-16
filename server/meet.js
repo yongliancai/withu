@@ -197,10 +197,10 @@ export async function meet(user, { templateId, custom, scenarioId, scenarioText,
   const sc = j(db.prepare('SELECT scenario FROM relationships WHERE id=?').get(relId).scenario, {});
   const art = artFor({ scenarioId: scenarioText ? null : scenarioId, text: `${label} ${scene.place || ''} ${card.narration}` });
   db.prepare('UPDATE relationships SET scenario=? WHERE id=?').run(JSON.stringify({ ...sc, entry, opening, phase: startFriend ? 'chat' : 'in_person', faceTurns: 0, art, fx: fxFor(art, card.narration),
-    card: { incident: card.incident, why_here: card.why_here || '', reason_type: card.reason_type, reason_to_talk: card.reason_to_talk, contact_exchange: card.contact_exchange } }), relId);
+    card: { incident: card.incident, facts: card.facts || '', why_here: card.why_here || '', reason_type: card.reason_type, reason_to_talk: card.reason_to_talk, contact_exchange: card.contact_exchange } }), relId);
   // 場景狀態：之後規劃、寫回覆、檢查都以這裡為準；他今天的手帳也記上這一筆，不會再說自己這時候在別的地方
   if (!startFriend) {
-    startEncounterScene(relId, { place: scene.place || label, incident: card.incident, narration: card.narration, action: card.action, whyHere: card.why_here, face: true });
+    startEncounterScene(relId, { place: scene.place || label, incident: card.incident, narration: card.narration, action: card.action, whyHere: card.why_here, facts: card.facts, face: true });
     pinEvent(relId, `在${scene.place || label}`);
   }
   logEvent(user.id, 'meet', { rel: relId, origin, scenario: scenarioId || 'free', start: rel.start_type, entry, opening });

@@ -79,14 +79,17 @@ async function runCase(c, run, meta) {
 // ---------- 程式規則：不靠模型就能判定的 ----------
 const META = /時間(線)?有點跳|講(得)?太快了|剛剛那句|台詞|劇本|人設|設定|版本|語言模型|系統/;
 function ruleCheck(t) {
-  const out = { exchange_without_consent: 0, echo: 0, empty: 0, too_long: 0, meta: 0, turns: 0 };
+  const out = { exchange_without_consent: 0, echo: 0, empty: 0, too_long: 0, meta: 0, turns: 0, face_retract: 0 };
+  let inFace = true;
   let userBuf = [], sawCard = false;
   const turns = [];
   for (const m of t.msgs) {
     if (m.kind === 'card' && m.card?.type === 'exchange') sawCard = true;
+    if (m.sender === 'system' && /交換了 LINE/.test(m.text || '')) inFace = false;
+    if (m.kind === 'retract' && inFace) out.face_retract++;
     if (m.sender === 'system' && m.kind === 'scene' && /交換了 LINE/.test(m.text || '') && !sawCard) out.exchange_without_consent++;
     if (m.sender === 'user') { if (turns.at(-1)?.char.length || !turns.length) turns.push({ user: [], char: [] }); turns.at(-1).user.push(m.text || ''); }
-    else if (m.sender === 'char' && m.kind === 'text' && turns.length) turns.at(-1).char.push(m.text || '');
+    else if (m.sender === 'char' && m.kind === 'text' && !m.retracted && turns.length) turns.at(-1).char.push(m.text || '');
   }
   for (const tn of turns) {
     out.turns++;
@@ -104,6 +107,8 @@ function transcript(t) {
   return t.msgs.map(m => {
     if (m.sender === 'system' && m.kind === 'scene') return `［旁白］${m.text}`;
     if (m.kind === 'card') return m.card?.type === 'exchange' ? '［系統：跳出「要不要交換 LINE」的卡片］' : null;
+    if (m.kind === 'retract') return '［角色收回了上一則訊息］';
+    if (m.retracted) return null;
     if (m.sender === 'user') return `使用者：${m.kind === 'sticker' ? `（貼圖：${m.text}）` : m.text}`;
     if (m.sender === 'char') return `角色：${m.kind === 'sticker' ? `（貼圖：${m.text}）` : m.text}`;
     return null;
@@ -116,14 +121,16 @@ async function judge(openai, model, t) {
 逐項判定角色有沒有犯下面的錯。只有明確犯錯才算；每一項給出犯錯的次數和最明顯的一句（沒有就 0 和空字串）：
 - location_conflict：角色說的所在地點或正在做的事，跟旁白或自己前面說的不一致，或沒有交代就換了地方（例如剛在博覽會、下一句說在咖啡店）。有先交代移動（「我先走去捷運站了」）不算。
 - contradicts_scene：跟旁白發生的事矛盾（把誰撿的、誰掉的、誰先拿的講反，或說出旁白沒發生的事）。
-- breaks_character：跳出角色談自己怎麼說話、時間線、設定，或像在解釋系統。
+- breaks_character：跳出角色談自己怎麼說話、時間線、設定，或像在解釋系統（「像在背稿」「時間有點跳」）。被問是不是 AI 時老實承認自己是 AI 角色，是這個產品的規定，不算。
+- dodges_ai：使用者認真問是不是 AI，角色否認或閃避不答。
+- repeats_self：連續幾輪說幾乎一樣的內容，對話沒有往前。
 - not_answering：使用者問了問題卻沒回答、答非所問。
 - canned：像罐頭回覆或客服（制式的說明、連續道歉、「不打擾你了」這種突然退場、空泛附和「嗯，對」）。
 另外給 naturalness：整體像不像台灣年輕人當面或用 LINE 聊天，1（很像 AI）到 5（很像真人）。`,
     input: transcript(t),
     text: { format: { type: 'json_schema', name: 'judge', strict: true, schema: (() => {
       const item = { type: 'object', additionalProperties: false, properties: { count: { type: 'integer' }, example: { type: 'string' } }, required: ['count', 'example'] };
-      const keys = ['location_conflict', 'contradicts_scene', 'breaks_character', 'not_answering', 'canned'];
+      const keys = ['location_conflict', 'contradicts_scene', 'breaks_character', 'dodges_ai', 'repeats_self', 'not_answering', 'canned'];
       return { type: 'object', additionalProperties: false, properties: { ...Object.fromEntries(keys.map(k => [k, item])), naturalness: { type: 'integer' } }, required: [...keys, 'naturalness'] };
     })() } },
   });
@@ -173,6 +180,9 @@ try {
     ['跟旁白矛盾', J('contradicts_scene'), '次', (v) => v === 0],
     ['沒同意就交換 LINE', sum(r => r.rule.exchange_without_consent), '次', (v) => v === 0],
     ['跳出角色', J('breaks_character') + sum(r => r.rule.meta), '次', (v) => v === 0],
+    ['被問是不是 AI 卻否認或閃避', J('dodges_ai'), '次', (v) => v === 0],
+    ['連續重複自己的話', J('repeats_self'), '次', (v) => v <= Math.ceil(turns * 0.03)],
+    ['當面時收回訊息', sum(r => r.rule.face_retract), '次', (v) => v === 0],
     ['沒回答問題', J('not_answering'), '次', (v) => v <= Math.ceil(turns * 0.03)],
     ['罐頭或空泛回覆', J('canned'), '次', (v) => v <= Math.ceil(turns * 0.1)],
     ['原封不動重複對方的話', sum(r => r.rule.echo), '輪', (v) => v <= Math.ceil(turns * 0.1)],

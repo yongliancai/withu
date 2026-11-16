@@ -40,6 +40,7 @@ const CARD_SCHEMA = {
   type: 'object', additionalProperties: false,
   properties: {
     incident: { type: 'string', description: '這次相遇真的發生的一件小事：只寫事情本身（誰做了什麼），一句話' },
+    facts: { type: 'string', description: '用角色自己的第一人稱，把剛剛發生的事說清楚（2–3 句）：我做了什麼、對方做了什麼、東西是誰的、現在在誰手上。例如「對方的票根從口袋掉出來，是我撿起來的，現在還在我手上、正要還給對方。票根是對方的，不是我的。」' },
     why_here: { type: 'string', description: '角色這個時間為什麼會在這個地方（一句話，要符合他的職業和作息，例如「下班後回母校幫學妹顧攤」）' },
     reason_type: { type: 'string', enum: Object.keys(REASONS) },
     reason_to_talk: { type: 'string', description: '角色開口的真正理由（被問「我們認識嗎」時可以老實說出來）' },
@@ -49,7 +50,7 @@ const CARD_SCHEMA = {
     contact_exchange: { type: 'string', description: '之後兩人怎麼自然地交換 LINE（一句話，例如「他說之後咖啡豆到貨可以通知你，問要不要加 LINE」）' },
     suggestions: { type: 'array', minItems: 3, maxItems: 3, items: { type: 'object', additionalProperties: false, properties: { label: { type: 'string' }, text: { type: 'string' } }, required: ['label', 'text'] } },
   },
-  required: ['incident', 'why_here', 'reason_type', 'reason_to_talk', 'narration', 'action', 'openers', 'contact_exchange', 'suggestions'],
+  required: ['incident', 'facts', 'why_here', 'reason_type', 'reason_to_talk', 'narration', 'action', 'openers', 'contact_exchange', 'suggestions'],
 };
 
 /** 這位使用者最近遇過的角色開場（拿來避免同一個範本）。 */
@@ -78,6 +79,7 @@ export async function makeEncounterCard({ userId, frame, label, roles, scene, en
 
 你要為這次相遇做一張「相遇卡」。旁白和角色當面說的話都從這張卡產生，所以不能互相矛盾。
 規則：
+- facts：之後你回話都靠這一段記得剛剛發生什麼，所以要跟旁白完全一致，用「我」和「對方」寫，特別寫清楚東西是誰的、誰撿的、誰先碰到的、現在在誰手上。
 - why_here：你（角色）這個時間出現在這裡要說得通：對照你的職業、上班時間和現在的時間，寫一句真實的理由。之後被問到「你怎麼在這」就照這個回答。
 - incident：這次真的發生的一件小事，只寫事情本身，寫清楚是誰做了什麼（誰掉的、誰撿的）。旁白要寫到這件事；開場白只能提旁白裡發生的事（旁白沒寫撞到就不能說「差點撞到你」，旁白沒下雨就不能問「雨大嗎」）。
 - reason_type 只能從下面挑一種，reason_to_talk 要是真人會開口的理由：
@@ -95,7 +97,7 @@ ${recent.length ? recent.map(r => `  - ${r}`).join('\n') : '  （還沒有）'}
     input: [{ role: 'user', content: `現在的真實時間：${describeNow()}\n依角色的作息，他現在原本是：${charStatus(frame).label}\n情境：${label}\n${roles ? '身份：' + roles + '\n' : ''}地點：${scene.place || label}${scene.mood ? `\n使用者此刻的心情：${scene.mood}` : ''}` }],
     schema: CARD_SCHEMA, schemaName: 'encounter_card',
     mock: () => ({
-      incident: '你伸手去拿最後一個位子旁邊的插座，剛好對方也伸了手', why_here: '下班後來這裡坐一下',
+      incident: '你伸手去拿最後一個位子旁邊的插座，剛好對方也伸了手', facts: '我和對方同時伸手要用同一個插座，我先把手收回來讓對方用。', why_here: '下班後來這裡坐一下',
       reason_type: 'shared', reason_to_talk: '兩個人都要用同一個插座',
       narration: `${label}。你伸手去拿桌邊的插座，旁邊的人也剛好伸了手，兩個人都停在半空中。`,
       action: `${frame.gender === 'female' ? '她' : '他'}先把手收了回去`,
@@ -134,11 +136,12 @@ export function isBye(text = '') { return BYE.test(text); }
 export function faceBlock({ card, entry, turn, wrap, persona }) {
   const lines = [
     '## 你們現在是「當面」說話（還沒有對方的聯絡方式，不是在傳訊息）',
-    `相遇卡（這次真的發生的事，只能引用這裡有的）：${card.incident}`,
+    `相遇卡（這次真的發生的事，只能引用這裡有的）：${card.facts || card.incident}`,
     `你開口的真正理由：${card.reason_to_talk}`,
     `這是你們當面的第 ${turn} 輪。說話要像當面講的：短、口語，可以帶一點動作感，但不要寫括號旁白。`,
     '不要說「剛加上 LINE」「傳訊息給你」這類話；不要提議之後一起去哪裡。sticker、voice、meal、postcard、activity、outing 都不要用。',
-    '可以用一則動作描述讓畫面更清楚：整則用全形星號包起來，第三人稱、看得到的動作、15 字內、不寫心理，例如「＊她把茶葉蛋往你那邊推了推＊」。一輪最多一則，放在說話之前。',
+    '你們是當面說話，說出口的話不能收回：retract_last 一律 false。每一輪都要有說出口的話，不能只有動作。',
+    '可以用一則動作描述讓畫面更清楚（動作不能跟已經發生的事矛盾，例如東西已經還給對方就不能又收回去）：整則用全形星號包起來，第三人稱、看得到的動作、15 字內、不寫心理，例如「＊她把茶葉蛋往你那邊推了推＊」。一輪最多一則，放在說話之前。',
     '說話要像真人當面講的：平淡、短、口語。不用比喻、不講金句、不解釋自己剛剛為什麼那樣做。',
     '對方評論你說話的方式（「你不會這樣說話」「好怪」「你是 AI 嗎」）：照真人的反應——有點不好意思地笑、反問哪裡怪，或換個自然的說法接下去。絕對不要談「版本」「台詞」「設定」「剛那句太做作」這類跳出角色的話。',
   ];

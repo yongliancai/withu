@@ -540,8 +540,8 @@ app.post('/api/rels/:id/reencounter', auth, wrap(async (req, res) => {
   const persona = getPersona(rel);
   const card = await makeEncounterCard({ userId: req.user.id, frame: persona, label: `${enc.sc.label || '上次的地方'}（你們之前在這裡見過一次，這次又遇到）`, roles: '', scene: enc.sc, entry: 'mood', opening: 'him', startFriend: false });
   addMessage(rel, 'system', 'scene', { text: card.narration });
-  setEncounter(rel.id, { phase: 'in_person', faceTurns: 0, card: { incident: card.incident, why_here: card.why_here || '', reason_type: card.reason_type, reason_to_talk: card.reason_to_talk, contact_exchange: card.contact_exchange } });
-  startEncounterScene(rel.id, { place: enc.sc.place || enc.sc.label, incident: card.incident, narration: card.narration, action: card.action, whyHere: card.why_here, face: true });
+  setEncounter(rel.id, { phase: 'in_person', faceTurns: 0, card: { incident: card.incident, facts: card.facts || '', why_here: card.why_here || '', reason_type: card.reason_type, reason_to_talk: card.reason_to_talk, contact_exchange: card.contact_exchange } });
+  startEncounterScene(rel.id, { place: enc.sc.place || enc.sc.label, incident: card.incident, narration: card.narration, action: card.action, whyHere: card.why_here, facts: card.facts, face: true });
   let lastId = null;
   if (card.action) addMessage(rel, 'system', 'scene', { text: card.action, card: { action: true } });
   for (const line of card.opener) lastId = addMessage(rel, 'char', 'text', { text: line, card: { face: true }, reason: 'reencounter' });

@@ -84,7 +84,7 @@ function historyInput(relId, latestImage) {
     const stamp = prevAt && m.created_at - prevAt > 90 * 60000 ? `［隔了 ${gapLabel(m.created_at - prevAt)}・${new Date(m.created_at).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}］` : '';
     prevAt = m.created_at;
     if (m.kind === 'retract') continue;
-    if (m.sender === 'system') { if (m.text) items.push({ role: 'developer', content: `［旁白：當時真的發生的事］${m.text}` }); continue; }
+    if (m.sender === 'system') { if (m.text) items.push({ role: 'developer', content: `［旁白：當時真的發生的事。旁白是寫給對方看的，裡面的「你」是對方，不是你］${m.text}` }); continue; }
     if (m.retracted) { items.push({ role: m.sender === 'char' ? 'assistant' : 'user', content: m.sender === 'char' ? '（你收回了一則訊息）' : '（對方收回了一則訊息）' }); continue; }
     if (m.sender === 'char') {
       if (m.kind === 'card') continue;
@@ -501,6 +501,8 @@ async function runTurnInner({ user, relId, userText = '', imageMedia = null, tri
 
   const call = () => jsonCall({
     userId: rel.user_id, kind: trigger ? 'proactive' : 'chat', tier, instructions, input, essential: !!crisis,
+    // 當面或剛相遇的這幾輪要記清楚「誰做了什麼」：讓便宜模型多想一下（成本增加很小，只在相遇後幾小時內）
+    effort: (face || sceneLocked) && tier === 'cheap' ? 'low' : null,
     schema: config.splitTurn ? WRITER_SCHEMA : TURN_SCHEMA, schemaName: 'turn', cacheKey: `persona:${persona._char.id}`,
     mock: () => mockTurn({ rel, persona, user, userText, imageMedia, trigger: triggerKey === 'FIRST' ? 'FIRST' : trigger, todayMealProposed, crisis, lateReply }),
   });
@@ -564,7 +566,7 @@ async function runTurnInner({ user, relId, userText = '', imageMedia = null, tri
   if (!trigger || lateReply) db.prepare(`UPDATE relationships SET char_read_id=(SELECT COALESCE(MAX(id),0) FROM messages WHERE rel_id=? AND sender='user'), pending_reply_at=NULL WHERE id=?`).run(rel.id, rel.id);
   // 一則泡泡裡有換行就拆成兩則（像真人分開傳）
   // 他覺得上一句說得太怪、說錯了：收回（留下「已收回」紀錄），再重說
-  if (out.retract_last && !trigger && !callMode && texts0Ok(out)) {
+  if (out.retract_last && !face && !trigger && !callMode && texts0Ok(out)) {
     const lastChar = db.prepare(`SELECT id FROM messages WHERE rel_id=? AND sender='char' AND kind='text' AND retracted=0 AND created_at>? ORDER BY id DESC LIMIT 1`).get(rel.id, now() - 2 * 3600e3);
     if (lastChar) {
       db.prepare(`UPDATE messages SET retracted=1, text='' WHERE id=?`).run(lastChar.id);

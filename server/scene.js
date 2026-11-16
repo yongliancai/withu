@@ -27,10 +27,10 @@ export function setScene(relId, patch) {
 }
 
 /** 相遇時建立。 */
-export function startEncounterScene(relId, { place, incident, narration, action, whyHere, face }) {
+export function startEncounterScene(relId, { place, incident, narration, action, whyHere, facts, face }) {
   return setScene(relId, {
     place: String(place || '').slice(0, 40), doing: String(incident || '').slice(0, 120),
-    narration: [narration, action].filter(Boolean).join(' ').slice(0, 400), whyHere: String(whyHere || '').slice(0, 80),
+    narration: [narration, action].filter(Boolean).join(' ').slice(0, 400), facts: String(facts || '').slice(0, 300), whyHere: String(whyHere || '').slice(0, 80),
     mode: face ? 'face' : 'remote', source: 'encounter', since: now(), until: now() + HOLD_ENCOUNTER,
   });
 }
@@ -50,7 +50,8 @@ export function sceneLine(scene, persona) {
   if (scene.source === 'encounter') {
     return [
       `你此刻的狀態（事實，不能改）：${mins} 分鐘前你在「${scene.place}」遇到對方。`,
-      scene.narration ? `當時發生的事（旁白，${P === '她' ? '「她」' : '「他」'}指的是你）：${scene.narration}` : `當時發生的事：${scene.doing}`,
+      scene.facts ? `當時發生的事（從你的角度，「我」是你自己）：${scene.facts}` : scene.narration ? `當時發生的事（這段旁白是寫給對方看的：裡面的「你」是對方，「${P}」和你的名字才是你自己）：${scene.narration}` : `當時發生的事：${scene.doing}`,
+      '被問到剛剛的事（誰的、誰撿的、誰先的），照上面回答，不要講反。',
       scene.whyHere ? `你會在那裡的原因：${scene.whyHere}` : '',
       scene.mode === 'face'
         ? '你們現在就站在那裡當面說話。'
