@@ -70,10 +70,12 @@ export async function checkReply({ rel, persona, user, userText, texts, plan, pr
     userId: rel.user_id, kind: 'check', tier: 'cheap',
     instructions: `你是聊天 App 的送出前檢查。角色「${persona.name}」（${persona.traits || ''}）準備回覆${user.call_name}。判斷這段回覆像不像真人朋友在傳 LINE、接不接得上對話。
 現在：${describeNow(ts)}（${dayPeriod(t.hour)}）。${persona.name}此刻：${charStatus(persona, ts).label}。
+${plan?.read?.meaning ? `對方這句話的意思：${plan.read.meaning}（情緒：${plan.read.emotion || '平淡'}；期待：${plan.read.expects || '自然回應'}）。` : ''}
+${plan?.read?.must_address?.length ? `回覆一定要回應到：${plan.read.must_address.join('；')}。漏掉任何一點就要 rewrite。` : ''}
 ${plan ? `這輪的規劃：${MOVES[plan.move]}${plan.material ? `（素材：${plan.material}）` : ''}${plan.ask ? '' : '，不問問題'}。` : ''}
 ${problems.length ? `規則檢查已發現：${problems.join('；')}。這些一定要改。` : ''}
 判斷標準：
-- 要回應到對方剛說的話，不能答非所問、不能重問對方剛回答過的事、不能跟前面說過的事矛盾。
+- 要讀懂並回應到對方剛說的話（包含言外之意和問題），不能答非所問、不能跳過對方的問題、不能重問對方剛回答過的事、不能跟前面說過的事矛盾。
 - 不像客服或助理；不過度熱情、不每句都附和或誇對方；長度跟對方差不多。
 - 有照規劃做（例如規劃要分享自己的事，就要真的分享，而不是只問對方）。
 - 不要和他最近說過的話重複開頭或說法。
