@@ -1288,7 +1288,8 @@ async function renderRoom(relId) {
       if (!typing) { markLocalRead(nodes); typing = showTyping(); typingAt = Date.now(); }
       locals().forEach(n => n.remove());
       await revealSequential(res.messages || [], { typing, typingAt });
-      if (($$('.msg.me', $('#stream')).length) >= 6) setTimeout(() => firstTip('rate'), 1500);
+      if (!live()) return ok; // 回覆播放時已經離開聊天室：#stream 已不在畫面上，不要再讀舊畫面
+      if (($$('.msg.me', stream).length) >= 6) setTimeout(() => firstTip('rate'), 1500);
       // 當面相遇結束（交換了 LINE、或要決定要不要交換）：重畫聊天室換成傳訊息的樣子
       if (res.phase && res.phase !== (S.room.rel.phase || 'chat')) { const id = S.room.rel.id; setTimeout(() => { if (S.room?.rel?.id === id) renderRoom(id); }, 1200); }
     } catch (e) {
